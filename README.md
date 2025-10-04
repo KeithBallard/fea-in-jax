@@ -15,10 +15,10 @@ To enforce Dirichlet boundary conditions (BCs), we typically use in-place elimin
 If we let $\textbf{D}_i$ be the indices of the Dirichlet DoFs, then the incremental solution for the Dirichlet BCs can be calculated
 
 $$ [\Delta \textbf{U}_i]_j = 
-    \left\{\begin{array}{lr} 
+    \{\begin{array}{lr} 
         [\textbf{U}_i]_j - [\textbf{u}_{i-1}]_j, & \text{if } j \in \textbf{D}_i] \\
         0, & \text{otherwise}
-    \end{array}\right\} $$
+    \end{array}\} $$
 
 The adjusted system of equations that is typically solved becomes
 
