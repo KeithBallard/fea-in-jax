@@ -81,3 +81,6 @@ Superscripts will be used to denote the rank, since within the programming imple
 * $\mathcal{K}^i_{j}$: # of vertices on patch $j$ on MPI rank $i$
 * $\mathcal{L}^i_{j}$: # of elements on patch $j$ on MPI rank $i$
 * $\mathcal{G}^i_{j}$: # of degrees of freedom on patch $j$ on MPI rank $i$
+
+# Public Release Information
+Distribution Statement A.  Approved for public release: distribution is unlimited. Case #: AFRL-2025-4644
