@@ -1,0 +1,15 @@
+*.nsys-rep
+*.ncu-rep
+*.prof
+*.png
+*.npy
+*.log
+
+__pycache__/
+.venv/
+doc/
+install/
+prof/
+src/__pycache__/
+tests/output/
+tests/__pycache__/

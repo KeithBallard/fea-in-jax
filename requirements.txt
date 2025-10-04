@@ -1,0 +1,11 @@
+numpy
+numba
+meshio
+jax
+jax[cuda12]
+jaxopt
+libigl
+matplotlib
+mpi4py
+fenics-basix
+psutil
