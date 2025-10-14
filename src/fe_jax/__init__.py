@@ -10,6 +10,4 @@ from .hyperelasticity import *
 from .profiling import *
 from .setup import *
 from .utils import *
-from .multiscale import *
-from .fiber_mechanics import *
 
