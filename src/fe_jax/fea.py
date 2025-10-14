@@ -1,6 +1,7 @@
 from .setup import *
 from .utils import *
 from .solve_cg import cg as cg_w_info
+from .solve_sp import solve_sp
 
 import jax.numpy as jnp
 import jax
@@ -29,8 +30,9 @@ class ElementBatch:
 
 
 class LinearSolverType(Enum):
-    DIRECT_INVERSE_JNP = 0
-    DIRECT_INVERSE_JAXOPT = 0
+    DIRECT_SPARSE_SOLVE_JNP = (0,)
+    DIRECT_INVERSE_JNP = 5
+    DIRECT_INVERSE_JAXOPT = 6
     CG_JAXOPT = 10
     CG_SCIPY = 11
     CG_SCIPY_W_INFO = 12
@@ -54,41 +56,135 @@ class SolverOptions:
 
 
 @jax.jit
-def _calculate_residual_batch_element_kernel(
+def _calculate_jacobian_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
-    u_end: jnp.ndarray,
+    u_enu: jnp.ndarray,
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     material_params_eqm: jnp.ndarray,
     internal_state_eqi: jnp.ndarray,
-):
+) -> jnp.ndarray:
     """
-    Calculates the element-level residual vectors for a batch of elements without any modification
-    of the solution or residual to accomodate Dirichlet constraints. Called by calculate_residual.
+    Calculates the element-level jacobian matrices for a batch of elements without any modification
+    of the solution or residual to accomodate Dirichlet constraints.
 
     TODO document parameters
     """
 
-    @jax.vmap
-    def residual_kernel(u_nd, x_nd, material_params_qm, internal_state_qi):
-        return element_residual_func(
-            constitutive_model=constitutive_model,
+    E = x_end.shape[0]
+    N = x_end.shape[1]
+    D = x_end.shape[2]
+    U = u_enu.shape[2]
+
+    # Note: reshaped to be (# elements, # dofs per element) so that the jacfwd produces a
+    # (# dofs per element, # dofs per element) matrix for each element.
+    # Assumption: # dofs per element is N * U
+    u_et = u_enu.reshape(E, N * U)
+
+    # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
+    @jax.jit
+    def residual_kernel(u_t, x_nd, material_params_qm, internal_state_qi):
+        u_nd = u_t.reshape(N, D)
+        R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
             dphi_dxi_qnp=dphi_dxi_qnp,
             W_q=W_q,
             material_params_qm=material_params_qm,
             internal_state_qi=internal_state_qi,
-        )
+            constitutive_model=constitutive_model,
+        )[0]
+        return R_nu.reshape(N, U)
 
-    R_end, internal_state_eqi = residual_kernel(
-        u_end, x_end, material_params_eqm, internal_state_eqi
+    J_ett = jax.vmap(jax.jacfwd(residual_kernel, argnums=0))(
+        u_et, x_end, material_params_eqm, internal_state_eqi
     )
 
-    return R_end, internal_state_eqi
+    return J_ett
 
+
+@jax.jit
+def __calculate_jacobian_coo_terms_batch(
+    element_residual_func: jax.tree_util.Partial,
+    constitutive_model: jax.tree_util.Partial,
+    material_params_eqm: jnp.ndarray,
+    internal_state_eqi: jnp.ndarray,
+    x_end: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
+    assembly_map: jsparse.BCSR,
+    u_f: jnp.ndarray,
+):
+    E = x_end.shape[0]
+    
+    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
+    U = u_enu.shape[2]
+
+    # NOTE the assembly map is leveraged here to take a shortcut to work out the location
+    # of the nonzero terms in the sparse matrix.
+    I = jnp.vstack([assembly_map.indices + i for i in range(U)]).T
+    cols, rows = jax.vmap(jnp.meshgrid)(I, I)
+    # debug_print(rows)
+    # debug_print(cols)
+
+    J_ett = _calculate_jacobian_batch_element_kernel(
+        element_residual_func=element_residual_func,
+        constitutive_model=constitutive_model,
+        u_enu=u_enu,
+        x_end=x_end,
+        dphi_dxi_qnp=dphi_dxi_qnp,
+        W_q=W_q,
+        material_params_eqm=material_params_eqm,
+        internal_state_eqi=internal_state_eqi,
+    )
+
+    return (J_ett, rows, cols)
+
+
+def calculate_jacobian_wo_dirichlet(
+    element_residual_func: jax.tree_util.Partial,
+    constitutive_model_b: list[jax.tree_util.Partial],
+    material_params_beqm: list[jnp.ndarray],
+    internal_state_beqi: list[jnp.ndarray],
+    x_bend: list[jnp.ndarray],
+    dphi_dxi_bqnp: list[jnp.ndarray],
+    W_bq: list[jnp.ndarray],
+    assembly_map_b: list[jsparse.BCSR],
+    u_f: jnp.ndarray,
+):
+    B = len(x_bend)
+
+    # NOTE This could be slow, measure.  To speed up this section, it might help to
+    # add a transform to a batch-level unraveled residual vector and accumulate those,
+    # since that operation could be JIT compiled. Then you could loop over the batch level
+    # and accumulate them into the global with one more batch-to-global transform.
+
+    J_ett, rows, cols = zip(*[
+        __calculate_jacobian_coo_terms_batch(
+            element_residual_func=element_residual_func,
+            constitutive_model=constitutive_model_b[i],
+            material_params_eqm=material_params_beqm[i],
+            internal_state_eqi=internal_state_beqi[i],
+            x_end=x_bend[i],
+            dphi_dxi_qnp=dphi_dxi_bqnp[i],
+            W_q=W_bq[i],
+            assembly_map=assembly_map_b[i],
+            u_f=u_f,
+        )
+        for i in range(B)
+    ])
+    J_ett = jnp.vstack(J_ett)
+    rows = jnp.vstack(rows)
+    cols = jnp.vstack(cols)
+
+    J_sparse_ff = jsparse.COO(
+        (J_ett.ravel(), rows.ravel(), cols.ravel()),
+        shape=(u_f.shape[0], u_f.shape[0]),
+    )
+
+    return J_sparse_ff
 
 @jax.jit
 def __calculate_residual_wo_dirichlet_batch(
@@ -100,7 +196,7 @@ def __calculate_residual_wo_dirichlet_batch(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     assembly_map: jsparse.BCSR,
-    u_g: jnp.ndarray,
+    u_f: jnp.ndarray,
 ):
     # Extract shape constants needed for args
     E = x_end.shape[0]
@@ -111,20 +207,33 @@ def __calculate_residual_wo_dirichlet_batch(
         N == dphi_dxi_qnp.shape[1]
     ), f"Number of nodes per element {N} must match the number of basis functions {dphi_dxi_qnp.shape[1]}."
 
-    u_end = transform_global_unraveled_to_element_node(assembly_map, u_g, E)
+    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
 
-    R_end, internal_state_eqi = _calculate_residual_batch_element_kernel(
-        element_residual_func=element_residual_func,
-        constitutive_model=constitutive_model,
-        u_end=u_end,
-        x_end=x_end,
-        dphi_dxi_qnp=dphi_dxi_qnp,
-        W_q=W_q,
-        material_params_eqm=material_params_eqm,
-        internal_state_eqi=internal_state_eqi,
+    # A vmap'ed version of the element residual function that maps over the elements
+    R_vmap = jax.vmap(
+        element_residual_func,
+        in_axes=(
+            0,  # u_end -> u_nd
+            0,  # x_end -> x_nd
+            None,  # dphi_dxi_qnp
+            None,  # W_q
+            0,  # material_params_eqm -> material_params_qm
+            0,  # internal_state_eqi -> internal_state_qi
+            None,  # constitutive_model
+        ),
     )
 
-    return R_end, internal_state_eqi
+    R_enu, internal_state_eqi = R_vmap(
+        u_enu,
+        x_end,
+        dphi_dxi_qnp,
+        W_q,
+        material_params_eqm,
+        internal_state_eqi,
+        constitutive_model,
+    )
+
+    return R_enu, internal_state_eqi
 
 
 def calculate_residual_wo_dirichlet(
@@ -136,7 +245,7 @@ def calculate_residual_wo_dirichlet(
     dphi_dxi_bqnp: list[jnp.ndarray],
     W_bq: list[jnp.ndarray],
     assembly_map_b: list[jsparse.BCSR],
-    u_g: jnp.ndarray,
+    u_f: jnp.ndarray,
 ):
     """
     Calculates the residual without any modification of the solution or residual to accomodate
@@ -144,6 +253,8 @@ def calculate_residual_wo_dirichlet(
 
     TODO document parameters
     """
+
+    # TODO change the pattern to accept donated arrays to hold R_f and new_internal_state_beqi
 
     B = len(x_bend)
 
@@ -162,21 +273,46 @@ def calculate_residual_wo_dirichlet(
             dphi_dxi_qnp=dphi_dxi_bqnp[i],
             W_q=W_bq[i],
             assembly_map=assembly_map_b[i],
-            u_g=u_g,
+            u_f=u_f,
         )
         for i in range(B)
     ]  # for each item, 0: R_end, 1: internal_state_eqi
 
-    R_g = jnp.zeros_like(u_g)
+    R_f = jnp.zeros_like(u_f)
     for i in range(B):
-        R_g += transform_element_node_to_global_unraveled_sum(
+        R_f += transform_element_node_to_global_unraveled_sum(
             assembly_map=assembly_map_b[i], v_en=result[i][0]
         )
 
     new_internal_state_beqi = [result[i][1] for i in range(B)]
     # TODO split this out into a separate call
 
-    return R_g, new_internal_state_beqi
+    # NOTE here is an alternative implementation leveraging fori, but the index i is a traced
+    # array and therefore cannot be used to index into the lists, such as a constitutive_model_b.
+    # Keeping this implementation here to revisit for optimization.
+    """
+    def fori_body(i, R_f) -> jnp.ndarray:
+        R_enu, internal_state_eqi = __calculate_residual_wo_dirichlet_batch(
+            element_residual_func=element_residual_func,
+            constitutive_model=constitutive_model_b[i],
+            material_params_eqm=material_params_beqm[i],
+            internal_state_eqi=internal_state_beqi[i],
+            x_end=x_bend[i],
+            dphi_dxi_qnp=dphi_dxi_bqnp[i],
+            W_q=W_bq[i],
+            assembly_map=assembly_map_b[i],
+            u_f=u_f,
+        )
+        return R_f + transform_element_node_to_global_unraveled_sum(
+            assembly_map=assembly_map_b[i], v_en=R_enu
+        )
+
+    R_f = jax.lax.fori_loop(
+        lower=0, upper=B, body_fun=fori_body, init_val=jnp.zeros_like(u_f), unroll=True
+    )
+    """
+
+    return R_f, new_internal_state_beqi
 
 
 def calculate_residual_w_dirichlet(
@@ -188,7 +324,7 @@ def calculate_residual_w_dirichlet(
     dphi_dxi_bqnp: list[jnp.ndarray],
     W_bq: list[jnp.ndarray],
     assembly_map_b: list[jsparse.BCSR],
-    u_g: jnp.ndarray,
+    u_f: jnp.ndarray,
     dirichlet_values_g: jnp.ndarray,
     dirichlet_mask_g: jnp.ndarray,
 ):
@@ -200,7 +336,7 @@ def calculate_residual_w_dirichlet(
     ----------
     u_0_g         : initial guess for the solution in the current linear solve (nonlinear constitutive
                     models will be linearized about this point), dense 1d-array of length V * D
-    u_g           : current solution within the linear solve, dense 1d-array of length V * D
+    u_f           : current solution within the linear solve, dense 1d-array of length V * D
 
     Returns
     -------
@@ -210,11 +346,11 @@ def calculate_residual_w_dirichlet(
     # Note: this is neccessary to ensure the Jacobian is symmetric. Without this,
     # the autodiff would result in 0's on rows (except on the diagonal) for entries
     # corresponding to Dirichlet BC's, but the columns would be non-zero.
-    u_g_w_dirichlet = jnp.multiply(1.0 - dirichlet_mask_g, u_g) + jnp.multiply(
+    u_f_w_dirichlet = jnp.multiply(1.0 - dirichlet_mask_g, u_f) + jnp.multiply(
         dirichlet_mask_g, dirichlet_values_g
     )
 
-    R_g, new_internal_state_beqi = calculate_residual_wo_dirichlet(
+    R_f, new_internal_state_beqi = calculate_residual_wo_dirichlet(
         element_residual_func=element_residual_func,
         constitutive_model_b=constitutive_model_b,
         material_params_beqm=material_params_beqm,
@@ -223,16 +359,16 @@ def calculate_residual_w_dirichlet(
         dphi_dxi_bqnp=dphi_dxi_bqnp,
         W_bq=W_bq,
         assembly_map_b=assembly_map_b,
-        u_g=u_g_w_dirichlet,
+        u_f=u_f_w_dirichlet,
     )
 
     # Zero out terms corresponding to Dirichlet BCs and add (solution - what it should be) for those constrained DoFs.
     # This will ensure there will be a 1 on the diagonal of the Jacobian and also return the right residual.
-    R_g = jnp.multiply(1.0 - dirichlet_mask_g, R_g) + jnp.multiply(
-        dirichlet_mask_g, u_g - dirichlet_values_g
+    R_f = jnp.multiply(1.0 - dirichlet_mask_g, R_f) + jnp.multiply(
+        dirichlet_mask_g, u_f - dirichlet_values_g
     )
 
-    return R_g, new_internal_state_beqi
+    return R_f, new_internal_state_beqi
 
 
 def solve_nonlinear_step(
@@ -299,7 +435,7 @@ def solve_nonlinear_step(
     # """
 
     # Function that produces (R(u), ISVs)
-    residual_isv_func_w_dirichlet = lambda u_g: calculate_residual_w_dirichlet(
+    residual_isv_func_w_dirichlet = lambda u_f: calculate_residual_w_dirichlet(
         element_residual_func=element_residual_func,
         constitutive_model_b=constitutive_model_b,
         material_params_beqm=material_params_beqm,
@@ -308,16 +444,16 @@ def solve_nonlinear_step(
         dphi_dxi_bqnp=dphi_dxi_bqnp,
         W_bq=W_bq,
         assembly_map_b=assembly_map_b,
-        u_g=u_g,
+        u_f=u_f,
         dirichlet_values_g=dirichlet_values_g,
         dirichlet_mask_g=dirichlet_mask_g,
     )
 
     # Function that produces R(u)
-    residual_func_w_dirichlet = lambda u_g: residual_isv_func_w_dirichlet(u_g=u_g)[0]
+    residual_func_w_dirichlet = lambda u_f: residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
     # Function that produces R(u) without Dirichlet BCs applied
-    residual_func_wo_dirichlet = lambda u_g: calculate_residual_wo_dirichlet(
+    residual_func_wo_dirichlet = lambda u_f: calculate_residual_wo_dirichlet(
         element_residual_func=element_residual_func,
         constitutive_model_b=constitutive_model_b,
         material_params_beqm=material_params_beqm,
@@ -326,23 +462,37 @@ def solve_nonlinear_step(
         dphi_dxi_bqnp=dphi_dxi_bqnp,
         W_bq=W_bq,
         assembly_map_b=assembly_map_b,
-        u_g=u_g,
+        u_f=u_f,
     )[0]
 
-    R_g, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_g=u_0_g)
-    initial_R_g_norm = jnp.linalg.norm(R_g)
+    # Function that produces R(u) without Dirichlet BCs applied
+    jacobian_func_wo_dirichlet = lambda u_f: calculate_jacobian_wo_dirichlet(
+        element_residual_func=element_residual_func,
+        constitutive_model_b=constitutive_model_b,
+        material_params_beqm=material_params_beqm,
+        internal_state_beqi=internal_state_beqi,
+        x_bend=x_bend,
+        dphi_dxi_bqnp=dphi_dxi_bqnp,
+        W_bq=W_bq,
+        assembly_map_b=assembly_map_b,
+        u_f=u_f,
+    )
 
-    # Note: will be specialized for u_g later in while_body
-    jacobian_vector_product_detail = lambda u_g, z: jax.jvp(
+
+    R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
+    initial_R_f_norm = jnp.linalg.norm(R_f)
+
+    # Note: will be specialized for u_f later in while_body
+    jacobian_vector_product_detail = lambda u_f, z: jax.jvp(
         residual_func_w_dirichlet,
-        (u_g,),
+        (u_f,),
         (z,),
     )[1]
 
     def while_cond(args) -> bool:
-        nl_iteration, u_g, R_g, new_internal_state_beqi = args
-        absolute_error = jnp.linalg.norm(R_g)
-        relative_error = absolute_error / initial_R_g_norm
+        nl_iteration, u_f, R_f, new_internal_state_beqi = args
+        absolute_error = jnp.linalg.norm(R_f)
+        relative_error = absolute_error / initial_R_f_norm
         jax.debug.print(
             "Iteration {z} rel error {x}, abs error {y}",
             x=relative_error,
@@ -356,38 +506,43 @@ def solve_nonlinear_step(
         )
 
     def while_body(args) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        nl_iteration, u_g, R_g, new_internal_state_beqi = args
-        # jax.debug.print("u_g = {x}", x=u_g)
+        nl_iteration, u_f, R_f, new_internal_state_beqi = args
+        # jax.debug.print("u_f = {x}", x=u_f)
 
         # Note: unclear which is most performant variant of this.
         # Function that produces J(u) * z with Dirichlet constraints
         # Note: this linearizes the Jacobian about u_0
         # jacobian_vector_product = lambda z: jax.jvp(
         #    residual_func_w_dirichlet,
-        #    (u_g,),
+        #    (u_f,),
         #    (z,),
         # )[1]
-        # jacobian_vector_product_inner = jax.tree_util.Partial(residual_func_w_dirichlet, (u_g,))
-        # jacobian_vector_product = lambda z: jacobian_vector_product_detail(u_g, z)
+        # jacobian_vector_product_inner = jax.tree_util.Partial(residual_func_w_dirichlet, (u_f,))
+        # jacobian_vector_product = lambda z: jacobian_vector_product_detail(u_f, z)
         jacobian_vector_product = jax.tree_util.Partial(
-            jacobian_vector_product_detail, u_g
+            jacobian_vector_product_detail, u_f
         )
 
         # Solve the boundary value problem
         info = None
         match solver_options.linear_solve_type:
+
+            case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
+                J_sparse_tt = jacobian_func_wo_dirichlet(u_0_g)
+                delta_u = solve_sp(J_sparse_tt, -R_f)
+
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-                delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_g))
+                delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
             case LinearSolverType.DIRECT_INVERSE_JAXOPT:
-                delta_u = linear_solve.solve_inv(matvec=jacobian_vector_product, b=-R_g)
+                delta_u = linear_solve.solve_inv(matvec=jacobian_vector_product, b=-R_f)
 
             case LinearSolverType.CG_SCIPY:
                 delta_u, _ = jax.scipy.sparse.linalg.cg(
                     A=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -395,7 +550,7 @@ def solve_nonlinear_step(
             case LinearSolverType.CG_SCIPY_W_INFO:
                 delta_u, info = cg_w_info(
                     A=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -407,7 +562,7 @@ def solve_nonlinear_step(
             case LinearSolverType.CG_JAXOPT:
                 delta_u = linear_solve.solve_cg(
                     matvec=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -415,7 +570,7 @@ def solve_nonlinear_step(
             case LinearSolverType.GMRES_SCIPY:
                 delta_u, _ = jax.scipy.sparse.linalg.gmres(
                     A=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -423,7 +578,7 @@ def solve_nonlinear_step(
             case LinearSolverType.GMRES_JAXOPT:
                 delta_u = linear_solve.solve_gmres(
                     matvec=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -431,7 +586,7 @@ def solve_nonlinear_step(
             case LinearSolverType.BICGSTAB_SCIPY:
                 delta_u, _ = jax.scipy.sparse.linalg.bicgstab(
                     A=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
@@ -439,18 +594,18 @@ def solve_nonlinear_step(
             case LinearSolverType.BICGSTAB_JAXOPT:
                 delta_u = linear_solve.solve_bicgstab(
                     matvec=jacobian_vector_product,
-                    b=-R_g,
+                    b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
                 )
 
             case LinearSolverType.CHOLESKY_JAXOPT:
                 delta_u = linear_solve.solve_cholesky(
-                    matvec=jacobian_vector_product, b=-R_g
+                    matvec=jacobian_vector_product, b=-R_f
                 )
 
             case LinearSolverType.LU_JAXOPT:
-                delta_u = linear_solve.solve_lu(matvec=jacobian_vector_product, b=-R_g)
+                delta_u = linear_solve.solve_lu(matvec=jacobian_vector_product, b=-R_f)
 
             case _:
                 raise Exception(
@@ -465,24 +620,24 @@ def solve_nonlinear_step(
         # Consequently, overwrite the values directly to ensure the BCs are right, even though the
         # residual may increase.
         delta_u = jnp.multiply(1.0 - dirichlet_mask_g, delta_u) + jnp.multiply(
-            dirichlet_mask_g, dirichlet_values_g - u_g
+            dirichlet_mask_g, dirichlet_values_g - u_f
         )
         # jax.debug.print("delta u = {x}", x=delta_u)
 
-        u_g = u_g + delta_u
-        R_g = residual_isv_func_w_dirichlet(u_g=u_g)[0]
+        u_f = u_f + delta_u
+        R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
-        return (nl_iteration + 1, u_g, R_g, new_internal_state_beqi)
+        return (nl_iteration + 1, u_f, R_f, new_internal_state_beqi)
 
-    _, u_g, R_g, new_internal_state_beqi = jax.lax.while_loop(
+    _, u_f, R_f, new_internal_state_beqi = jax.lax.while_loop(
         cond_fun=while_cond,
         body_fun=while_body,
-        init_val=(0, u_0_g, R_g, new_internal_state_beqi),
+        init_val=(0, u_0_g, R_f, new_internal_state_beqi),
     )
 
-    absolute_error = jnp.linalg.norm(R_g)
-    relative_error = absolute_error / initial_R_g_norm
-    return (u_g, new_internal_state_beqi, R_g, relative_error, None)
+    absolute_error = jnp.linalg.norm(R_f)
+    relative_error = absolute_error / initial_R_f_norm
+    return (u_f, new_internal_state_beqi, R_f, relative_error, None)
 
 
 def solve_bvp(
@@ -619,7 +774,9 @@ def solve_bvp(
     if is_homogeneous:
         print("Batches are homogeneous, using JIT compilation for solve_linear_step")
         inner_solve = jax.jit(
-            solve_nonlinear_step, donate_argnames="internal_state_beqi", static_argnames="solver_options"
+            solve_nonlinear_step,
+            donate_argnames="internal_state_beqi",
+            static_argnames="solver_options",
         )
 
     # capture memory usage before

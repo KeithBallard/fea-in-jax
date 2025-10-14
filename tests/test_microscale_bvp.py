@@ -2,14 +2,14 @@ from helper import *
 
 jax.config.update("jax_enable_x64", True)
 
-from jax.lib import xla_bridge
-print(xla_bridge.get_backend().platform)
+import jax.extend
+print(jax.extend.backend.get_backend().platform)
 
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"microscale_2D_r1.vtk"))
+mesh = meshio.read(get_mesh(f"microscale_2D_r0.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[0].data, dtype=np.uint64)
 mesh.cell_data["DomainIDs"][0] = np.array(
@@ -114,7 +114,7 @@ u, residual, element_batches = solve_bvp(
     u_0_g=jnp.zeros(shape=(V * U)),
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_SCIPY_W_INFO),
+    solver_options=SolverOptions(linear_solve_type=LinearSolverType.DIRECT_SPARSE_SOLVE_JNP),
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)
