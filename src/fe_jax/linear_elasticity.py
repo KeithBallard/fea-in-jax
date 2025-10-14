@@ -52,10 +52,15 @@ def elastic_isotropic(eps_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
         )
     else:
         raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
+   # unit_strain=jnp.array([1, 0, 0, 0, 0, 0]) 
+   # unit_strain=jnp.eye(N)
+   
 
     stress_qdd = rank2_voigt_to_tensor(
-        jnp.einsum("qsi,qi->qs", C_qss, rank2_tensor_to_voigt(eps_qdd))
+      # jnp.einsum("qsi,qi->qs", C_qss, unit_strain + rank2_tensor_to_voigt(eps_qdd))
+      jnp.einsum("qsi,qi->qs", C_qss, rank2_tensor_to_voigt(eps_qdd))
     )
+    
     return stress_qdd, jnp.zeros(shape=(material_params_qm.shape[0], 0)) # no internal state
 
 
@@ -171,10 +176,12 @@ def linear_elasticity_residual(
     -------
     R_nd  : residual vector, ndarray[float, (N, D)]
     """
-
+    
     D = u_nd.shape[1]
     P = dphi_dxi_qnp.shape[2]
-    assert P == D
+    
+    # assert P == D # P is not necessarily equal to D for MSG
+    
     # Formulation assumes solid elements otherwise a different approach is needed (i.e. shells)
 
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
@@ -184,8 +191,11 @@ def linear_elasticity_residual(
     dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
-    eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
 
+    #eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
+    du_dx_qdd_padded = jnp.pad(du_dx_qdd, ((0,0), (0,0), (0,1)))
+    eps_qdd = 0.5 * (du_dx_qdd_padded + du_dx_qdd_padded.transpose((0, 2, 1))) # for MSG, we need a 3x3 strain tensor
+    
     constitutive_args = {}
 
     if is_required(constitutive_model, "eps_qdd"):
@@ -198,9 +208,10 @@ def linear_elasticity_residual(
         constitutive_args["internal_state_qi"] = internal_state_qi
 
     stress_qdd, new_internal_state_qi = constitutive_model(**constitutive_args)
-
-    grad_dphi_dx_stress_qnd = jnp.einsum("qni,qid->qnd", dphi_dx_qnd, stress_qdd)
+    
+    grad_dphi_dx_stress_qnd = jnp.einsum("qni,qid->qnd", dphi_dx_qnd, stress_qdd[:,0:2,:])
+    
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
-
+    
     return R_nd, new_internal_state_qi

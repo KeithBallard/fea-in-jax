@@ -523,7 +523,8 @@ def solve_bvp(
 
     B = len(element_batches)
     V = vertices_vd.shape[0]
-    D = vertices_vd.shape[1]
+    # D = vertices_vd.shape[1]
+    D = 3
 
     if u_0_g is None:
         u_0_g = jnp.zeros(shape=(V * D,))
@@ -555,6 +556,7 @@ def solve_bvp(
             for i, b in enumerate(element_batches)
         ]
     )
+    
     dphi_dxi_bqnp = list(dphi_dxi_bqnp)
 
     material_params_beqm = [b.material_params_eqm for b in element_batches]
@@ -614,7 +616,7 @@ def solve_bvp(
         and is_conn_homogeneous
         and is_mat_params_homogeneous
     )
-
+    
     inner_solve = solve_nonlinear_step
     if is_homogeneous:
         print("Batches are homogeneous, using JIT compilation for solve_linear_step")
@@ -642,7 +644,7 @@ def solve_bvp(
         dirichlet_values=jnp.array(dirichlet_values),
         solver_options=solver_options,
     )
-
+    
     # Update internal state variables for the element batches
     for i, b in enumerate(element_batches):
         b.internal_state_eqi = internal_state_beqi[i]
