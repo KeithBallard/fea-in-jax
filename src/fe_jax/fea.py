@@ -118,7 +118,7 @@ def __calculate_jacobian_coo_terms_batch(
     u_f: jnp.ndarray,
 ):
     E = x_end.shape[0]
-    
+
     u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
     U = u_enu.shape[2]
 
@@ -529,7 +529,12 @@ def solve_nonlinear_step(
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
                 J_sparse_tt = jacobian_func_wo_dirichlet(u_0_g)
-                delta_u = solve_sp(J_sparse_tt, -R_f)
+                delta_u_2 = solve_sp(J_sparse_tt, -R_f)
+                jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
+                delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
+
+                debug_print(delta_u_2)
+                debug_print(delta_u)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
@@ -771,6 +776,7 @@ def solve_bvp(
     )
 
     inner_solve = solve_nonlinear_step
+    is_homogeneous = False
     if is_homogeneous:
         print("Batches are homogeneous, using JIT compilation for solve_linear_step")
         inner_solve = jax.jit(

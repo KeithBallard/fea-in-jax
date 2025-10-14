@@ -40,7 +40,7 @@ def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
     return scipy.sparse.linalg.spsolve(A_csr, b)
 
 
-@jax.jit
+#@jax.jit
 def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     """
     Sparse direct solve for system A*x = b for a GPU backend.
@@ -65,7 +65,7 @@ def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     # The first element of indptr is always 0.
     indptr = jnp.concatenate([jnp.array([0]), jnp.cumsum(nnz_per_row)])
 
-    return jsparse.linalg.spsolve(sorted_data, sorted_cols, indptr, b)
+    return jsparse.linalg.spsolve(sorted_data, sorted_cols.astype(jnp.int32), indptr.astype(jnp.int32), b)
 
 
 def solve_sp(A: jsparse.COO, b: jnp.ndarray):

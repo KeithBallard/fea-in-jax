@@ -13,6 +13,16 @@ from typing import Any, Literal
 import inspect
 
 
+# If true, all debug_print statements will be called
+verbose = True
+
+def debug_print(x):
+    if verbose:
+        callers_local_vars = inspect.currentframe().f_back.f_locals.items()
+        x_name = [var_name for var_name, var_val in callers_local_vars if var_val is x][0]
+        jax.debug.print("{a}, shape={b} = \n{c}", a=x_name, b=x.shape, c=x)
+
+
 def is_required(fn, arg_name) -> bool:
     """Helper function to query if an argument is required by a function given the argument name.
     """
