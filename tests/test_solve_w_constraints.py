@@ -68,7 +68,7 @@ print('R = ', r_solution)
 import jax.experimental.sparse as jsparse
 
 J_sparse = jsparse.COO.fromdense(J_jax, index_dtype=jnp.int64)
-x_solution = solve_sp(J_sparse, b)
+x_solution = spsolve(J_sparse, b)
 
 print("x = ", x_solution)
 r_solution = residual(x_solution)

@@ -1,7 +1,7 @@
 from .setup import *
 from .utils import *
 from .solve_cg import cg as cg_w_info
-from .solve_sp import solve_sp
+from .sparse_linalg import *
 
 import jax.numpy as jnp
 import jax
@@ -529,12 +529,15 @@ def solve_nonlinear_step(
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
                 J_sparse_tt = jacobian_func_wo_dirichlet(u_0_g)
-                delta_u_2 = solve_sp(J_sparse_tt, -R_f)
+
+                J_sparse_tt = coo_sum_duplicates(J_sparse_tt, True)
+
+                #delta_u_2 = spsolve(J_sparse_tt, -R_f)
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
-                debug_print(delta_u_2)
-                debug_print(delta_u)
+                #debug_print(delta_u_2)
+                #ebug_print(delta_u)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory

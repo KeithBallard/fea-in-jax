@@ -1,7 +1,7 @@
 import jax
 
-#jax.config.update('jax_default_device', jax.devices('cpu')[0])
-#jax.config.update('jax_platform_name', 'cpu')
+#jax.config.update("jax_default_device", jax.devices("cpu")[0])
+#jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
 
 import jax.extend
@@ -19,15 +19,26 @@ import scipy.sparse.linalg
 
 import matplotlib.pyplot as plt
 
-verbose = False
+verbose = True
 
 ###################################################################################################
 # Helper functions
 
+
 def debug_print(x):
-    callers_local_vars = inspect.currentframe().f_back.f_locals.items()
-    x_name = [var_name for var_name, var_val in callers_local_vars if var_val is x][0]
-    jax.debug.print("{a}, shape={b} = \n{c}", a=x_name, b=x.shape, c=x)
+    prev_frame = inspect.currentframe().f_back
+    prev_fame_info = inspect.getframeinfo(prev_frame)
+    callers_local_vars = prev_frame.f_locals.items()
+    x_names = [var_name for var_name, var_val in callers_local_vars if var_val is x]
+    x_name = x_names[0] if len(x_names) > 0 else "<non-named value>"
+    jax.debug.print(
+        "From {d} line {e}:\n {a}, shape={b} = \n{c}",
+        a=x_name,
+        b=x.shape,
+        c=x,
+        d=prev_fame_info.filename,
+        e=prev_fame_info.lineno,
+    )
 
 
 def empty_print(x):
@@ -130,7 +141,9 @@ def get_assembly_matrix(n_points: int) -> jsparse.COO:
     cols = jnp.array(range(rows.shape[0]))
     # debug_print(cols)
     data = jnp.ones_like(cols)
-    assembly_matrix = jsparse.COO((data, rows, cols), shape=(n_points, 2 * (n_points - 1)))
+    assembly_matrix = jsparse.COO(
+        (data, rows, cols), shape=(n_points, 2 * (n_points - 1))
+    )
     return assembly_matrix
 
 
@@ -180,21 +193,21 @@ def assembled_jacobian(k_func, points, T, xi_q, W_q) -> jsparse.COO:
 
     # Evaluates the Jacobian for all elements
     J_enn = J_vmap(k_func, x_en, T_en, xi_q, W_q)
-    # debug_print(J_enn)
+    debug_print(J_enn)
 
     # Assemble the Jacobian into a sparse COO matrix
     I = jnp.array(range(points.shape[0]))
     I = jnp.vstack([I[0:-1], I[1:]]).T
     cols, rows = jax.vmap(jnp.meshgrid)(I, I)
-    # debug_print(rows)
-    # debug_print(cols)
+    debug_print(rows)
+    debug_print(cols)
     # Note: the shape of the matrix assumes there is one DOF per a node.
     J_assembled = jsparse.COO(
         (J_enn.ravel(), rows.ravel(), cols.ravel()),
         shape=(points.shape[0], points.shape[0]),
     )
-    # J_dense = J_assembled.todense()
-    # debug_print(J_dense)
+    J_dense = J_assembled.todense()
+    debug_print(J_dense)
     return J_assembled
 
 
@@ -212,10 +225,12 @@ def apply_dirichlet_bcs(
     # Note: jnp.isin returns a boolean array that is True for the Dirichlet BC DOFs, but we want
     # the opposite, hence ~.
     keep_mask = ~jnp.isin(A.row, dirichlet_dofs) & ~jnp.isin(A.col, dirichlet_dofs)
+    dprint(keep_mask)
 
     # Create the new data entries for 1's on the diagon corresponding to the BCs.
     num_bcs = dirichlet_dofs.shape[0]
     bc_data = jnp.ones(num_bcs, dtype=A.dtype)
+    dprint(bc_data)
 
     # Create a new sparse matrix by concatenating the old (filtered) and new (BC) entries
     A_modified = jsparse.COO(
@@ -226,6 +241,9 @@ def apply_dirichlet_bcs(
         ),
         shape=A.shape,
     )
+    dprint(A_modified.data)
+    A_dense = A_modified.todense()
+    dprint(A_dense)
 
     # Update the RHS vector
     tmp = jnp.zeros_like(b)
@@ -269,7 +287,7 @@ def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
     return scipy.sparse.linalg.spsolve(A_csr, b)
 
 
-#@jax.jit
+# @jax.jit
 def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     """
     Sparse direct solve for system A*x = b for a GPU backend.
@@ -277,28 +295,45 @@ def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     """
     # Get the permutation that sorts the matrix entries
     perm = jnp.lexsort((A.col, A.row))
+    dprint(perm)
 
-    # Apply the permutation
-    sorted_data = A.data[perm]
-    sorted_cols = A.col[perm]
-    sorted_rows = A.row[perm]  # We need this for the next step
+    # Creates an array of (row, col) entries (sorted by row then col using perm)
+    sorted_indices = jnp.vstack((A.row[perm], A.col[perm])).T
+    # An array of indices.shape[0]-1 that is a[i+1] - a[i]
+    diff = jnp.diff(sorted_indices, axis=0)
+    dprint(sorted_indices)
+    dprint(diff)
+    # Boolean mask indicating if each (row, col) value is unique
+    uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
+    dprint(uniq_mask)
+
+    # A map from the unique order to the original order
+    unique_indices = perm[uniq_mask]
+    # A map from the original order to the unique order
+    inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
+    # Effectively sums duplicates and returns the values in the permuated order
+    unique_data = jnp.bincount(inv_indices, weights=A.data)
+    unique_cols = A.col[unique_indices]
 
     # Count the number of non-zero elements in each row.
     # The 'length' argument is crucial to ensure the output array has size num_rows,
     # even if the last rows are empty.
     num_rows, _ = A.shape
-    nnz_per_row = jnp.bincount(sorted_rows, length=num_rows)
+    nnz_per_row = jnp.bincount(sorted_indices[unique_indices][:,0], length=num_rows)
 
     # Build the index pointer array (indptr) from the counts.
     # This is a cumulative sum of the non-zero counts per row.
     # The first element of indptr is always 0.
     indptr = jnp.concatenate([jnp.array([0]), jnp.cumsum(nnz_per_row)])
 
-    J_tmp = jsparse.CSR((sorted_data, sorted_cols, indptr), shape=A.shape)
-    J_dense = J_tmp.todense()
-    debug_print(J_dense)
-
-    return jsparse.linalg.spsolve(sorted_data, sorted_cols.astype(jnp.int32), indptr.astype(jnp.int32), b, tol=1e-8, reorder=1)
+    return jsparse.linalg.spsolve(
+        unique_data,
+        unique_cols.astype(jnp.int32),
+        indptr.astype(jnp.int32),
+        b,
+        tol=1e-8,
+        reorder=1,
+    )
 
 
 def solve_sp(A: jsparse.COO, b: jnp.ndarray):
@@ -316,19 +351,25 @@ def solve_sp(A: jsparse.COO, b: jnp.ndarray):
 
 
 @jax.jit
-def residual_norm(R: jnp.ndarray, T: jnp.ndarray, dirichlet_dofs: jnp.ndarray, dirichlet_values: jnp.ndarray):
+def residual_norm(
+    R: jnp.ndarray,
+    T: jnp.ndarray,
+    dirichlet_dofs: jnp.ndarray,
+    dirichlet_values: jnp.ndarray,
+):
     """
     Evaluates the L-2 norm of the residual vector while including Dirichlet BCs.
     """
-    return jnp.linalg.norm(R.at[dirichlet_dofs].set(T[dirichlet_dofs] - dirichlet_values))
-
+    return jnp.linalg.norm(
+        R.at[dirichlet_dofs].set(T[dirichlet_dofs] - dirichlet_values)
+    )
 
 
 ###################################################################################################
 # 1D Thermal Diffusion Problem Setup
 
 # Points used to discretize the domain of [0, 1]
-N = 3 # Number of points for mesh
+N = 3  # Number of points for mesh
 points = jnp.linspace(start=0.0, stop=1.0, num=N)
 dprint(points)
 
@@ -340,22 +381,22 @@ dprint(weights_q)
 
 # Coefficient of thermal conduction as a function of temperature, W / (m*K)
 # Part A: Constant value
-#k = lambda T: 50.
+# k = lambda T: 50.
 # Part B: Nonlinear, power law fit of data for monolithic copper
 k = lambda T: 792.15 * T ** (-0.118)
 # Testing a constant
 # k = jax.tree_util.Partial(lambda T: 380.)
-#k = jax.tree_util.Partial(lambda T: 1e6 * (T) ** (-20.) + 100.)
+# k = jax.tree_util.Partial(lambda T: 1e6 * (T) ** (-20.) + 100.)
 
 # Transform the function to make it compatible with pytrees and vmap'ed
 k = jax.tree_util.Partial(jax.vmap(k))
 
 # Plot the coefficient of thermal conduction
-T_plot = jnp.linspace(start=100., stop=1000., num=100)
+T_plot = jnp.linspace(start=100.0, stop=1000.0, num=100)
 plt.plot(np.array(T_plot), np.array(k(T_plot)))
-plt.title('Coeff. of Thermal Conduction vs. Temperature')
-plt.xlabel('T (K)')
-plt.ylabel('k (W / (m*K))')
+plt.title("Coeff. of Thermal Conduction vs. Temperature")
+plt.xlabel("T (K)")
+plt.ylabel("k (W / (m*K))")
 plt.show()
 
 # Apply a Dirichlet BC to the left hand side (index 0) of T=500K
@@ -387,7 +428,7 @@ iteration = 0
 R_norm = residual_norm(R, T, dirichlet_dofs, dirichlet_values)
 while R_norm > 1e-6 or iteration == 0:
 
-    print(f'Iteration {iteration} |R| = {R_norm}')
+    print(f"Iteration {iteration} |R| = {R_norm}")
 
     # Evaluates the Jacobian for the initial temperature T_0
     J = assembled_jacobian(k_func=k, points=points, T=T, xi_q=xi_q, W_q=weights_q)
@@ -424,13 +465,13 @@ while R_norm > 1e-6 or iteration == 0:
 
     break
 
-print(f'Final Iteration {iteration} |R| = {R_norm}')
+print(f"Final Iteration {iteration} |R| = {R_norm}")
 
-viridis_cmap = plt.get_cmap('viridis_r', len(T_history))
+viridis_cmap = plt.get_cmap("viridis_r", len(T_history))
 for i, T_i in enumerate(T_history):
     plt.plot(points, T_i, color=viridis_cmap(i), label=f"NL Iteration {i}")
 plt.legend()
-plt.title('Temperature Profile for Nonlinear Iterations')
-plt.xlabel('x (m)')
-plt.ylabel('T (K)')
+plt.title("Temperature Profile for Nonlinear Iterations")
+plt.xlabel("x (m)")
+plt.ylabel("T (K)")
 plt.show()
