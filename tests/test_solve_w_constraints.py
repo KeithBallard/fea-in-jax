@@ -63,13 +63,16 @@ x_solution, info = jax.scipy.sparse.linalg.gmres(
 print("x = ", x_solution)
 r_solution = residual(x_solution)
 print('R = ', r_solution)
+assert jnp.linalg.norm(r_solution) < 1e-12
 
 
 import jax.experimental.sparse as jsparse
 
 J_sparse = jsparse.COO.fromdense(J_jax, index_dtype=jnp.int64)
-x_solution = spsolve(J_sparse, b)
+x_solution_2 = spsolve(J_sparse, b)
+print("x = ", x_solution_2)
+assert jnp.isclose(x_solution, x_solution_2, rtol=1e-12, atol=1e-4).all()
 
-print("x = ", x_solution)
-r_solution = residual(x_solution)
+r_solution = residual(x_solution_2)
 print('R = ', r_solution)
+assert jnp.linalg.norm(r_solution) < 1e-12

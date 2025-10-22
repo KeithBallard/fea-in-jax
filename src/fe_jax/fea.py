@@ -96,11 +96,17 @@ def _calculate_jacobian_batch_element_kernel(
             internal_state_qi=internal_state_qi,
             constitutive_model=constitutive_model,
         )[0]
-        return R_nu.reshape(N, U)
+        return R_nu.reshape(N * U)
 
     J_ett = jax.vmap(jax.jacfwd(residual_kernel, argnums=0))(
         u_et, x_end, material_params_eqm, internal_state_eqi
     )
+
+    assert J_ett.shape == (
+        E,
+        N * U,
+        N * U,
+    ), f"Expected shape {(E, N * U, N * U)}, but received {J_ett.shape}"
 
     return J_ett
 
@@ -114,20 +120,24 @@ def __calculate_jacobian_coo_terms_batch(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
+    connectivity_en: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
 ):
     E = x_end.shape[0]
 
     u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
+    N = u_enu.shape[1]
     U = u_enu.shape[2]
 
     # NOTE the assembly map is leveraged here to take a shortcut to work out the location
     # of the nonzero terms in the sparse matrix.
-    I = jnp.vstack([assembly_map.indices + i for i in range(U)]).T
+    #debug_print(connectivity_en)
+    I = jnp.hstack([U * connectivity_en + i for i in range(U)], dtype=jnp.int64)
+    #debug_print(I)
     cols, rows = jax.vmap(jnp.meshgrid)(I, I)
-    # debug_print(rows)
-    # debug_print(cols)
+    #debug_print(rows)
+    #debug_print(cols)
 
     J_ett = _calculate_jacobian_batch_element_kernel(
         element_residual_func=element_residual_func,
@@ -139,6 +149,7 @@ def __calculate_jacobian_coo_terms_batch(
         material_params_eqm=material_params_eqm,
         internal_state_eqi=internal_state_eqi,
     )
+    #debug_print(J_ett)
 
     return (J_ett, rows, cols)
 
@@ -151,6 +162,7 @@ def calculate_jacobian_wo_dirichlet(
     x_bend: list[jnp.ndarray],
     dphi_dxi_bqnp: list[jnp.ndarray],
     W_bq: list[jnp.ndarray],
+    connectivity_ben: list[jnp.ndarray],
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
 ):
@@ -161,20 +173,23 @@ def calculate_jacobian_wo_dirichlet(
     # since that operation could be JIT compiled. Then you could loop over the batch level
     # and accumulate them into the global with one more batch-to-global transform.
 
-    J_ett, rows, cols = zip(*[
-        __calculate_jacobian_coo_terms_batch(
-            element_residual_func=element_residual_func,
-            constitutive_model=constitutive_model_b[i],
-            material_params_eqm=material_params_beqm[i],
-            internal_state_eqi=internal_state_beqi[i],
-            x_end=x_bend[i],
-            dphi_dxi_qnp=dphi_dxi_bqnp[i],
-            W_q=W_bq[i],
-            assembly_map=assembly_map_b[i],
-            u_f=u_f,
-        )
-        for i in range(B)
-    ])
+    J_ett, rows, cols = zip(
+        *[
+            __calculate_jacobian_coo_terms_batch(
+                element_residual_func=element_residual_func,
+                constitutive_model=constitutive_model_b[i],
+                material_params_eqm=material_params_beqm[i],
+                internal_state_eqi=internal_state_beqi[i],
+                x_end=x_bend[i],
+                dphi_dxi_qnp=dphi_dxi_bqnp[i],
+                W_q=W_bq[i],
+                connectivity_en=connectivity_ben[i],
+                assembly_map=assembly_map_b[i],
+                u_f=u_f,
+            )
+            for i in range(B)
+        ]
+    )
     J_ett = jnp.vstack(J_ett)
     rows = jnp.vstack(rows)
     cols = jnp.vstack(cols)
@@ -182,9 +197,10 @@ def calculate_jacobian_wo_dirichlet(
     J_sparse_ff = jsparse.COO(
         (J_ett.ravel(), rows.ravel(), cols.ravel()),
         shape=(u_f.shape[0], u_f.shape[0]),
-    )
+    )._sort_indices()
 
     return J_sparse_ff
+
 
 @jax.jit
 def __calculate_residual_wo_dirichlet_batch(
@@ -379,6 +395,7 @@ def solve_nonlinear_step(
     x_bend: list[jnp.ndarray],
     dphi_dxi_bqnp: list[jnp.ndarray],
     W_bq: list[jnp.ndarray],
+    connectivity_ben: list[jnp.ndarray],
     assembly_map_b: list[jsparse.BCSR],
     u_0_g: jnp.ndarray,
     dirichlet_values_g: jnp.ndarray,
@@ -474,10 +491,10 @@ def solve_nonlinear_step(
         x_bend=x_bend,
         dphi_dxi_bqnp=dphi_dxi_bqnp,
         W_bq=W_bq,
+        connectivity_ben=connectivity_ben,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
     )
-
 
     R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
     initial_R_f_norm = jnp.linalg.norm(R_f)
@@ -528,16 +545,18 @@ def solve_nonlinear_step(
         match solver_options.linear_solve_type:
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
-                J_sparse_tt = jacobian_func_wo_dirichlet(u_0_g)
+                J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
+                J_sparse_ff = coo_sum_duplicates(J_sparse_ff, True)
+                lhs_matrix, rhs_vector = apply_dirichlet_bcs(
+                    J_sparse_ff, -R_f, dirichlet_dofs, dirichlet_values - u_f[dirichlet_dofs]
+                )
+                delta_u_2 = spsolve(lhs_matrix, rhs_vector)
 
-                J_sparse_tt = coo_sum_duplicates(J_sparse_tt, True)
-
-                #delta_u_2 = spsolve(J_sparse_tt, -R_f)
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
-                #debug_print(delta_u_2)
-                #ebug_print(delta_u)
+                debug_print(delta_u_2)
+                debug_print(delta_u)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
@@ -728,6 +747,7 @@ def solve_bvp(
     ]
 
     # Structures for mapping between cell-level arrays and global arrays
+    connectivity_ben = [jnp.array(b.connectivity_en) for b in element_batches]
     assembly_map_b = [
         mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
         for b in element_batches
@@ -800,6 +820,7 @@ def solve_bvp(
         x_bend=x_bend,
         dphi_dxi_bqnp=dphi_dxi_bqnp,
         W_bq=W_bq,
+        connectivity_ben=connectivity_ben,
         assembly_map_b=assembly_map_b,
         u_0_g=u_0_g,
         dirichlet_values_g=dirichlet_values_g,

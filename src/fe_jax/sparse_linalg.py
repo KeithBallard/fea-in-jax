@@ -11,7 +11,67 @@ import scipy.sparse.linalg
 from .utils import debug_print
 
 
-def coo_sum_duplicates(
+def apply_dirichlet_bcs(
+    A: jsparse.COO,
+    b: jnp.ndarray,
+    dirichlet_dofs: jnp.ndarray,
+    dirichlet_values: jnp.ndarray,
+) -> tuple[jsparse.COO, jnp.ndarray]:
+    """
+    Applies Dirichlet BCs directly to a COO sparse matrix, A, and adjusts the RHS vector, b.
+    """
+    # Create a mask to filter out rows corresponding to BCs.
+    # We want to keep an element if its row index is NOT in bc_indices.
+    # Note: jnp.isin returns a boolean array that is True for the Dirichlet BC DOFs, but we want
+    # the opposite, hence ~.
+    keep_mask = ~jnp.isin(A.row, dirichlet_dofs) & ~jnp.isin(A.col, dirichlet_dofs)
+    debug_print(keep_mask)
+
+    # Create the new data entries for 1's on the diagon corresponding to the BCs.
+    num_bcs = dirichlet_dofs.shape[0]
+    bc_data = jnp.ones(num_bcs, dtype=A.dtype)
+    debug_print(bc_data)
+
+    # Create a new sparse matrix by concatenating the old (filtered) and new (BC) entries
+    # Note: astype(jnp.int64) is neccessary because jnp.concatenate with (jnp.int64, jnp.uint64)
+    # results in a jnp.float64 array for some reason.
+    A_modified = jsparse.COO(
+        (
+            jnp.concatenate([jnp.where(keep_mask, A.data, A.data), bc_data]),
+            jnp.concatenate(
+                [jnp.where(keep_mask, A.row, A.row), dirichlet_dofs.astype(jnp.int64)]
+            ),
+            jnp.concatenate(
+                [jnp.where(keep_mask, A.col, A.col), dirichlet_dofs.astype(jnp.int64)]
+            ),
+        ),
+        shape=A.shape,
+    )
+    A_modified = A_modified._sort_indices()
+    """
+    A_modified = jsparse.COO(
+        (
+            jnp.concatenate([A.data[keep_mask], bc_data]),
+            jnp.concatenate([A.row[keep_mask], dirichlet_dofs]),
+            jnp.concatenate([A.col[keep_mask], dirichlet_dofs]),
+        ),
+        shape=A.shape,
+    )
+    """
+    debug_print(A_modified.data)
+
+    # Update the RHS vector
+    tmp = jnp.zeros_like(b)
+    tmp = tmp.at[dirichlet_dofs].set(dirichlet_values)
+    print(f"A.shape = {A.shape}")
+    print(f"A.data.shape = {A.data.shape}")
+    b_modified = b - A @ tmp
+    b_modified = b_modified.at[dirichlet_dofs].set(dirichlet_values)
+
+    return A_modified, b_modified
+
+
+def coo_arrays_sum_duplicates(
     A: jsparse.COO, buffer_result: bool = False
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
@@ -52,11 +112,28 @@ def coo_sum_duplicates(
         inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
         debug_print(inv_indices)
         debug_print(A.data)
-        #data = jnp.bincount(inv_indices, weights=A.data, length=perm.shape[0])
+        # data = jnp.bincount(inv_indices, weights=A.data, length=perm.shape[0])
         data = A.data
         rows = jnp.zeros_like(A.row).at[unique_indices].set(A.row[unique_indices])
         cols = jnp.zeros_like(A.col).at[unique_indices].set(A.col[unique_indices])
         return (data, rows, cols)
+
+
+def coo_sum_duplicates(
+    A: jsparse.COO, buffer_result: bool = False
+) -> jsparse.COO:
+    """
+    Returns a row-then-column sorted COO matrix after summing duplicate indices.
+
+    Args:
+        buffer_result: returned arrays will be same length as those in A (allowing JIT).
+
+    Returns:
+        COO matrix with duplicates summed.
+
+    """
+    data, rows, cols = coo_arrays_sum_duplicates(A=A, buffer_result=buffer_result)
+    return jsparse.COO((data, rows, cols), shape=A.shape, rows_sorted=True)
 
 
 @jax.jit
@@ -74,9 +151,8 @@ def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True):
         If the resulting CSR will be used with spsolve, make sure to set sum_duplicates to True
         because the CUDA sparse solver will not yield the correct result.
     """
-
     if sum_duplicates:
-        data, rows, cols = coo_sum_duplicates(A, True)
+        data, rows, cols = coo_arrays_sum_duplicates(A, True)
     else:
         # Get the permutation that sorts the matrix entries
         perm = jnp.lexsort((A.col, A.row))
