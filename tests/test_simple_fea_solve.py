@@ -81,10 +81,19 @@ mat_params_eqp = jnp.array(tmp_mat_params)
 element_batches = [
     ElementBatch(
         fe_type=fe_type,
-        connectivity_en=cells,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[:1,:],
         constitutive_model=elastic_isotropic,
-        material_params_eqm=mat_params_eqp,
-        internal_state_eqi=jnp.zeros(shape=(cells.shape[0], Q, 0)),
+        material_params_eqm=mat_params_eqp[:1,:],
+        internal_state_eqi=jnp.zeros(shape=(cells[:1,:].shape[0], Q, 0)),
+    ),
+    ElementBatch(
+        fe_type=fe_type,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[1:,:],
+        constitutive_model=elastic_isotropic,
+        material_params_eqm=mat_params_eqp[1:,:],
+        internal_state_eqi=jnp.zeros(shape=(cells[1:,:].shape[0], Q, 0)),
     ),
 ]
 

@@ -14,19 +14,91 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Callable, Any
 
+from flax import struct
 
-@dataclass
+
+@struct.dataclass
 class ElementBatch:
     """
     Describes a batch of elements. Passed into solve_bvp()
     """
 
-    fe_type: FiniteElementType
-    # list of vertex indices for each element (refers to list of vertices passed to solve_bvp(), not internal batch numbering)
+    fe_type: FiniteElementType = struct.field(pytree_node=False)
+    # Number of degrees of freedom per basis function (typically also per a node)
+    n_dofs_per_basis: int
+    # List of vertex indices for each element (refers to list of vertices passed to solve_bvp(),
+    # not internal batch numbering)
     connectivity_en: np.ndarray[Any, np.dtype[np.uint64]]
-    constitutive_model: Callable
+    constitutive_model: Callable = struct.field(pytree_node=False)
     material_params_eqm: jnp.ndarray
     internal_state_eqi: jnp.ndarray
+
+
+class MaterialPropertyArrayType(Enum):
+    EQM = 1 # Unique set per quad point in each element
+    EM = 2 # Unique set per element
+    M = 3 # Unique set for entire element batch
+
+
+@struct.dataclass
+class ElementBatchCollection:
+    """
+    Holds information about a collection of batches of elements in a form that is ameniable to JIT.
+    """
+
+    # --- Batch shape information (numpy / static to support JIT) ---
+
+    # Number of batches
+    B: int = struct.field(pytree_node=False) # Number of element batches
+    # Number of elements for each batch
+    E: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    # Number of nodes per element for each batch
+    N: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    # Number of degrees of freedom (unknowns) per a node for each batch
+    U: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    # Number of quadrature points per an element for each batch
+    Q: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    # Number of material parameters required for each batch (at a point)
+    M: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    # Number of internal state variables required for each batch (at a point)
+    I: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+
+    # --- Offsets / sizes into expanded arrays for slicing ---
+
+    # Element-node offset for each batch (used to index into `connectivity`), shape=(B+1,)
+    EN_offsets: jnp.ndarray
+    # Type of material_params for each batch. For each batch, the shape of an array can
+    #  be one of three type:
+    # 1) (E*Q*M,) if every quad point in every element has a unique set of material parameters
+    # 2) (E*M,) if every element has a unique set of material parameters
+    # 3) (M,) if each batch has a unique set of material parameters
+    material_params_types: list[MaterialPropertyArrayType] = struct.field(pytree_node=False)
+
+    # --- Mesh / property / state information ---
+    
+    # Unravelled indices of nodes for all elements across all batches, shape=(sum(E*N),)
+    connectivity: jnp.ndarray
+    # Unravelled material parameters for all batches, shape depends on types for each batch
+    material_params: jnp.ndarray
+    # Unravelled internal state variables (ISV) for all batches, shape=(sum(E*Q*I),)
+    internal_state: jnp.ndarray
+
+
+def batch_to_collection(element_batches: list[ElementBatch]) -> ElementBatchCollection:
+    """
+    Converts a list of ElementBatch's to a BatchCollection, which is ameniable to JIT operations.
+    """
+    E = np.array([b.connectivity_en.shape[0] for b in element_batches])
+    N = np.array([b.connectivity_en.shape[1] for b in element_batches])
+    U = np.array([b.n_dofs_per_basis for b in element_batches])
+    return ElementBatchCollection(
+        B=len(element_batches),
+        E=E,
+        N=N,
+        U=U,
+        EN_offsets=jnp.hstack([jnp.array([0]), jnp.cumsum(E * N)]),
+        connectivity=jnp.hstack([b.connectivity_en.ravel() for b in element_batches], dtype=jnp.int64),
+    )
 
 
 class LinearSolverType(Enum):
@@ -53,6 +125,32 @@ class SolverOptions:
     nonlinear_max_iter: int = 10
     nonlinear_relative_tol: float = 1e-12
     nonlinear_absolute_tol: float = 1e-8
+
+
+@partial(jax.jit, static_argnames="n_vertices")
+def _calculate_jacobian_unique_nnz(
+    n_vertices: int,
+    element_batch_collection: ElementBatchCollection,
+):
+    """
+    Returns the number of non-zeros in the Jacobian for a collection of batches of elements,
+    ignoring any effect of constraints on the sparsity pattern.
+    """
+    node_nnz_count = jnp.zeros((n_vertices,), dtype=jnp.int64)
+
+    for i in range(element_batch_collection.B):
+        start = element_batch_collection.EN_offsets[i]
+        size = element_batch_collection.E[i] * element_batch_collection.N[i]
+        slice = jax.lax.dynamic_slice(
+            element_batch_collection.connectivity,
+            start_indices=(start,),
+            slice_sizes=(size,),
+        )
+        # Note: Assuming Jacobian will have a sparsity pattern proportional to U**2 for each
+        # element connected to a node
+        node_nnz_count = node_nnz_count.at[slice].add(element_batch_collection.U[i]**2)
+
+    return jnp.sum(node_nnz_count)
 
 
 @jax.jit
@@ -132,12 +230,12 @@ def __calculate_jacobian_coo_terms_batch(
 
     # NOTE the assembly map is leveraged here to take a shortcut to work out the location
     # of the nonzero terms in the sparse matrix.
-    #debug_print(connectivity_en)
+    # debug_print(connectivity_en)
     I = jnp.hstack([U * connectivity_en + i for i in range(U)], dtype=jnp.int64)
-    #debug_print(I)
+    # debug_print(I)
     cols, rows = jax.vmap(jnp.meshgrid)(I, I)
-    #debug_print(rows)
-    #debug_print(cols)
+    # debug_print(rows)
+    # debug_print(cols)
 
     J_ett = _calculate_jacobian_batch_element_kernel(
         element_residual_func=element_residual_func,
@@ -149,7 +247,7 @@ def __calculate_jacobian_coo_terms_batch(
         material_params_eqm=material_params_eqm,
         internal_state_eqi=internal_state_eqi,
     )
-    #debug_print(J_ett)
+    # debug_print(J_ett)
 
     return (J_ett, rows, cols)
 
@@ -546,9 +644,13 @@ def solve_nonlinear_step(
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
                 J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                J_sparse_ff = coo_sum_duplicates(J_sparse_ff, True)
+                with jax.disable_jit():
+                    J_sparse_ff = coo_sum_duplicates(J_sparse_ff, True)
                 lhs_matrix, rhs_vector = apply_dirichlet_bcs(
-                    J_sparse_ff, -R_f, dirichlet_dofs, dirichlet_values - u_f[dirichlet_dofs]
+                    J_sparse_ff,
+                    -R_f,
+                    dirichlet_dofs,
+                    dirichlet_values - u_f[dirichlet_dofs],
                 )
                 delta_u_2 = spsolve(lhs_matrix, rhs_vector)
 
@@ -752,6 +854,15 @@ def solve_bvp(
         mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
         for b in element_batches
     ]
+
+    element_batch_collection = batch_to_collection(element_batches)
+    print(element_batch_collection)
+    nnz = _calculate_jacobian_unique_nnz(
+        n_vertices=V, element_batch_collection=element_batch_collection
+    )
+
+    print(nnz)
+    exit()
 
     # TODO JIT this group of lines
     # A list of degrees of freedom for the Dirichlet boundary conditions

@@ -108,20 +108,20 @@ def coo_arrays_sum_duplicates(
         return (unique_data, A.row[unique_indices], A.col[unique_indices])
     else:
         # Same as above but buffers arrays to allow JIT
+        nnz = jnp.sum(uniq_mask)
         unique_indices = jnp.where(uniq_mask, perm, perm)
         inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
         debug_print(inv_indices)
         debug_print(A.data)
-        # data = jnp.bincount(inv_indices, weights=A.data, length=perm.shape[0])
-        data = A.data
+        data = jnp.bincount(inv_indices, weights=A.data, length=perm.shape[0])
+        # data = A.data
+        print(data)
         rows = jnp.zeros_like(A.row).at[unique_indices].set(A.row[unique_indices])
         cols = jnp.zeros_like(A.col).at[unique_indices].set(A.col[unique_indices])
-        return (data, rows, cols)
+        return (data, rows[unique_indices], cols[unique_indices])
 
 
-def coo_sum_duplicates(
-    A: jsparse.COO, buffer_result: bool = False
-) -> jsparse.COO:
+def coo_sum_duplicates(A: jsparse.COO, buffer_result: bool = False) -> jsparse.COO:
     """
     Returns a row-then-column sorted COO matrix after summing duplicate indices.
 
