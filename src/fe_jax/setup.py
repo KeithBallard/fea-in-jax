@@ -260,7 +260,7 @@ def mesh_to_sparse_assembly_map(
 
     Parameters
     ----------
-    vertices    : dense 2d-array with shape (# verts, N_x)
+    n_vertices  : total number of vertices
     cells       : dense 2d-array with shape (# elements, V)
 
     Returns
