@@ -8,6 +8,8 @@ import numpy as np
 import scipy.sparse
 import scipy.sparse.linalg
 
+from functools import partial
+
 from .utils import debug_print
 
 
@@ -20,6 +22,7 @@ def apply_dirichlet_bcs(
     """
     Applies Dirichlet BCs directly to a COO sparse matrix, A, and adjusts the RHS vector, b.
     """
+
     # Create a mask to filter out rows corresponding to BCs.
     # We want to keep an element if its row index is NOT in bc_indices.
     # Note: jnp.isin returns a boolean array that is True for the Dirichlet BC DOFs, but we want
@@ -35,6 +38,16 @@ def apply_dirichlet_bcs(
     # Create a new sparse matrix by concatenating the old (filtered) and new (BC) entries
     # Note: astype(jnp.int64) is neccessary because jnp.concatenate with (jnp.int64, jnp.uint64)
     # results in a jnp.float64 array for some reason.
+    data = jnp.concatenate([jnp.where(keep_mask, A.data, A.data), bc_data])
+    rows = jnp.concatenate(
+        [jnp.where(keep_mask, A.row, A.row), dirichlet_dofs.astype(jnp.int64)]
+    )
+    cols = jnp.concatenate(
+        [jnp.where(keep_mask, A.col, A.col), dirichlet_dofs.astype(jnp.int64)]
+    )
+    print(data.shape)
+    print(rows.shape)
+    print(cols.shape)
     A_modified = jsparse.COO(
         (
             jnp.concatenate([jnp.where(keep_mask, A.data, A.data), bc_data]),
@@ -48,6 +61,8 @@ def apply_dirichlet_bcs(
         shape=A.shape,
     )
     A_modified = A_modified._sort_indices()
+    debug_print(A_modified.data)
+
     """
     A_modified = jsparse.COO(
         (
@@ -58,28 +73,23 @@ def apply_dirichlet_bcs(
         shape=A.shape,
     )
     """
-    debug_print(A_modified.data)
 
     # Update the RHS vector
     tmp = jnp.zeros_like(b)
     tmp = tmp.at[dirichlet_dofs].set(dirichlet_values)
-    print(f"A.shape = {A.shape}")
-    print(f"A.data.shape = {A.data.shape}")
     b_modified = b - A @ tmp
     b_modified = b_modified.at[dirichlet_dofs].set(dirichlet_values)
 
     return A_modified, b_modified
 
 
-def coo_arrays_sum_duplicates(
-    A: jsparse.COO, buffer_result: bool = False
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+def coo_arrays_sum_duplicates(A: jsparse.COO) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
     Returns the row-then-column sorted arrays for a new COO matrix after summing
     duplicate indices.
 
     Args:
-        buffer_result: returned arrays will be same length as those in A (allowing JIT).
+        A: input matrix for which to sum duplicates.
 
     Returns:
         (data, row, col) defining a COO matrix with duplicates summed.
@@ -90,54 +100,90 @@ def coo_arrays_sum_duplicates(
 
     # Get the permutation that sorts the matrix entries
     perm = jnp.lexsort((A.col, A.row))
-
     # Creates an array of (row, col) entries (sorted by row then col using perm)
     sorted_indices = jnp.vstack((A.row[perm], A.col[perm])).T
-    # An array of indices.shape[0]-1 that is a[i+1] - a[i]
+    # An array of sorted_indices.shape[0]-1 that is a[i+1] - a[i]
     diff = jnp.diff(sorted_indices, axis=0)
-    # Boolean mask indicating if each (row, col) value is unique
+    # Boolean mask indicating if each (row, col) value is unique, shape=A.col.shape
     uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
-
-    if not buffer_result:
-        # A map from the unique order to the original order
-        unique_indices = perm[uniq_mask]
-        # A map from the original order to the unique order
-        inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
-        # Effectively sums duplicates and returns the values in the permuated order
-        unique_data = jnp.bincount(inv_indices, weights=A.data)
-        return (unique_data, A.row[unique_indices], A.col[unique_indices])
-    else:
-        # Same as above but buffers arrays to allow JIT
-        nnz = jnp.sum(uniq_mask)
-        unique_indices = jnp.where(uniq_mask, perm, perm)
-        inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
-        debug_print(inv_indices)
-        debug_print(A.data)
-        data = jnp.bincount(inv_indices, weights=A.data, length=perm.shape[0])
-        # data = A.data
-        print(data)
-        rows = jnp.zeros_like(A.row).at[unique_indices].set(A.row[unique_indices])
-        cols = jnp.zeros_like(A.col).at[unique_indices].set(A.col[unique_indices])
-        return (data, rows[unique_indices], cols[unique_indices])
+    # A map from the unique order to the original order
+    unique_indices = perm[uniq_mask]
+    # A map from the original order to the unique order
+    inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
+    # Effectively sums duplicates and returns the values in the permuated order
+    unique_data = jnp.bincount(inv_indices, weights=A.data)
+    return (unique_data, A.row[unique_indices], A.col[unique_indices])
 
 
-def coo_sum_duplicates(A: jsparse.COO, buffer_result: bool = False) -> jsparse.COO:
+@partial(jax.jit, static_argnames=["result_length"])
+def coo_arrays_sum_duplicates_jit(
+    A: jsparse.COO, result_length: int = 0
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """
+    Returns the row-then-column sorted arrays for a new COO matrix after summing
+    duplicate indices.
+
+    Args:
+        A: input matrix for which to sum duplicates.
+
+        result_length: specified length for resultant arrays (allowing JIT) but should be the
+            number of non-zeros after duplicates are combined.
+
+    Returns:
+        (data, row, col) defining a COO matrix with duplicates summed.
+
+    """
+
+    # Credit: https://stackoverflow.com/a/25789764
+
+    # Get the permutation that sorts the matrix entries
+    perm = jnp.lexsort((A.col, A.row))
+    # Creates an array of (row, col) entries (sorted by row then col using perm)
+    sorted_indices = jnp.vstack((A.row[perm], A.col[perm])).T
+    debug_print(sorted_indices)
+    # An array of sorted_indices.shape[0]-1 that is a[i+1] - a[i]
+    diff = jnp.diff(sorted_indices, axis=0)
+    debug_print(diff)
+    # Boolean mask indicating if each (row, col) value is unique, shape=A.col.shape
+    uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
+    debug_print(uniq_mask)
+    # A map from the unique order to the original order
+    # NOTE: there is a trick here to get the unique indices while also guaranteeing array sizes
+    unique_indices = jnp.sort(jnp.where(uniq_mask, perm, jnp.max(perm) + 1))[0:result_length]
+    debug_print(unique_indices)
+    # A map from the original order to the unique order
+    inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
+    debug_print(inv_indices)
+    # Effectively sums duplicates and returns the values in the permuated order
+    data = jnp.bincount(inv_indices, weights=A.data, length=result_length)
+    rows = A.row[unique_indices]
+    cols = A.col[unique_indices]
+    debug_print(data)
+    debug_print(rows)
+    debug_print(cols)
+    return (data, rows, cols)
+
+
+@partial(jax.jit, static_argnames=["result_length"])
+def coo_sum_duplicates(A: jsparse.COO, result_length: int = 0) -> jsparse.COO:
     """
     Returns a row-then-column sorted COO matrix after summing duplicate indices.
 
     Args:
-        buffer_result: returned arrays will be same length as those in A (allowing JIT).
+        result_length: specified length for resultant arrays (allowing JIT) but should be the
+            number of non-zeros after duplicates are combined. A value of 0 will dynamically
+            allocate the arrays but also be incompatible with JIT.
 
     Returns:
         COO matrix with duplicates summed.
 
     """
-    data, rows, cols = coo_arrays_sum_duplicates(A=A, buffer_result=buffer_result)
+    data, rows, cols = coo_arrays_sum_duplicates_jit(A=A, result_length=result_length)
     return jsparse.COO((data, rows, cols), shape=A.shape, rows_sorted=True)
 
 
 @jax.jit
-def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True):
+def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True, result_length: int = 0):
     """
     Convert a COO sparse matrix to a CSR sparse matrix.
 
@@ -152,7 +198,7 @@ def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True):
         because the CUDA sparse solver will not yield the correct result.
     """
     if sum_duplicates:
-        data, rows, cols = coo_arrays_sum_duplicates(A, True)
+        data, rows, cols = coo_arrays_sum_duplicates(A, result_length=result_length)
     else:
         # Get the permutation that sorts the matrix entries
         perm = jnp.lexsort((A.col, A.row))

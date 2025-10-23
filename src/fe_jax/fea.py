@@ -150,9 +150,15 @@ class ElementBatchCollection:
     dphi_dxi_offsets: jnp.ndarray
 
     @partial(jax.jit, static_argnames="i")
-    def get_connectivity(self, i: int):
+    def get_connectivity(self, i: int) -> jnp.ndarray:
         """
         Retrieves the (reshaped) `connectivity` array for batch i
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, N)
         """
         return jax.lax.dynamic_slice(
             self.connectivity,
@@ -161,9 +167,16 @@ class ElementBatchCollection:
         ).reshape((self.E[i], self.N[i]))
 
     @partial(jax.jit, static_argnames="i")
-    def get_material_params(self, i: int):
+    def get_material_params(self, i: int) -> jnp.ndarray:
         """
         Retrieves the (reshaped) `material_parameters` array for batch i
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, Q, M), (E, M), or (M,) depending on material
+                properties array type
         """
         match self.material_params_types[i]:
             case MaterialPropertyArrayType.EQM:
@@ -186,9 +199,15 @@ class ElementBatchCollection:
                 ).reshape((self.M[i],))
 
     @partial(jax.jit, static_argnames="i")
-    def get_internal_state(self, i: int):
+    def get_internal_state(self, i: int) -> jnp.ndarray:
         """
-        Retrieves the (reshaped) `internal_state` array for batch i
+        Retrieves the (reshaped) `internal_state` array for batch
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, Q, I)
         """
         return jax.lax.dynamic_slice(
             self.internal_state,
@@ -197,9 +216,15 @@ class ElementBatchCollection:
         ).reshape((self.E[i], self.Q[i], self.I[i]))
 
     @partial(jax.jit, static_argnames="i")
-    def get_x(self, i: int):
+    def get_x(self, i: int) -> jnp.ndarray:
         """
         Retrieves the (reshaped) `x` array for batch i
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, N, D)
         """
         return jax.lax.dynamic_slice(
             self.x,
@@ -208,9 +233,16 @@ class ElementBatchCollection:
         ).reshape((self.E[i], self.N[i], self.D))
 
     @partial(jax.jit, static_argnames="i")
-    def get_weights(self, i: int):
+    def get_weights(self, i: int) -> jnp.ndarray:
         """
         Retrieves the (reshaped) `weights` array for batch i
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E,) or (1,) depending on quadrature array type
+
         """
         match self.quadrature_types[i]:
             case QuadratureArrayType.EQ:
@@ -227,9 +259,16 @@ class ElementBatchCollection:
                 )
 
     @partial(jax.jit, static_argnames="i")
-    def get_dphi_dxi(self, i: int):
+    def get_dphi_dxi(self, i: int) -> jnp.ndarray:
         """
-        Retrieves the (reshaped) `dphi_dxi` array for batch i
+        Retrieves the (reshaped) `dphi_dxi` array for batch i.
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, Q, N, P) or (Q, N, P) depending on quadrature
+                array type
         """
         match self.quadrature_types[i]:
             case QuadratureArrayType.EQ:
@@ -244,6 +283,27 @@ class ElementBatchCollection:
                     start_indices=(self.dphi_dxi_offsets[i],),
                     slice_sizes=(self.Q[i] * self.N[i] * self.P[i],),
                 ).reshape(self.Q[i], self.N[i], self.P[i])
+
+    @partial(jax.jit, static_argnames="i")
+    def get_dof_map(self, i: int) -> jnp.ndarray:
+        """
+        Returns the element degree of freedom map, which maps from a vector for the element to
+        the DoF numbering.
+
+        NOTE: if distributed computing is introduced (via MPI), we will need to distinguish
+        between `rank` and `global` enumerations.
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of integers with shape (E, N * U)
+        """
+        connectivity_en = self.get_connectivity(i)
+        # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
+        return jnp.hstack(
+            [self.U[i] * connectivity_en + i for i in range(self.U[i])], dtype=jnp.int64
+        ).reshape((self.E[i], self.N[i] * self.U[i]))
 
 
 def batch_to_collection(
@@ -393,7 +453,7 @@ class SolverOptions:
 @partial(jax.jit, static_argnames="n_vertices")
 def _calculate_jacobian_unique_nnz(
     n_vertices: int,
-    element_batch_collection: ElementBatchCollection,
+    ebc: ElementBatchCollection,
 ):
     """
     Returns the number of non-zeros in the Jacobian for a collection of batches of elements,
@@ -401,21 +461,22 @@ def _calculate_jacobian_unique_nnz(
     """
     node_nnz_count = jnp.zeros((n_vertices,), dtype=jnp.int64)
 
-    for i in range(element_batch_collection.B):
-        start = element_batch_collection.EN_offsets[i]
-        size = element_batch_collection.E[i] * element_batch_collection.N[i]
-        slice = jax.lax.dynamic_slice(
-            element_batch_collection.connectivity,
-            start_indices=(start,),
-            slice_sizes=(size,),
-        )
-        # Note: Assuming Jacobian will have a sparsity pattern proportional to U**2 for each
-        # element connected to a node
-        node_nnz_count = node_nnz_count.at[slice].add(
-            element_batch_collection.U[i] ** 2
-        )
+    @partial(jax.jit, static_argnames="i")
+    def jacobian_indices(i: int):
+        dof_map = ebc.get_dof_map(i)
+        cols, rows = jax.vmap(jnp.meshgrid)(dof_map, dof_map)
+        return jnp.vstack([rows.ravel(), cols.ravel()]).T
 
-    return jnp.sum(node_nnz_count)
+    non_zero_indices = jnp.vstack([jacobian_indices(i) for i in range(ebc.B)])
+    # Get the permutation that sorts the non-zero entries (sorted by row then col)
+    perm = jnp.lexsort((non_zero_indices[:, 1], non_zero_indices[:, 0]))
+    # Sort the non-zero indices
+    non_zero_indices = non_zero_indices[perm]
+    # An array of non_zero_indices.shape[0]-1 that is a[i+1] - a[i]
+    diff = jnp.diff(non_zero_indices, axis=0)
+    # Boolean mask indicating if each (row, col) value is unique, shape=A.col.shape
+    uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
+    return jnp.sum(uniq_mask)
 
 
 @jax.jit
@@ -475,7 +536,7 @@ def _calculate_jacobian_batch_element_kernel(
 
 
 @jax.jit
-def __calculate_jacobian_coo_terms_batch(
+def _calculate_jacobian_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
     material_params_eqm: jnp.ndarray,
@@ -483,22 +544,16 @@ def __calculate_jacobian_coo_terms_batch(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    connectivity_en: jnp.ndarray,
+    dof_map_enu: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
 ):
-    E = x_end.shape[0]
+    u_enu = transform_global_unraveled_to_element_node(
+        assembly_map, u_f, x_end.shape[0]
+    )
 
-    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
-    N = u_enu.shape[1]
-    U = u_enu.shape[2]
-
-    # NOTE the assembly map is leveraged here to take a shortcut to work out the location
-    # of the nonzero terms in the sparse matrix.
-    # debug_print(connectivity_en)
-    I = jnp.hstack([U * connectivity_en + i for i in range(U)], dtype=jnp.int64)
-    # debug_print(I)
-    cols, rows = jax.vmap(jnp.meshgrid)(I, I)
+    dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
+    cols, rows = jax.vmap(jnp.meshgrid)(dof_map, dof_map)
     # debug_print(rows)
     # debug_print(cols)
 
@@ -531,7 +586,7 @@ def calculate_jacobian_wo_dirichlet(
 
     J_ett, rows, cols = zip(
         *[
-            __calculate_jacobian_coo_terms_batch(
+            _calculate_jacobian_coo_terms_batch(
                 element_residual_func=element_residual_func,
                 constitutive_model=ebc.constitutive_models[i],
                 material_params_eqm=ebc.get_material_params(i),
@@ -539,7 +594,7 @@ def calculate_jacobian_wo_dirichlet(
                 x_end=ebc.get_x(i),
                 dphi_dxi_qnp=ebc.get_dphi_dxi(i),
                 W_q=ebc.get_weights(i),
-                connectivity_en=ebc.get_connectivity(i),
+                dof_map_enu=ebc.get_dof_map(i),
                 assembly_map=assembly_map_b[i],
                 u_f=u_f,
             )
@@ -559,7 +614,7 @@ def calculate_jacobian_wo_dirichlet(
 
 
 @jax.jit
-def __calculate_residual_wo_dirichlet_batch(
+def _calculate_residual_wo_dirichlet_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
     material_params_eqm: jnp.ndarray,
@@ -629,7 +684,7 @@ def calculate_residual_wo_dirichlet(
     # and accumulate them into the global with one more batch-to-global transform.
 
     result = [
-        __calculate_residual_wo_dirichlet_batch(
+        _calculate_residual_wo_dirichlet_batch(
             element_residual_func=element_residual_func,
             constitutive_model=ebc.constitutive_models[i],
             material_params_eqm=ebc.get_material_params(i),
@@ -657,7 +712,7 @@ def calculate_residual_wo_dirichlet(
     # Keeping this implementation here to revisit for optimization.
     """
     def fori_body(i, R_f) -> jnp.ndarray:
-        R_enu, internal_state_eqi = __calculate_residual_wo_dirichlet_batch(
+        R_enu, internal_state_eqi = _calculate_residual_wo_dirichlet_batch(
             element_residual_func=element_residual_func,
             constitutive_model=constitutive_model_b[i],
             material_params_eqm=material_params_beqm[i],
@@ -682,7 +737,7 @@ def calculate_residual_wo_dirichlet(
 
 def calculate_residual_w_dirichlet(
     element_residual_func: jax.tree_util.Partial,
-    element_batch_collection: ElementBatchCollection,
+    ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
     dirichlet_values_g: jnp.ndarray,
@@ -712,7 +767,7 @@ def calculate_residual_w_dirichlet(
 
     R_f, new_internal_state_beqi = calculate_residual_wo_dirichlet(
         element_residual_func=element_residual_func,
-        ebc=element_batch_collection,
+        ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f_w_dirichlet,
     )
@@ -728,8 +783,9 @@ def calculate_residual_w_dirichlet(
 
 def solve_nonlinear_step(
     element_residual_func: jax.tree_util.Partial,
-    element_batch_collection: ElementBatchCollection,
+    ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
+    jacobian_nnz: int,
     u_0_g: jnp.ndarray,
     dirichlet_values_g: jnp.ndarray,
     dirichlet_mask_g: jnp.ndarray,
@@ -764,23 +820,23 @@ def solve_nonlinear_step(
 
     # Helpful for debugging array shapes
     # """
-    print(f"Global dimensionality : {element_batch_collection.D}")
-    print(f"# of batches : {element_batch_collection.B}")
-    for i in range(element_batch_collection.B):
+    print(f"Global dimensionality : {ebc.D}")
+    print(f"# of batches : {ebc.B}")
+    for i in range(ebc.B):
         print(
             f"For batch {i}:\n\t",
-            f"Number of elements : {element_batch_collection.E[i]}\n\t",
-            f"Number of nodes / element : {element_batch_collection.N[i]}\n\t",
-            f"Number of quadrature points : {element_batch_collection.Q[i]}\n\t",
-            f"Parametric dimensionality: {element_batch_collection.P[i]}\n\t",
-            f"Number of material parameters per quad point: {element_batch_collection.M[i]}",
+            f"Number of elements : {ebc.E[i]}\n\t",
+            f"Number of nodes / element : {ebc.N[i]}\n\t",
+            f"Number of quadrature points : {ebc.Q[i]}\n\t",
+            f"Parametric dimensionality: {ebc.P[i]}\n\t",
+            f"Number of material parameters per quad point: {ebc.M[i]}",
         )
     # """
 
     # Function that produces (R(u), ISVs)
     residual_isv_func_w_dirichlet = lambda u_f: calculate_residual_w_dirichlet(
         element_residual_func=element_residual_func,
-        element_batch_collection=element_batch_collection,
+        ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
         dirichlet_values_g=dirichlet_values_g,
@@ -793,7 +849,7 @@ def solve_nonlinear_step(
     # Function that produces R(u) without Dirichlet BCs applied
     residual_func_wo_dirichlet = lambda u_f: calculate_residual_wo_dirichlet(
         element_residual_func=element_residual_func,
-        ebc=element_batch_collection,
+        ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
     )[0]
@@ -801,7 +857,7 @@ def solve_nonlinear_step(
     # Function that produces R(u) without Dirichlet BCs applied
     jacobian_func_wo_dirichlet = lambda u_f: calculate_jacobian_wo_dirichlet(
         element_residual_func=element_residual_func,
-        ebc=element_batch_collection,
+        ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
     )
@@ -856,20 +912,21 @@ def solve_nonlinear_step(
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
                 J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                with jax.disable_jit():
-                    J_sparse_ff = coo_sum_duplicates(J_sparse_ff, True)
+                J_sparse_ff = coo_sum_duplicates(
+                    J_sparse_ff, result_length=jacobian_nnz
+                )
                 lhs_matrix, rhs_vector = apply_dirichlet_bcs(
                     J_sparse_ff,
                     -R_f,
                     dirichlet_dofs,
                     dirichlet_values - u_f[dirichlet_dofs],
                 )
-                delta_u_2 = spsolve(lhs_matrix, rhs_vector)
+                # delta_u_2 = spsolve(lhs_matrix, rhs_vector)
 
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
-                debug_print(delta_u_2)
+                # debug_print(delta_u_2)
                 debug_print(delta_u)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
@@ -1040,13 +1097,11 @@ def solve_bvp(
     ]
 
     # Convert element batch information into something ameniable to JAX transforms like JIT
-    element_batch_collection = batch_to_collection(
-        vertices_vd=vertices_vd, element_batches=element_batches
-    )
-    print(element_batch_collection)
+    ebc = batch_to_collection(vertices_vd=vertices_vd, element_batches=element_batches)
+    print(ebc)
 
     assert (
-        element_batch_collection.U == element_batch_collection.U[0]
+        ebc.U == ebc.U[0]
     ).all(), """The number of DoFs per a point (U) must be the same across all batches.
     To relax this constrain much of the infrastructure code in fea.py would have to be adapted to
     support varying number of DoFs per a batch.
@@ -1054,9 +1109,9 @@ def solve_bvp(
 
     # If an initial guess was not provided, then use zeros
     if u_0_g is None:
-        u_0_g = jnp.zeros(shape=(V * element_batch_collection.U[0],))
+        u_0_g = jnp.zeros(shape=(V * ebc.U[0],))
     else:
-        assert u_0_g.shape == (V * element_batch_collection.U[0],)
+        assert u_0_g.shape == (V * ebc.U[0],)
 
     # Structures for mapping between cell-level arrays and global arrays
     assembly_map_b = [
@@ -1066,10 +1121,9 @@ def solve_bvp(
 
     # Compute the anticipated number of non-zeros for the assembled Jacobian, which
     # is only needed for solvers that actually form the Jacobian in memory.
-    nnz = _calculate_jacobian_unique_nnz(
-        n_vertices=V, element_batch_collection=element_batch_collection
-    )
-
+    # NOTE: we need a concrete value to specialize for JIT of other functions
+    jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
+    
     # TODO consider JIT'ing this group of lines pending profiling
     # A list of degrees of freedom for the Dirichlet boundary conditions
     dirichlet_dofs = jnp.array(D * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1])
@@ -1125,7 +1179,7 @@ def solve_bvp(
         inner_solve = jax.jit(
             solve_nonlinear_step,
             donate_argnames="internal_state_beqi",
-            static_argnames="solver_options",
+            static_argnames=["solver_options", "jacobian_nnz"],
         )
 
     # capture memory usage before
@@ -1134,8 +1188,9 @@ def solve_bvp(
 
     u, internal_state_beqi, residual, relative_error, info = inner_solve(
         element_residual_func=element_residual_func,
-        element_batch_collection=element_batch_collection,
+        ebc=ebc,
         assembly_map_b=assembly_map_b,
+        jacobian_nnz=jacobian_nnz,
         u_0_g=u_0_g,
         dirichlet_values_g=dirichlet_values_g,
         dirichlet_mask_g=dirichlet_mask_g,
@@ -1145,8 +1200,9 @@ def solve_bvp(
     )
 
     # Update internal state variables for the element batches
-    for i, b in enumerate(element_batches):
-        b.internal_state_eqi = internal_state_beqi[i]
+    # TODO need to update
+    #for i, b in enumerate(element_batches):
+    #    b.internal_state_eqi = internal_state_beqi[i]
 
     # capture memory usage after and analyze
     if profile_memory:
