@@ -23,56 +23,29 @@ def apply_dirichlet_bcs(
     Applies Dirichlet BCs directly to a COO sparse matrix, A, and adjusts the RHS vector, b.
     """
 
-    # Create a mask to filter out rows corresponding to BCs.
-    # We want to keep an element if its row index is NOT in bc_indices.
-    # Note: jnp.isin returns a boolean array that is True for the Dirichlet BC DOFs, but we want
-    # the opposite, hence ~.
-    keep_mask = ~jnp.isin(A.row, dirichlet_dofs) & ~jnp.isin(A.col, dirichlet_dofs)
-    debug_print(keep_mask)
+    rows = A.row
+    cols = A.col
+    debug_print(rows)
+    debug_print(cols)
 
-    # Create the new data entries for 1's on the diagon corresponding to the BCs.
-    num_bcs = dirichlet_dofs.shape[0]
-    bc_data = jnp.ones(num_bcs, dtype=A.dtype)
-    debug_print(bc_data)
-
-    # Create a new sparse matrix by concatenating the old (filtered) and new (BC) entries
-    # Note: astype(jnp.int64) is neccessary because jnp.concatenate with (jnp.int64, jnp.uint64)
-    # results in a jnp.float64 array for some reason.
-    data = jnp.concatenate([jnp.where(keep_mask, A.data, A.data), bc_data])
-    rows = jnp.concatenate(
-        [jnp.where(keep_mask, A.row, A.row), dirichlet_dofs.astype(jnp.int64)]
-    )
-    cols = jnp.concatenate(
-        [jnp.where(keep_mask, A.col, A.col), dirichlet_dofs.astype(jnp.int64)]
-    )
-    print(data.shape)
-    print(rows.shape)
-    print(cols.shape)
+    # Create a mask that indicates if an index is on a constrained row / column
+    debug_print(dirichlet_dofs)
+    row_constrained_mask = jnp.isin(A.row, dirichlet_dofs)
+    col_constrained_mask = jnp.isin(A.col, dirichlet_dofs)
+    debug_print(row_constrained_mask)
+    debug_print(col_constrained_mask)
+    # Set all values on constrained rows / columns to 0, then set those diagonal terms to 1.
+    modified_data = jnp.where(~(row_constrained_mask | col_constrained_mask), A.data, 0.)
+    debug_print(modified_data)
+    modified_data = jnp.where((A.row == A.col) & row_constrained_mask, 1., modified_data)
+    debug_print(modified_data)
+                                                                    
     A_modified = jsparse.COO(
-        (
-            jnp.concatenate([jnp.where(keep_mask, A.data, A.data), bc_data]),
-            jnp.concatenate(
-                [jnp.where(keep_mask, A.row, A.row), dirichlet_dofs.astype(jnp.int64)]
-            ),
-            jnp.concatenate(
-                [jnp.where(keep_mask, A.col, A.col), dirichlet_dofs.astype(jnp.int64)]
-            ),
-        ),
+        (modified_data, A.row, A.col),
         shape=A.shape,
+        rows_sorted=A._rows_sorted,
+        cols_sorted=A._cols_sorted
     )
-    A_modified = A_modified._sort_indices()
-    debug_print(A_modified.data)
-
-    """
-    A_modified = jsparse.COO(
-        (
-            jnp.concatenate([A.data[keep_mask], bc_data]),
-            jnp.concatenate([A.row[keep_mask], dirichlet_dofs]),
-            jnp.concatenate([A.col[keep_mask], dirichlet_dofs]),
-        ),
-        shape=A.shape,
-    )
-    """
 
     # Update the RHS vector
     tmp = jnp.zeros_like(b)
@@ -140,27 +113,27 @@ def coo_arrays_sum_duplicates_jit(
     perm = jnp.lexsort((A.col, A.row))
     # Creates an array of (row, col) entries (sorted by row then col using perm)
     sorted_indices = jnp.vstack((A.row[perm], A.col[perm])).T
-    debug_print(sorted_indices)
+    #debug_print(sorted_indices)
     # An array of sorted_indices.shape[0]-1 that is a[i+1] - a[i]
     diff = jnp.diff(sorted_indices, axis=0)
-    debug_print(diff)
+    #debug_print(diff)
     # Boolean mask indicating if each (row, col) value is unique, shape=A.col.shape
     uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
-    debug_print(uniq_mask)
+    #debug_print(uniq_mask)
     # A map from the unique order to the original order
     # NOTE: there is a trick here to get the unique indices while also guaranteeing array sizes
     unique_indices = jnp.sort(jnp.where(uniq_mask, perm, jnp.max(perm) + 1))[0:result_length]
-    debug_print(unique_indices)
+    #debug_print(unique_indices)
     # A map from the original order to the unique order
     inv_indices = jnp.zeros_like(perm).at[perm].set(jnp.cumsum(uniq_mask) - 1)
-    debug_print(inv_indices)
+    #debug_print(inv_indices)
     # Effectively sums duplicates and returns the values in the permuated order
     data = jnp.bincount(inv_indices, weights=A.data, length=result_length)
     rows = A.row[unique_indices]
     cols = A.col[unique_indices]
-    debug_print(data)
-    debug_print(rows)
-    debug_print(cols)
+    #debug_print(data)
+    #debug_print(rows)
+    #debug_print(cols)
     return (data, rows, cols)
 
 
@@ -183,7 +156,7 @@ def coo_sum_duplicates(A: jsparse.COO, result_length: int = 0) -> jsparse.COO:
 
 
 @jax.jit
-def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True, result_length: int = 0):
+def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = False, result_length: int = 0):
     """
     Convert a COO sparse matrix to a CSR sparse matrix.
 
@@ -198,8 +171,8 @@ def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True, result_length: int =
         because the CUDA sparse solver will not yield the correct result.
     """
     if sum_duplicates:
-        data, rows, cols = coo_arrays_sum_duplicates(A, result_length=result_length)
-    else:
+        data, rows, cols = coo_arrays_sum_duplicates_jit(A, result_length=result_length)
+    elif not A._rows_sorted:
         # Get the permutation that sorts the matrix entries
         perm = jnp.lexsort((A.col, A.row))
 
@@ -207,6 +180,10 @@ def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = True, result_length: int =
         data = A.data[perm]
         rows = A.col[perm]
         cols = A.row[perm]
+    else:
+        data = A.data
+        rows = A.col
+        cols = A.row
 
     # Count the number of non-zero elements in each row.
     # The 'length' argument is crucial to ensure the output array has size num_rows,

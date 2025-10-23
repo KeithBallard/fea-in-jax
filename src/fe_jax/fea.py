@@ -915,19 +915,24 @@ def solve_nonlinear_step(
                 J_sparse_ff = coo_sum_duplicates(
                     J_sparse_ff, result_length=jacobian_nnz
                 )
+                J_ff= J_sparse_ff.todense()
+                debug_print(J_ff)
                 lhs_matrix, rhs_vector = apply_dirichlet_bcs(
                     J_sparse_ff,
                     -R_f,
                     dirichlet_dofs,
                     dirichlet_values - u_f[dirichlet_dofs],
                 )
-                # delta_u_2 = spsolve(lhs_matrix, rhs_vector)
+                J_dense = lhs_matrix.todense()
+                debug_print(J_dense)
+                #delta_u_2 = spsolve(lhs_matrix, rhs_vector)
+                #debug_print(delta_u_2)
 
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
+                debug_print(jacobian)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
-                # debug_print(delta_u_2)
-                debug_print(delta_u)
+                #debug_print(delta_u)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
