@@ -23,22 +23,16 @@ def apply_dirichlet_bcs(
     Applies Dirichlet BCs directly to a COO sparse matrix, A, and adjusts the RHS vector, b.
     """
 
-    rows = A.row
-    cols = A.col
-    debug_print(rows)
-    debug_print(cols)
-
     # Create a mask that indicates if an index is on a constrained row / column
-    debug_print(dirichlet_dofs)
     row_constrained_mask = jnp.isin(A.row, dirichlet_dofs)
     col_constrained_mask = jnp.isin(A.col, dirichlet_dofs)
-    debug_print(row_constrained_mask)
-    debug_print(col_constrained_mask)
+    #debug_print(row_constrained_mask)
+    #debug_print(col_constrained_mask)
     # Set all values on constrained rows / columns to 0, then set those diagonal terms to 1.
     modified_data = jnp.where(~(row_constrained_mask | col_constrained_mask), A.data, 0.)
-    debug_print(modified_data)
+    #debug_print(modified_data)
     modified_data = jnp.where((A.row == A.col) & row_constrained_mask, 1., modified_data)
-    debug_print(modified_data)
+    #debug_print(modified_data)
                                                                     
     A_modified = jsparse.COO(
         (modified_data, A.row, A.col),
@@ -90,7 +84,7 @@ def coo_arrays_sum_duplicates(A: jsparse.COO) -> tuple[jax.Array, jax.Array, jax
 
 @partial(jax.jit, static_argnames=["result_length"])
 def coo_arrays_sum_duplicates_jit(
-    A: jsparse.COO, result_length: int = 0
+    A: jsparse.COO, result_length: int
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
     Returns the row-then-column sorted arrays for a new COO matrix after summing
@@ -138,7 +132,7 @@ def coo_arrays_sum_duplicates_jit(
 
 
 @partial(jax.jit, static_argnames=["result_length"])
-def coo_sum_duplicates(A: jsparse.COO, result_length: int = 0) -> jsparse.COO:
+def coo_sum_duplicates(A: jsparse.COO, result_length: int) -> jsparse.COO:
     """
     Returns a row-then-column sorted COO matrix after summing duplicate indices.
 
@@ -156,7 +150,7 @@ def coo_sum_duplicates(A: jsparse.COO, result_length: int = 0) -> jsparse.COO:
 
 
 @jax.jit
-def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = False, result_length: int = 0):
+def coo_to_csr(A: jsparse.COO):
     """
     Convert a COO sparse matrix to a CSR sparse matrix.
 
@@ -170,31 +164,18 @@ def coo_to_csr(A: jsparse.COO, sum_duplicates: bool = False, result_length: int 
         If the resulting CSR will be used with spsolve, make sure to set sum_duplicates to True
         because the CUDA sparse solver will not yield the correct result.
     """
-    if sum_duplicates:
-        data, rows, cols = coo_arrays_sum_duplicates_jit(A, result_length=result_length)
-    elif not A._rows_sorted:
+    if not A._rows_sorted:
         # Get the permutation that sorts the matrix entries
         perm = jnp.lexsort((A.col, A.row))
 
         # Apply the permutation
         data = A.data[perm]
-        rows = A.col[perm]
-        cols = A.row[perm]
+        rows = A.row[perm]
+        cols = A.col[perm]
     else:
         data = A.data
-        rows = A.col
-        cols = A.row
-
-    # Count the number of non-zero elements in each row.
-    # The 'length' argument is crucial to ensure the output array has size num_rows,
-    # even if the last rows are empty.
-    num_rows, _ = A.shape
-    nnz_per_row = jnp.bincount(rows, length=num_rows)
-
-    # Build the index pointer array (indptr) from the counts.
-    # This is a cumulative sum of the non-zero counts per row.
-    # The first element of indptr is always 0.
-    indptr = jnp.concatenate([jnp.array([0]), jnp.cumsum(nnz_per_row)])
+        rows = A.row
+        cols = A.col
 
     # Count the number of non-zero elements in each row.
     # The 'length' argument is crucial to ensure the output array has size num_rows,

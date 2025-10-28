@@ -1,12 +1,10 @@
 # Explores sparse matrices and sharding in JAX
 
 import jax
-import jax.experimental
 import jax.numpy as jnp
 from jax.experimental import mesh_utils, sparse
 from jax import random, vmap
 from helper import *
-import psutil
 import os
 import scipy.sparse
 

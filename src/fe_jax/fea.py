@@ -301,9 +301,9 @@ class ElementBatchCollection:
         """
         connectivity_en = self.get_connectivity(i)
         # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
-        return jnp.hstack(
+        return jnp.vstack(
             [self.U[i] * connectivity_en + i for i in range(self.U[i])], dtype=jnp.int64
-        ).reshape((self.E[i], self.N[i] * self.U[i]))
+        ).T.reshape((self.E[i], self.N[i] * self.U[i]))
 
 
 def batch_to_collection(
@@ -553,6 +553,7 @@ def _calculate_jacobian_coo_terms_batch(
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
+    # debug_print(dof_map)
     cols, rows = jax.vmap(jnp.meshgrid)(dof_map, dof_map)
     # debug_print(rows)
     # debug_print(cols)
@@ -577,6 +578,7 @@ def calculate_jacobian_wo_dirichlet(
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
+    precomputed_jacobian_nnz: int
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -609,6 +611,10 @@ def calculate_jacobian_wo_dirichlet(
         (J_ett.ravel(), rows.ravel(), cols.ravel()),
         shape=(u_f.shape[0], u_f.shape[0]),
     )._sort_indices()
+
+    J_sparse_ff = coo_sum_duplicates(
+        J_sparse_ff, result_length=precomputed_jacobian_nnz
+    )
 
     return J_sparse_ff
 
@@ -860,6 +866,7 @@ def solve_nonlinear_step(
         ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
+        precomputed_jacobian_nnz=jacobian_nnz
     )
 
     R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
@@ -911,28 +918,18 @@ def solve_nonlinear_step(
         match solver_options.linear_solve_type:
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
+
                 J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                J_sparse_ff = coo_sum_duplicates(
-                    J_sparse_ff, result_length=jacobian_nnz
-                )
-                J_ff= J_sparse_ff.todense()
-                debug_print(J_ff)
                 lhs_matrix, rhs_vector = apply_dirichlet_bcs(
                     J_sparse_ff,
                     -R_f,
                     dirichlet_dofs,
                     dirichlet_values - u_f[dirichlet_dofs],
                 )
-                J_dense = lhs_matrix.todense()
-                debug_print(J_dense)
-                #delta_u_2 = spsolve(lhs_matrix, rhs_vector)
-                #debug_print(delta_u_2)
+                delta_u = spsolve(lhs_matrix, -R_f)
 
-                jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-                debug_print(jacobian)
-                delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
-
-                #debug_print(delta_u)
+                #jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
+                #delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
