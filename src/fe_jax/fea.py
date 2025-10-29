@@ -302,7 +302,7 @@ class ElementBatchCollection:
         connectivity_en = self.get_connectivity(i)
         # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
         return jnp.vstack(
-            [self.U[i] * connectivity_en + i for i in range(self.U[i])], dtype=jnp.int64
+            [self.U[i] * connectivity_en + j for j in range(self.U[i])], dtype=jnp.int64
         ).T.reshape((self.E[i], self.N[i] * self.U[i]))
 
 
@@ -578,7 +578,7 @@ def calculate_jacobian_wo_dirichlet(
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
-    precomputed_jacobian_nnz: int
+    precomputed_jacobian_nnz: int,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -866,7 +866,7 @@ def solve_nonlinear_step(
         ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
-        precomputed_jacobian_nnz=jacobian_nnz
+        precomputed_jacobian_nnz=jacobian_nnz,
     )
 
     R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
@@ -928,8 +928,8 @@ def solve_nonlinear_step(
                 )
                 delta_u = spsolve(lhs_matrix, -R_f)
 
-                #jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-                #delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
+                # jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
+                # delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # Calculate the Jacobian matrix in-memory
@@ -1100,7 +1100,7 @@ def solve_bvp(
 
     # Convert element batch information into something ameniable to JAX transforms like JIT
     ebc = batch_to_collection(vertices_vd=vertices_vd, element_batches=element_batches)
-    print(ebc)
+    # print(ebc)
 
     assert (
         ebc.U == ebc.U[0]
@@ -1125,7 +1125,7 @@ def solve_bvp(
     # is only needed for solvers that actually form the Jacobian in memory.
     # NOTE: we need a concrete value to specialize for JIT of other functions
     jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
-    
+
     # TODO consider JIT'ing this group of lines pending profiling
     # A list of degrees of freedom for the Dirichlet boundary conditions
     dirichlet_dofs = jnp.array(D * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1])
@@ -1203,7 +1203,7 @@ def solve_bvp(
 
     # Update internal state variables for the element batches
     # TODO need to update
-    #for i, b in enumerate(element_batches):
+    # for i, b in enumerate(element_batches):
     #    b.internal_state_eqi = internal_state_beqi[i]
 
     # capture memory usage after and analyze

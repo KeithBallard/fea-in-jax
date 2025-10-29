@@ -92,6 +92,7 @@ print(fiber_mat_params_eqm[0, 0, :])
 element_batches = [
     ElementBatch(
         fe_type=fe_type,
+        n_dofs_per_basis=2,
         connectivity_en=matrix_cells,
         constitutive_model=elastic_isotropic,
         material_params_eqm=matrix_mat_params_eqm,
@@ -99,6 +100,7 @@ element_batches = [
     ),
     ElementBatch(
         fe_type=fe_type,
+        n_dofs_per_basis=2,
         connectivity_en=fiber_cells,
         constitutive_model=elastic_orthotropic,
         material_params_eqm=fiber_mat_params_eqm,
