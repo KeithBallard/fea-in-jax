@@ -112,11 +112,11 @@ u, residual, new_internal_state_beqi = solve_bvp(
     ),
 )
 
-# assert (u[0] - 1.0) < 1e-6 and (u[2] - 1.0) < 1e-6
-# assert abs(-(u[3] / 2.0) / (u[0] / 3.0) - 0.25) < 1e-6
-# assert abs(-(u[5] / 2.0) / (u[0] / 3.0) - 0.25) < 1e-6
-# assert u[1] == u[7] == 0.0
-# assert u[4] == u[6] == 0.0
+assert (u[0] - 1.0) < 1e-6 and (u[2] - 1.0) < 1e-6
+assert abs(-(u[3] / 2.0) / (u[0] / 3.0) - 0.25) < 1e-6
+assert abs(-(u[5] / 2.0) / (u[0] / 3.0) - 0.25) < 1e-6
+assert u[1] == u[7] == 0.0
+assert u[4] == u[6] == 0.0
 
 # Write output
 mesh.point_data["u"] = u.reshape((points.shape[0], U))

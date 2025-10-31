@@ -2,11 +2,18 @@ import jax
 import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
 import jax.extend as jextend
+from jax.experimental.buffer_callback import buffer_callback
+from jax.dlpack import from_dlpack
 
 # For CPU solver
 import numpy as np
 import scipy.sparse
 import scipy.sparse.linalg
+
+# For GPU solvers
+import cupy as cp
+import cupyx.scipy.sparse as cpsparse
+import cupyx.scipy.sparse.linalg as cplinalg
 
 from functools import partial
 
@@ -209,25 +216,39 @@ def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
 
 
 @jax.jit
+def cupy_spsolve(A, b):
+
+    def kernel(ctx, out, A: jsparse.CSR, b):
+        A_cp = cpsparse.csr_matrix(
+            (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)), shape=A.shape
+        )
+        A_cp.has_canonical_format = True
+        cp.asarray(out)[...] = cplinalg.spsolve(A_cp, cp.asarray(b))
+
+    print(f'A.shape = {A.shape}')
+    out_type = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    cupy_callback = buffer_callback(kernel, out_type)
+    return cupy_callback(A, b)
+
+
+@jax.jit
 def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     """
     Sparse direct solve for system A*x = b for a GPU backend.
     Returns the solution, x.
     """
     A_csr = coo_to_csr(A)
-    return jsparse.linalg.spsolve(
-        A_csr.data, A_csr.indices.astype(jnp.int32), A_csr.indptr.astype(jnp.int32), b
-    )
+    return cupy_spsolve(A_csr, b)
 
 
-def spsolve(A: jsparse.COO, b: jnp.ndarray):
+def spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
     """
     Sparse direct solve for system A*x = b.
     Returns the solution, x.
     """
     match jextend.backend.get_backend().platform:
         case "cpu":
-            return __solve_cpu(A, b)
+            return jnp.array(__solve_cpu(A, b))
         case "gpu":
             return __solve_gpu(A, b)
     raise Exception(f"Backend {jextend.backend.get_backend().platform} unsupported.")
