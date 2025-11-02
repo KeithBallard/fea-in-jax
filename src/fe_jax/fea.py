@@ -302,7 +302,7 @@ class ElementBatchCollection:
         connectivity_en = self.get_connectivity(i)
         # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
         return jnp.vstack(
-            [self.U[i] * connectivity_en + j for j in range(self.U[i])], dtype=jnp.int64
+            [(self.U[i] * connectivity_en + j).ravel() for j in range(self.U[i])], dtype=jnp.int64
         ).T.reshape((self.E[i], self.N[i] * self.U[i]))
 
 
@@ -445,7 +445,7 @@ class SolverOptions:
     linear_solve_type: LinearSolverType = LinearSolverType.DIRECT_INVERSE_JNP
     linear_relative_tol: float = 1e-14
     linear_absolute_tol: float = 1e-10
-    nonlinear_max_iter: int = 10
+    nonlinear_max_iter: int = 1
     nonlinear_relative_tol: float = 1e-12
     nonlinear_absolute_tol: float = 1e-8
 
@@ -606,6 +606,10 @@ def calculate_jacobian_wo_dirichlet(
     J_ett = jnp.vstack(J_ett)
     rows = jnp.vstack(rows)
     cols = jnp.vstack(cols)
+
+    # debug_print(J_ett)
+    # debug_print(rows)
+    # debug_print(cols)
 
     J_sparse_ff = jsparse.COO(
         (J_ett.ravel(), rows.ravel(), cols.ravel()),
@@ -879,6 +883,29 @@ def solve_nonlinear_step(
         (z,),
     )[1]
 
+    # NOTE Used to debug if the Jacobian via autodiff matches the Jacobian via assembly
+    """
+    jacobian = jax.jacfwd(residual_func_wo_dirichlet)(u_0_g)
+    cp.savetxt('A_jacfwd.csv', cp.asarray(jacobian))
+
+    jacobian_w_bc = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
+    cp.savetxt('A_jacfwd_w_bc.csv', cp.asarray(jacobian_w_bc))
+
+    J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
+    cp.savetxt('A_sparse_ff.csv', cp.asarray(J_sparse_ff.todense()))
+
+    lhs_matrix, rhs_vector = apply_dirichlet_bcs(
+        J_sparse_ff,
+        -R_f,
+        dirichlet_dofs,
+        dirichlet_values - u_0_g[dirichlet_dofs],
+    )
+    cp.savetxt('A_sparse_ff_w_bc.csv', cp.asarray(lhs_matrix.todense()))
+
+    assert jnp.isclose(J_sparse_ff.todense(), jacobian).all()
+    assert jnp.isclose(lhs_matrix.todense(), jacobian_w_bc).all()
+    """
+
     def while_cond(args) -> bool:
         nl_iteration, u_f, R_f, new_internal_state_beqi = args
         absolute_error = jnp.linalg.norm(R_f)
@@ -918,7 +945,7 @@ def solve_nonlinear_step(
         match solver_options.linear_solve_type:
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
-
+                # NOTE Forms the sparse Jacobian in memory
                 J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
                 lhs_matrix, rhs_vector = apply_dirichlet_bcs(
                     J_sparse_ff,
@@ -928,11 +955,8 @@ def solve_nonlinear_step(
                 )
                 delta_u = spsolve(lhs_matrix, -R_f)
 
-                # jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-                # delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
-
             case LinearSolverType.DIRECT_INVERSE_JNP:
-                # Calculate the Jacobian matrix in-memory
+                # NOTE Forms the dense Jacobian matrix in memory
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 

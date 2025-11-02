@@ -16,11 +16,11 @@ import numpy as np
 
 # Make the mesh:
 #    <-----3----->
-#  3 o-----------o 2 ^
-#    |   2    /  |   |
-#    |     /     |   2
-#    |  /     1  |   |
-#  4 o-----------o 1 V
+#  2 o-----------o 1 ^
+#    |  \  2  /  |   |
+#    | 3   o 4 1 |   2
+#    |  /  0  \  |   |
+#  3 o-----------o 0 V
 #    ^ origin (0, 0)
 mesh = meshio.Mesh(
     points=[
@@ -28,9 +28,10 @@ mesh = meshio.Mesh(
         [3.0, 2.0, 0.0],
         [0.0, 2.0, 0.0],
         [0.0, 0.0, 0.0],
+        [1.5, 1.0, 0.0],
     ],
     cells=[
-        ("triangle", [[0, 1, 3], [2, 3, 1]]),
+        ("triangle", [[0, 4, 3], [1, 4, 0], [2, 4, 1], [3, 4, 2]]),
     ],
 )
 mesh.write(get_output("two_tri.vtk"))
@@ -55,14 +56,16 @@ Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
 
 # Boundary Conditions
 #  2 >o-----------o --> 1
-#     |        /  |
-#     |     /     |
-#     |  /        |
+#     |           |
+#     |           |
+#     |           |
 #  3 >o-----------o --> 0
 #     ^           ^
 # An array that is (# of constrainted DoFs, 2) with structure [point index][component of solution]
 # Fixes left two points in x, fixes bottom two points in y, and moves right edge to the right
-dirichlet_bcs = np.array([[0, 0], [0, 1], [1, 0], [2, 0], [3, 0], [3, 1]], dtype=np.uint64)
+dirichlet_bcs = np.array(
+    [[0, 0], [0, 1], [1, 0], [2, 0], [3, 0], [3, 1]], dtype=np.uint64
+)
 # Values of the Dirichlet boundary conditions matching 'dirichlet_bcs'
 # Fixes bottom-left and moves top-right to the right by 1
 dirichlet_values = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 0.0])

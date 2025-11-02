@@ -9,7 +9,7 @@ from helper import *
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"polygon_mesh_{0.5}.vtk"))
+mesh = meshio.read(get_mesh(f"polygon_mesh_{0.01}.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[1].data, dtype=np.uint64)
 print("# DoFs = ", 2 * points.shape[0])
@@ -47,7 +47,7 @@ dirichlet_values = 0.001 * np.random.rand(dirichlet_bcs.shape[0])
 # Set material properties at the quadrature point level randomly seeded such that
 # E = [90e9, 100e9] and nu = 0.25
 tmp_mat_params = np.random.rand(E, Q, M)
-tmp_mat_params[..., 0] = 90e9 * tmp_mat_params[..., 0] + 10e9
+tmp_mat_params[..., 0] = 100e9 #90e9 * tmp_mat_params[..., 0] + 10e9
 tmp_mat_params[..., 1] = 0.25
 mat_params_eqm = jnp.array(tmp_mat_params)
 
