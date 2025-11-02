@@ -13,6 +13,23 @@ from typing import Any, Literal
 import inspect
 
 
+def debug_print(x):
+    prev_frame = inspect.currentframe().f_back
+    #prev_fame_info = inspect.getframeinfo(prev_frame)
+    callers_local_vars = prev_frame.f_locals.items()
+    x_names = [var_name for var_name, var_val in callers_local_vars if var_val is x]
+    x_name = x_names[0] if len(x_names) > 0 else "<non-named value>"
+    jax.debug.print(
+        "{a}, shape={b} = \n{c}",
+        #"From {d} line {e}:\n {a}, shape={b} = \n{c}",
+        a=x_name,
+        b=x.shape,
+        c=x,
+        #d=prev_fame_info.filename,
+        #e=prev_fame_info.lineno,
+    )
+
+
 def is_required(fn, arg_name) -> bool:
     """Helper function to query if an argument is required by a function given the argument name.
     """

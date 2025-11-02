@@ -260,7 +260,7 @@ def mesh_to_sparse_assembly_map(
 
     Parameters
     ----------
-    vertices    : dense 2d-array with shape (# verts, N_x)
+    n_vertices  : total number of vertices
     cells       : dense 2d-array with shape (# elements, V)
 
     Returns
@@ -278,7 +278,7 @@ def mesh_to_sparse_assembly_map(
     csr_data = csr_data.reshape(1, csr_data.shape[0])
 
     return jsparse.BCSR(
-        (csr_data, csr_col_ind, csr_row_ind),
+        (jnp.array(csr_data), jnp.array(csr_col_ind), jnp.array(csr_row_ind)),
         shape=(1, n_vertices, cells.shape[0] * cells.shape[1]),
         indices_sorted=True,
         unique_indices=True,
@@ -385,4 +385,3 @@ def transform_element_node_to_global_nosum(
         dimension_numbers=(((2,), (1,)), ((0,), (0,))),
     )
     return (v_g / n_cell_per_vert[jnp.newaxis, :, jnp.newaxis]).reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
-    
