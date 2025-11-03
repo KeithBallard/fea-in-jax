@@ -20,14 +20,14 @@ from functools import partial
 from .utils import debug_print
 
 
-def apply_dirichlet_bcs(
+def apply_dirichlet_bcs_lhs(
     A: jsparse.COO,
-    b: jnp.ndarray,
-    dirichlet_dofs: jnp.ndarray,
-    dirichlet_values: jnp.ndarray,
-) -> tuple[jsparse.COO, jnp.ndarray]:
+    dirichlet_dofs: jnp.ndarray
+) -> jsparse.COO:
     """
-    Applies Dirichlet BCs directly to a COO sparse matrix, A, and adjusts the RHS vector, b.
+    Returns a modified COO sparse matrix that has the same sparsity structure as A but modifies
+    entries for in-place elimination of Dirichlet BCs, i.e. zero rows/columns and one on the
+    diagonal for constrained DoFs.
     """
 
     # Create a mask that indicates if an index is on a constrained row / column
@@ -45,21 +45,30 @@ def apply_dirichlet_bcs(
     )
     # debug_print(modified_data)
 
-    A_modified = jsparse.COO(
+    return jsparse.COO(
         (modified_data, A.row, A.col),
         shape=A.shape,
         rows_sorted=A._rows_sorted,
         cols_sorted=A._cols_sorted,
     )
 
-    # Update the RHS vector
+
+def apply_dirichlet_bcs_rhs(
+    A: jsparse.COO,
+    b: jnp.ndarray,
+    dirichlet_dofs: jnp.ndarray,
+    dirichlet_values: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Returns a modified RHS vector for in-place elimination of Dirichlet BCs.
+    
+    NOTE residual_w_dirichlet will automatically include this adjustment, so it is not needed in that case!
+    """
     tmp = jnp.zeros_like(b)
     tmp = tmp.at[dirichlet_dofs].set(dirichlet_values)
     b_modified = b - A @ tmp
     b_modified = b_modified.at[dirichlet_dofs].set(dirichlet_values)
-
-    return A_modified, b_modified
-
+    return b_modified
 
 def coo_arrays_sum_duplicates(A: jsparse.COO) -> tuple[jax.Array, jax.Array, jax.Array]:
     """

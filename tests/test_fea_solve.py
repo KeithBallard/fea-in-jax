@@ -9,7 +9,7 @@ from helper import *
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"polygon_mesh_{0.01}.vtk"))
+mesh = meshio.read(get_mesh(f"polygon_mesh_{0.005}.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[1].data, dtype=np.uint64)
 print("# DoFs = ", 2 * points.shape[0])

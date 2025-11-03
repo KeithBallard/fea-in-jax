@@ -31,7 +31,7 @@ class ElementBatch:
     connectivity_en: np.ndarray[Any, np.dtype[np.uint64]]
     constitutive_model: Callable = struct.field(pytree_node=False)
     material_params_eqm: jnp.ndarray
-    internal_state_eqi: jnp.ndarray
+    internal_state_eqi: jnp.ndarray | None = None
 
 
 class MaterialPropertyArrayType(Enum):
@@ -302,7 +302,8 @@ class ElementBatchCollection:
         connectivity_en = self.get_connectivity(i)
         # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
         return jnp.vstack(
-            [(self.U[i] * connectivity_en + j).ravel() for j in range(self.U[i])], dtype=jnp.int64
+            [(self.U[i] * connectivity_en + j).ravel() for j in range(self.U[i])],
+            dtype=jnp.int64,
         ).T.reshape((self.E[i], self.N[i] * self.U[i]))
 
 
@@ -320,7 +321,12 @@ def batch_to_collection(
         [get_quadrature(fe_type=b.fe_type)[0].shape[0] for b in element_batches]
     )
     M = np.array([b.material_params_eqm.shape[-1] for b in element_batches])
-    I = np.array([b.internal_state_eqi.shape[-1] for b in element_batches])
+    I = np.array(
+        [
+            b.internal_state_eqi.shape[-1] if b.internal_state_eqi is not None else 0
+            for b in element_batches
+        ]
+    )
 
     xi_bqp, W_bq = zip(*[get_quadrature(fe_type=b.fe_type) for b in element_batches])
     phi_bqn, dphi_dxi_bqnp = zip(
@@ -355,7 +361,14 @@ def batch_to_collection(
             [b.material_params_eqm.ravel() for b in element_batches]
         ),
         internal_state=jnp.hstack(
-            [b.internal_state_eqi.ravel() for b in element_batches]
+            [
+                (
+                    b.internal_state_eqi.ravel()
+                    if b.internal_state_eqi is not None
+                    else jnp.zeros(shape=(E[i], Q[i], I[i]))
+                )
+                for i, b in enumerate(element_batches)
+            ]
         ),
         # --- Quadrature and basis function information ---
         xi=jnp.hstack([xi_qp.ravel() for xi_qp in xi_bqp]),
@@ -387,12 +400,24 @@ def batch_to_collection(
             [
                 jnp.array([0]),
                 jnp.cumsum(
-                    jnp.array([b.internal_state_eqi.size for b in element_batches])
+                    jnp.array(
+                        [
+                            (
+                                b.internal_state_eqi.size
+                                if b.internal_state_eqi is not None
+                                else 0
+                            )
+                            for b in element_batches
+                        ]
+                    )
                 ),
             ]
         ),
         internal_state_sizes=np.array(
-            [b.internal_state_eqi.size for b in element_batches]
+            [
+                b.internal_state_eqi.size if b.internal_state_eqi is not None else 0
+                for b in element_batches
+            ]
         ),
         quadrature_types=[QuadratureArrayType.Q for b in element_batches],
         xi_offsets=jnp.hstack(
@@ -431,7 +456,7 @@ class LinearSolverType(Enum):
     CG_JAXOPT = 10
     CG_SCIPY = 11
     CG_SCIPY_W_INFO = 12
-    # CG_JACOBI_SCIPY = 13
+    CG_JACOBI_SCIPY = 13
     GMRES_JAXOPT = 20
     GMRES_SCIPY = 21
     BICGSTAB_JAXOPT = 30
@@ -621,6 +646,143 @@ def calculate_jacobian_wo_dirichlet(
     )
 
     return J_sparse_ff
+
+
+@jax.jit
+def _calculate_jacobian_diag_batch_element_kernel(
+    element_residual_func: jax.tree_util.Partial,
+    constitutive_model: jax.tree_util.Partial,
+    u_enu: jnp.ndarray,
+    x_end: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
+    material_params_eqm: jnp.ndarray,
+    internal_state_eqi: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Calculates the element-level jacobian matrices for a batch of elements without any modification
+    of the solution or residual to accomodate Dirichlet constraints.
+
+    TODO document parameters
+    """
+
+    E = x_end.shape[0]
+    N = x_end.shape[1]
+    D = x_end.shape[2]
+    U = u_enu.shape[2]
+
+    # Note: reshaped to be (# elements, # dofs per element) so that the jacfwd produces a
+    # (# dofs per element, # dofs per element) matrix for each element.
+    # Assumption: # dofs per element is N * U
+    u_et = u_enu.reshape(E, N * U)
+
+    # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
+    @jax.jit
+    def residual_kernel(u_t, x_nd, material_params_qm, internal_state_qi):
+        u_nd = u_t.reshape(N, D)
+        R_nu = element_residual_func(
+            u_nd=u_nd,
+            x_nd=x_nd,
+            dphi_dxi_qnp=dphi_dxi_qnp,
+            W_q=W_q,
+            material_params_qm=material_params_qm,
+            internal_state_qi=internal_state_qi,
+            constitutive_model=constitutive_model,
+        )[0]
+        return R_nu.reshape(N * U)
+
+    @jax.vmap
+    def vmap_diag_J(u_t, x_nd, material_params_qm, internal_state_qi):
+        return jnp.diagonal(
+            jax.jacfwd(residual_kernel, argnums=0)(
+                u_t, x_nd, material_params_qm, internal_state_qi
+            )
+        )
+
+    diag_J_et = vmap_diag_J(u_et, x_end, material_params_eqm, internal_state_eqi)
+
+    assert diag_J_et.shape == (
+        E,
+        N * U,
+    ), f"Expected shape {(E, N * U)}, but received {diag_J_et.shape}"
+
+    return diag_J_et
+
+
+@jax.jit
+def _calculate_jacobian_diag_coo_terms_batch(
+    element_residual_func: jax.tree_util.Partial,
+    constitutive_model: jax.tree_util.Partial,
+    material_params_eqm: jnp.ndarray,
+    internal_state_eqi: jnp.ndarray,
+    x_end: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
+    dof_map_enu: jnp.ndarray,
+    assembly_map: jsparse.BCSR,
+    u_f: jnp.ndarray,
+):
+    u_enu = transform_global_unraveled_to_element_node(
+        assembly_map, u_f, x_end.shape[0]
+    )
+
+    dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
+    # debug_print(dof_map)
+
+    diag_J_et = _calculate_jacobian_diag_batch_element_kernel(
+        element_residual_func=element_residual_func,
+        constitutive_model=constitutive_model,
+        u_enu=u_enu,
+        x_end=x_end,
+        dphi_dxi_qnp=dphi_dxi_qnp,
+        W_q=W_q,
+        material_params_eqm=material_params_eqm,
+        internal_state_eqi=internal_state_eqi,
+    )
+    # debug_print(diag_J_et)
+
+    return (diag_J_et, dof_map)
+
+
+def calculate_jacobian_diag_wo_dirichlet(
+    element_residual_func: jax.tree_util.Partial,
+    ebc: ElementBatchCollection,
+    assembly_map_b: list[jsparse.BCSR],
+    u_f: jnp.ndarray,
+):
+
+    # NOTE This could be slow, measure.  To speed up this section, it might help to
+    # add a transform to a batch-level unraveled residual vector and accumulate those,
+    # since that operation could be JIT compiled. Then you could loop over the batch level
+    # and accumulate them into the global with one more batch-to-global transform.
+
+    diag_J_et, indices = zip(
+        *[
+            _calculate_jacobian_diag_coo_terms_batch(
+                element_residual_func=element_residual_func,
+                constitutive_model=ebc.constitutive_models[i],
+                material_params_eqm=ebc.get_material_params(i),
+                internal_state_eqi=ebc.get_internal_state(i),
+                x_end=ebc.get_x(i),
+                dphi_dxi_qnp=ebc.get_dphi_dxi(i),
+                W_q=ebc.get_weights(i),
+                dof_map_enu=ebc.get_dof_map(i),
+                assembly_map=assembly_map_b[i],
+                u_f=u_f,
+            )
+            for i in range(ebc.B)
+        ]
+    )
+    diag_J_et = jnp.vstack(diag_J_et).ravel()
+    indices = jnp.vstack(indices).ravel()
+
+    # debug_print(diag_J_et)
+    # debug_print(indices)
+
+    diag_J_f = jnp.zeros_like(u_f)
+    diag_J_f = diag_J_f.at[indices].add(diag_J_et)
+
+    return diag_J_f
 
 
 @jax.jit
@@ -864,13 +1026,21 @@ def solve_nonlinear_step(
         u_f=u_f,
     )[0]
 
-    # Function that produces R(u) without Dirichlet BCs applied
+    # Function that produces J(u) without Dirichlet BCs applied
     jacobian_func_wo_dirichlet = lambda u_f: calculate_jacobian_wo_dirichlet(
         element_residual_func=element_residual_func,
         ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f,
         precomputed_jacobian_nnz=jacobian_nnz,
+    )
+
+    # Function that produces diag(J(u)) without Dirichlet BCs applied
+    jacobian_diag_func_wo_dirichlet = lambda u_f: calculate_jacobian_diag_wo_dirichlet(
+        element_residual_func=element_residual_func,
+        ebc=ebc,
+        assembly_map_b=assembly_map_b,
+        u_f=u_f,
     )
 
     R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
@@ -947,16 +1117,16 @@ def solve_nonlinear_step(
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
                 # NOTE Forms the sparse Jacobian in memory
                 J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                lhs_matrix, rhs_vector = apply_dirichlet_bcs(
+                J_sparse_ff = apply_dirichlet_bcs_lhs(
                     J_sparse_ff,
-                    -R_f,
                     dirichlet_dofs,
-                    dirichlet_values - u_f[dirichlet_dofs],
                 )
-                delta_u = spsolve(lhs_matrix, -R_f)
+                delta_u = spsolve(J_sparse_ff, -R_f)
 
             case LinearSolverType.DIRECT_INVERSE_JNP:
                 # NOTE Forms the dense Jacobian matrix in memory
+                # NOTE jacfwd of residual_func_w_dirichlet will automatically include in-place
+                #      elimination of Dirichlet BCs.
                 jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
                 delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
 
@@ -979,9 +1149,16 @@ def solve_nonlinear_step(
                     atol=solver_options.linear_absolute_tol,
                 )
 
-            # case LinearSolverType.CG_JACOBI_SCIPY:
-            # M_inv = 1.0 / jacobian_diagonal_func(u_0_g)
-            # u, _ = jax.scipy.sparse.linalg.cg(A=jacobian_vector_product, M=M_inv, b=b)
+            case LinearSolverType.CG_JACOBI_SCIPY:
+                diag_J_f = jacobian_diag_func_wo_dirichlet(u_0_g)
+                M_inv = 1.0 / diag_J_f
+                u, _ = jax.scipy.sparse.linalg.cg(
+                    A=jacobian_vector_product,
+                    M=M_inv,
+                    b=-R_f,
+                    tol=solver_options.linear_relative_tol,
+                    atol=solver_options.linear_absolute_tol,
+                )
 
             case LinearSolverType.CG_JAXOPT:
                 delta_u = linear_solve.solve_cg(
