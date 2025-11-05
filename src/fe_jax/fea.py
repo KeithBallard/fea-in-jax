@@ -327,7 +327,7 @@ def batch_to_collection(
             for b in element_batches
         ]
     )
-
+    
     xi_bqp, W_bq = zip(*[get_quadrature(fe_type=b.fe_type) for b in element_batches])
     phi_bqn, dphi_dxi_bqnp = zip(
         *[
@@ -1151,10 +1151,14 @@ def solve_nonlinear_step(
 
             case LinearSolverType.CG_JACOBI_SCIPY:
                 diag_J_f = jacobian_diag_func_wo_dirichlet(u_0_g)
-                M_inv = 1.0 / diag_J_f
-                u, _ = jax.scipy.sparse.linalg.cg(
+                M_inv_diag = 1.0 / diag_J_f
+
+                def jacobi_preconditioner(x):
+                    return M_inv_diag * x
+
+                delta_u, _ = jax.scipy.sparse.linalg.cg(
                     A=jacobian_vector_product,
-                    M=M_inv,
+                    M=jacobi_preconditioner,
                     b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,

@@ -9,7 +9,7 @@ from helper import *
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"polygon_mesh_{0.005}.vtk"))
+mesh = meshio.read(get_mesh(f"polygon_mesh_{0.05}.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[1].data, dtype=np.uint64)
 print("# DoFs = ", 2 * points.shape[0])
@@ -64,8 +64,7 @@ element_batches = [
         n_dofs_per_basis=2,
         connectivity_en=cells,
         constitutive_model=elastic_isotropic,
-        material_params_eqm=mat_params_eqm,
-        internal_state_eqi=jnp.zeros(shape=(E, Q, 0))
+        material_params_eqm=mat_params_eqm
     )
 ]
 
@@ -77,7 +76,7 @@ u, residual, element_batches = solve_bvp(
     u_0_g=jnp.zeros(shape=(V * U)),
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(linear_solve_type=LinearSolverType.DIRECT_SPARSE_SOLVE_JNP),
+    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_JACOBI_SCIPY),
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)

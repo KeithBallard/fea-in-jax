@@ -107,8 +107,8 @@ u, residual, new_internal_state_beqi = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.DIRECT_SPARSE_SOLVE_JNP,
-        linear_relative_tol=1e-2,
+        linear_solve_type=LinearSolverType.CG_JACOBI_SCIPY,
+        linear_relative_tol=1e-8,
         linear_absolute_tol=0,
     ),
 )
