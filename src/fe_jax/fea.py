@@ -327,7 +327,7 @@ def batch_to_collection(
             for b in element_batches
         ]
     )
-    
+
     xi_bqp, W_bq = zip(*[get_quadrature(fe_type=b.fe_type) for b in element_batches])
     phi_bqn, dphi_dxi_bqnp = zip(
         *[
@@ -457,6 +457,7 @@ class LinearSolverType(Enum):
     CG_SCIPY = 11
     CG_SCIPY_W_INFO = 12
     CG_JACOBI_SCIPY = 13
+    CG_JACOBI_SCIPY_W_INFO = 14
     GMRES_JAXOPT = 20
     GMRES_SCIPY = 21
     BICGSTAB_JAXOPT = 30
@@ -468,11 +469,34 @@ class LinearSolverType(Enum):
 @dataclass(eq=True, frozen=True)
 class SolverOptions:
     linear_solve_type: LinearSolverType = LinearSolverType.DIRECT_INVERSE_JNP
+    linear_max_iter: int = 10
     linear_relative_tol: float = 1e-14
     linear_absolute_tol: float = 1e-10
-    nonlinear_max_iter: int = 1
+    nonlinear_max_iter: int = 10
     nonlinear_relative_tol: float = 1e-12
     nonlinear_absolute_tol: float = 1e-8
+
+
+@struct.dataclass
+class SolverResultInfo:
+    nonlinear_iterations: int
+    cumulative_linear_iterations: int
+    linear_iterations_per_nonlinear_iteration: jnp.ndarray
+    # NOTE length will be nonlinear_iterations + cumulative_linear_iterations because the residual
+    # norm history for each nonlinear iteration begins with the starting residual norm before a
+    # linear solve
+    cumulative_residual_norm_history: jnp.ndarray
+
+
+def get_solver_info(opts: SolverOptions):
+    return SolverResultInfo(
+        nonlinear_iterations=0,
+        cumulative_linear_iterations=0,
+        linear_iterations_per_nonlinear_iteration=jnp.zeros((opts.nonlinear_max_iter,)),
+        cumulative_residual_norm_history=jnp.zeros(
+            (opts.linear_max_iter * opts.nonlinear_max_iter,)
+        ),
+    )
 
 
 @partial(jax.jit, static_argnames="n_vertices")
@@ -1077,7 +1101,7 @@ def solve_nonlinear_step(
     """
 
     def while_cond(args) -> bool:
-        nl_iteration, u_f, R_f, new_internal_state_beqi = args
+        nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         absolute_error = jnp.linalg.norm(R_f)
         relative_error = absolute_error / initial_R_f_norm
         jax.debug.print(
@@ -1092,8 +1116,10 @@ def solve_nonlinear_step(
             & (absolute_error > solver_options.nonlinear_absolute_tol)
         )
 
-    def while_body(args) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        nl_iteration, u_f, R_f, new_internal_state_beqi = args
+    def while_body(
+        args,
+    ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo]:
+        nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         # jax.debug.print("u_f = {x}", x=u_f)
 
         # Note: unclear which is most performant variant of this.
@@ -1111,7 +1137,6 @@ def solve_nonlinear_step(
         )
 
         # Solve the boundary value problem
-        info = None
         match solver_options.linear_solve_type:
 
             case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
@@ -1142,11 +1167,27 @@ def solve_nonlinear_step(
                 )
 
             case LinearSolverType.CG_SCIPY_W_INFO:
-                delta_u, info = cg_w_info(
+                delta_u, cg_info = cg_w_info(
                     A=jacobian_vector_product,
                     b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
+                    maxiter=solver_options.linear_max_iter,
+                )
+                info = SolverResultInfo(
+                    nonlinear_iterations=nl_iteration,
+                    cumulative_linear_iterations=info.cumulative_linear_iterations
+                    + cg_info["iterations"],
+                    linear_iterations_per_nonlinear_iteration=info.linear_iterations_per_nonlinear_iteration.at[
+                        nl_iteration
+                    ].set(
+                        cg_info["iterations"]
+                    ),
+                    cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
+                        operand=info.cumulative_residual_norm_history,
+                        update=cg_info["residual_norm_history"],
+                        start_indices=[info.cumulative_linear_iterations + nl_iteration],
+                    ),
                 )
 
             case LinearSolverType.CG_JACOBI_SCIPY:
@@ -1162,6 +1203,37 @@ def solve_nonlinear_step(
                     b=-R_f,
                     tol=solver_options.linear_relative_tol,
                     atol=solver_options.linear_absolute_tol,
+                )
+
+            case LinearSolverType.CG_JACOBI_SCIPY_W_INFO:
+                diag_J_f = jacobian_diag_func_wo_dirichlet(u_0_g)
+                M_inv_diag = 1.0 / diag_J_f
+
+                def jacobi_preconditioner(x):
+                    return M_inv_diag * x
+
+                delta_u, cg_info = cg_w_info(
+                    A=jacobian_vector_product,
+                    M=jacobi_preconditioner,
+                    b=-R_f,
+                    tol=solver_options.linear_relative_tol,
+                    atol=solver_options.linear_absolute_tol,
+                    maxiter=solver_options.linear_max_iter,
+                )
+                info = SolverResultInfo(
+                    nonlinear_iterations=nl_iteration,
+                    cumulative_linear_iterations=info.cumulative_linear_iterations
+                    + cg_info["iterations"],
+                    linear_iterations_per_nonlinear_iteration=info.linear_iterations_per_nonlinear_iteration.at[
+                        nl_iteration
+                    ].set(
+                        cg_info["iterations"]
+                    ),
+                    cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
+                        operand=info.cumulative_residual_norm_history,
+                        update=cg_info["residual_norm_history"],
+                        start_indices=[info.cumulative_linear_iterations + nl_iteration],
+                    ),
                 )
 
             case LinearSolverType.CG_JAXOPT:
@@ -1232,17 +1304,23 @@ def solve_nonlinear_step(
         u_f = u_f + delta_u
         R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
-        return (nl_iteration + 1, u_f, R_f, new_internal_state_beqi)
+        return (nl_iteration + 1, u_f, R_f, new_internal_state_beqi, info)
 
-    _, u_f, R_f, new_internal_state_beqi = jax.lax.while_loop(
+    _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
         cond_fun=while_cond,
         body_fun=while_body,
-        init_val=(0, u_0_g, R_f, new_internal_state_beqi),
+        init_val=(
+            0,
+            u_0_g,
+            R_f,
+            new_internal_state_beqi,
+            get_solver_info(solver_options),
+        ),
     )
 
     absolute_error = jnp.linalg.norm(R_f)
     relative_error = absolute_error / initial_R_f_norm
-    return (u_f, new_internal_state_beqi, R_f, relative_error, None)
+    return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
 
 def solve_bvp(
@@ -1417,17 +1495,22 @@ def solve_bvp(
         stop_memory_profile("solve_linear_step")
 
     print(f"solver relative error: {relative_error}")
-    if info is not None:
-        print(f"solver # of iterations: {info['iterations']}")
+    if info.cumulative_linear_iterations > 0:
+        print(f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}")
 
         if plot_convergence:
 
             import matplotlib.pyplot as plt
 
             x_iter = jnp.linspace(
-                0, info["iterations"], info["iterations"] + 1, dtype=jnp.int32
+                0,
+                info.cumulative_linear_iterations,
+                info.cumulative_linear_iterations + 1,
+                dtype=jnp.int32,
             )
-            y_r_norm = info["residual_norm_history"][0 : info["iterations"] + 1]
+            y_r_norm = info.cumulative_residual_norm_history[
+                0 : info.cumulative_linear_iterations + 1
+            ]
 
             plt.plot(x_iter, y_r_norm)
             plt.title(

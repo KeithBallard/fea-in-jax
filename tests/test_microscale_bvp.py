@@ -77,34 +77,20 @@ def get_properties():
 matrix_mat_params_eqm, fiber_mat_params_eqm = get_properties()
 print(fiber_mat_params_eqm[0, 0, :])
 
-# 3D properties, in case a 3D test is needed
-# fiber_mat_params_eqm[:, :, 0] = 26e9 # E_xx
-# fiber_mat_params_eqm[:, :, 1] = 26e9 # E_yy
-# fiber_mat_params_eqm[:, :, 2] = 276e9 # E_zz
-# fiber_mat_params_eqm[:, :, 3] = 0.7218543046357615 # nu_xy
-# nu_zx = 0.292 # nu_zy
-# fiber_mat_params_eqm[:, :, 4] = nu_zx * 26e9 / 276e9 # nu_yz
-# fiber_mat_params_eqm[:, :, 5] = nu_zx * 26e9 / 276e9 # nu_xz
-# fiber_mat_params_eqm[:, :, 6] = 7.55e9 # G_xy
-# fiber_mat_params_eqm[:, :, 7] = 20.7e9 # G_yz
-# fiber_mat_params_eqm[:, :, 8] = 20.7e9 # G_xz
-
 element_batches = [
     ElementBatch(
         fe_type=fe_type,
         n_dofs_per_basis=2,
         connectivity_en=matrix_cells,
         constitutive_model=elastic_isotropic,
-        material_params_eqm=matrix_mat_params_eqm,
-        internal_state_eqi=jnp.zeros(shape=(matrix_cells.shape[0], Q, 0)),
+        material_params_eqm=matrix_mat_params_eqm
     ),
     ElementBatch(
         fe_type=fe_type,
         n_dofs_per_basis=2,
         connectivity_en=fiber_cells,
         constitutive_model=elastic_orthotropic,
-        material_params_eqm=fiber_mat_params_eqm,
-        internal_state_eqi=jnp.zeros(shape=(fiber_cells.shape[0], Q, 0)),
+        material_params_eqm=fiber_mat_params_eqm
     ),
 ]
 
@@ -116,7 +102,7 @@ u, residual, element_batches = solve_bvp(
     u_0_g=jnp.zeros(shape=(V * U)),
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(linear_solve_type=LinearSolverType.DIRECT_SPARSE_SOLVE_JNP),
+    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_JACOBI_SCIPY),
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)
