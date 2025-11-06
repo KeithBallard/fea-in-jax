@@ -365,7 +365,7 @@ def batch_to_collection(
                 (
                     b.internal_state_eqi.ravel()
                     if b.internal_state_eqi is not None
-                    else jnp.zeros(shape=(E[i], Q[i], I[i]))
+                    else jnp.zeros(shape=(E[i], Q[i], I[i])).ravel()
                 )
                 for i, b in enumerate(element_batches)
             ]

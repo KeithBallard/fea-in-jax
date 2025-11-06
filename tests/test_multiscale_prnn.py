@@ -141,6 +141,7 @@ mat_params_eqm = mat_params_eqm.at[:, :, 1].set(0.35)  # nu
 element_batches = [
     ElementBatch(
         fe_type=fe_type,
+        n_dofs_per_basis=U,
         connectivity_en=cells,
         constitutive_model=elastic_prnn,
         material_params_eqm=mat_params_eqm,

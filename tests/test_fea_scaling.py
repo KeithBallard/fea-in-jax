@@ -75,10 +75,10 @@ with poll_cpu() as cpu_poll:
         element_batches = [
             ElementBatch(
                 fe_type=fe_type,
+                n_dofs_per_basis=U,
                 connectivity_en=batch_cells,
                 constitutive_model=elastic_isotropic,
-                material_params_eqm=batch_mat_params_eqm,
-                internal_state_eqi=jnp.zeros(shape=(E, Q, 0))
+                material_params_eqm=batch_mat_params_eqm
             )
             for batch_cells, batch_mat_params_eqm in zip(
                 np.array_split(cells, n_batches, axis=0),

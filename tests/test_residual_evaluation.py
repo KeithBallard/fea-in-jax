@@ -38,10 +38,10 @@ for mesh_size in [0.05, 0.01, 0.005, 0.001]:
     element_batches = [
         ElementBatch(
             fe_type=fe_type,
+            n_dofs_per_basis=U,
             connectivity_en=cells,
             constitutive_model=elastic_isotropic,
-            material_params_eqm=mat_params_eqp,
-            internal_state_eqi=jnp.zeros(shape=(cells.shape[0], Q, 0)),
+            material_params_eqm=mat_params_eqp
         ),
     ]
 
