@@ -16,14 +16,12 @@ import cupyx.scipy.sparse as cpsparse
 import cupyx.scipy.sparse.linalg as cplinalg
 
 from functools import partial
+from flax import struct
 
 from .utils import debug_print
 
 
-def apply_dirichlet_bcs_lhs(
-    A: jsparse.COO,
-    dirichlet_dofs: jnp.ndarray
-) -> jsparse.COO:
+def apply_dirichlet_bcs_lhs(A: jsparse.COO, dirichlet_dofs: jnp.ndarray) -> jsparse.COO:
     """
     Returns a modified COO sparse matrix that has the same sparsity structure as A but modifies
     entries for in-place elimination of Dirichlet BCs, i.e. zero rows/columns and one on the
@@ -61,7 +59,7 @@ def apply_dirichlet_bcs_rhs(
 ) -> jnp.ndarray:
     """
     Returns a modified RHS vector for in-place elimination of Dirichlet BCs.
-    
+
     NOTE residual_w_dirichlet will automatically include this adjustment, so it is not needed in that case!
     """
     tmp = jnp.zeros_like(b)
@@ -69,6 +67,7 @@ def apply_dirichlet_bcs_rhs(
     b_modified = b - A @ tmp
     b_modified = b_modified.at[dirichlet_dofs].set(dirichlet_values)
     return b_modified
+
 
 def coo_arrays_sum_duplicates(A: jsparse.COO) -> tuple[jax.Array, jax.Array, jax.Array]:
     """
@@ -268,3 +267,70 @@ def spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
         case "gpu":
             return __solve_gpu(A, b)
     raise Exception(f"Backend {jextend.backend.get_backend().platform} unsupported.")
+
+
+from cupyx.scipy.sparse.linalg._solve import CusparseLU
+
+# Global registry to hold generic Python objects
+_OBJECT_STORE = {}
+_NEXT_ID = 0
+
+def _store_object(obj):
+    global _NEXT_ID
+    uid = _NEXT_ID
+    _OBJECT_STORE[uid] = obj
+    _NEXT_ID += 1
+    return np.int64(uid) # Return as a JAX-compatible type
+
+def _retrieve_object(uid):
+    # Ensure uid is a standard Python int for dict lookup
+    return _OBJECT_STORE[int(uid)]
+
+@struct.dataclass
+class CupyILUCtx:
+    # Now a traceable JAX array holding the ID
+    handle: jnp.ndarray
+
+"""
+@struct.dataclass
+class CupyILUCtx:
+    obj: cplinalg.SuperLU = struct.field(pytree_node=False)
+"""
+
+def _cupy_spilu_init_impl(A: jsparse.CSR):
+    A_cp = cpsparse.csr_matrix(
+        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+        shape=A.shape,
+    )
+    A_cp.has_canonical_format = True
+    ilu_obj = cplinalg.spilu(A_cp, fill_factor=1.0)
+    return _store_object(ilu_obj)
+
+@jax.jit
+def cupy_spilu_init(A: jsparse.COO) -> CupyILUCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(
+        _cupy_spilu_init_impl, result_info, coo_to_csr(A)
+    ) #CupyILUCtx(obj=CusparseLU(cpsparse.csr_matrix(A.shape)))
+    jax.debug.print('cupy_ilu_ctx {}', handle)
+    return CupyILUCtx(handle=handle)
+
+
+def _cupy_spilu_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ilu_obj = _retrieve_object(cp.asarray(handle))
+    cp.asarray(out)[...] = ilu_obj.solve(cp.asarray(b))
+
+
+# TODO depreciate since I worked out buffer_callback version
+def _cupy_spilu_solve_impl_2(handle, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ilu_obj = _retrieve_object(handle)
+    return jnp.array(ilu_obj.solve(cp.asarray(b)))
+
+
+@jax.jit
+def cupy_spilu_solve(ctx: CupyILUCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    return buffer_callback(_cupy_spilu_solve_impl, result_info)(ctx.handle, b)
+    #return jax.pure_callback(_cupy_spilu_solve_impl_2, result_info, ctx.handle, b)

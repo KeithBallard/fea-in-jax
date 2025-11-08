@@ -102,7 +102,8 @@ u, residual, element_batches = solve_bvp(
     u_0_g=jnp.zeros(shape=(V * U)),
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_JACOBI_SCIPY),
+    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_ILU_SCIPY_W_INFO),
+    plot_convergence=True
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)

@@ -37,6 +37,10 @@ $$ - \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{U}_i $$
 
 Great crash course notes on numerical methods, Python, and HPC: https://tbetcke.github.io/hpc_lecture_notes/intro.html
 
+External Callbacks: https://apxml.com/courses/advanced-jax/chapter-5-jax-interoperability-custom-operations/using-jax-pure-callback
+
+Wrapping scipy KD trees: https://robertdyro.com/articles/jax_advanced/
+
 JAX GPU Performance guide: https://jax.readthedocs.io/en/latest/gpu_performance_tips.html
 
 Useful guide on ahead-of-time compilation: https://jax.readthedocs.io/en/latest/aot.html
