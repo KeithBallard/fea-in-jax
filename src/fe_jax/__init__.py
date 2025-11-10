@@ -9,6 +9,6 @@ from .linear_elasticity import *
 from .hyperelasticity import *
 from .profiling import *
 from .setup import *
-from .sparse_linalg import *
+from .sparse_matrix import *
 from .utils import *
 

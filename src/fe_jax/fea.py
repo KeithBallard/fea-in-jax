@@ -1,18 +1,22 @@
 from .setup import *
 from .utils import *
 from .solve_cg import cg as cg_w_info
-from .sparse_linalg import *
+from .sparse_matrix import *
+from .sparse_linear_solve import (
+    linear_solve,
+    Residual,
+    Jacobian,
+    JacobianDiagonl,
+    SolverOptions,
+    LinearSolverType,
+    SolverResultInfo,
+    init_solver_info,
+    plot_solver_info
+)
 
 import jax.numpy as jnp
 import jax
 import jax.experimental.sparse as jsparse
-from jax.experimental import mesh_utils
-
-from jaxopt import linear_solve
-
-import cupy as cp
-import cupyx.scipy.sparse as cpsparse
-import cupyx.scipy.sparse.linalg as cplinalg
 
 from enum import Enum
 from dataclasses import dataclass
@@ -449,58 +453,6 @@ def batch_to_collection(
                     jnp.array([dphi_dxi_qnp.size for dphi_dxi_qnp in dphi_dxi_bqnp])
                 ),
             ]
-        ),
-    )
-
-
-class LinearSolverType(Enum):
-    DIRECT_SPARSE_SOLVE_JNP = (0,)
-    DIRECT_INVERSE_JNP = 5
-    DIRECT_INVERSE_JAXOPT = 6
-    CG_JAXOPT = 10
-    CG_SCIPY = 11
-    CG_SCIPY_W_INFO = 12
-    CG_JACOBI_SCIPY = 13
-    CG_JACOBI_SCIPY_W_INFO = 14
-    CG_ILU_SCIPY = 15
-    CG_ILU_SCIPY_W_INFO = 16
-    GMRES_JAXOPT = 20
-    GMRES_SCIPY = 21
-    BICGSTAB_JAXOPT = 30
-    BICGSTAB_SCIPY = 31
-    CHOLESKY_JAXOPT = 40
-    LU_JAXOPT = 50
-
-
-@dataclass(eq=True, frozen=True)
-class SolverOptions:
-    linear_solve_type: LinearSolverType = LinearSolverType.DIRECT_INVERSE_JNP
-    linear_max_iter: int = 1000
-    linear_relative_tol: float = 1e-14
-    linear_absolute_tol: float = 1e-10
-    nonlinear_max_iter: int = 10
-    nonlinear_relative_tol: float = 1e-10
-    nonlinear_absolute_tol: float = 1e-8
-
-
-@struct.dataclass
-class SolverResultInfo:
-    nonlinear_iterations: int
-    cumulative_linear_iterations: int
-    linear_iterations_per_nonlinear_iteration: jnp.ndarray
-    # NOTE length will be nonlinear_iterations + cumulative_linear_iterations because the residual
-    # norm history for each nonlinear iteration begins with the starting residual norm before a
-    # linear solve
-    cumulative_residual_norm_history: jnp.ndarray
-
-
-def get_solver_info(opts: SolverOptions):
-    return SolverResultInfo(
-        nonlinear_iterations=0,
-        cumulative_linear_iterations=0,
-        linear_iterations_per_nonlinear_iteration=jnp.zeros((opts.nonlinear_max_iter,)),
-        cumulative_residual_norm_history=jnp.zeros(
-            (opts.linear_max_iter * opts.nonlinear_max_iter + 1,)
         ),
     )
 
@@ -1048,14 +1000,6 @@ def solve_nonlinear_step(
     # Function that produces R(u)
     residual_func_w_dirichlet = lambda u_f: residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
-    # Function that produces R(u) without Dirichlet BCs applied
-    residual_func_wo_dirichlet = lambda u_f: calculate_residual_wo_dirichlet(
-        element_residual_func=element_residual_func,
-        ebc=ebc,
-        assembly_map_b=assembly_map_b,
-        u_f=u_f,
-    )[0]
-
     # Function that produces J(u) without Dirichlet BCs applied
     jacobian_func_wo_dirichlet = lambda u_f: calculate_jacobian_wo_dirichlet(
         element_residual_func=element_residual_func,
@@ -1076,36 +1020,6 @@ def solve_nonlinear_step(
     R_f, new_internal_state_beqi = residual_isv_func_w_dirichlet(u_f=u_0_g)
     initial_R_f_norm = jnp.linalg.norm(R_f)
 
-    # Note: will be specialized for u_f later in while_body
-    jacobian_vector_product_detail = lambda u_f, z: jax.jvp(
-        residual_func_w_dirichlet,
-        (u_f,),
-        (z,),
-    )[1]
-
-    # NOTE Used to debug if the Jacobian via autodiff matches the Jacobian via assembly
-    """
-    jacobian = jax.jacfwd(residual_func_wo_dirichlet)(u_0_g)
-    cp.savetxt('A_jacfwd.csv', cp.asarray(jacobian))
-
-    jacobian_w_bc = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-    cp.savetxt('A_jacfwd_w_bc.csv', cp.asarray(jacobian_w_bc))
-
-    J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-    cp.savetxt('A_sparse_ff.csv', cp.asarray(J_sparse_ff.todense()))
-
-    lhs_matrix, rhs_vector = apply_dirichlet_bcs(
-        J_sparse_ff,
-        -R_f,
-        dirichlet_dofs,
-        dirichlet_values - u_0_g[dirichlet_dofs],
-    )
-    cp.savetxt('A_sparse_ff_w_bc.csv', cp.asarray(lhs_matrix.todense()))
-
-    assert jnp.isclose(J_sparse_ff.todense(), jacobian).all()
-    assert jnp.isclose(lhs_matrix.todense(), jacobian_w_bc).all()
-    """
-
     def while_cond(args) -> bool:
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         absolute_error = jnp.linalg.norm(R_f)
@@ -1116,12 +1030,6 @@ def solve_nonlinear_step(
             y=absolute_error,
             z=nl_iteration,
         )
-        jax.debug.print(
-            "Convergence terms: {x} {y} {z}",
-            x=nl_iteration < solver_options.nonlinear_max_iter,
-            y=relative_error > solver_options.nonlinear_relative_tol,
-            z=absolute_error > solver_options.nonlinear_absolute_tol,
-        )
         return (
             (nl_iteration < solver_options.nonlinear_max_iter)
             & (relative_error > solver_options.nonlinear_relative_tol)
@@ -1129,230 +1037,26 @@ def solve_nonlinear_step(
         )
 
     def while_body(
-        args,
+        args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo],
     ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo]:
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
-        # jax.debug.print("u_f = {x}", x=u_f)
 
-        # Note: unclear which is most performant variant of this.
-        # Function that produces J(u) * z with Dirichlet constraints
-        # Note: this linearizes the Jacobian about u_0
-        # jacobian_vector_product = lambda z: jax.jvp(
-        #    residual_func_w_dirichlet,
-        #    (u_f,),
-        #    (z,),
-        # )[1]
-        # jacobian_vector_product_inner = jax.tree_util.Partial(residual_func_w_dirichlet, (u_f,))
-        # jacobian_vector_product = lambda z: jacobian_vector_product_detail(u_f, z)
-        jacobian_vector_product = jax.tree_util.Partial(
-            jacobian_vector_product_detail, u_f
+        delta_u, info = linear_solve(
+            residual=Residual(
+                function=jax.tree_util.Partial(residual_func_w_dirichlet), dirichlet_bcs_builtin=True
+            ),
+            jacobian=Jacobian(
+                function=jax.tree_util.Partial(jacobian_func_wo_dirichlet), dirichlet_bcs_builtin=False
+            ),
+            jacobian_diagonal=JacobianDiagonl(
+                function=jax.tree_util.Partial(jacobian_diag_func_wo_dirichlet), dirichlet_bcs_builtin=True
+            ),
+            dirichlet_dofs=dirichlet_dofs,
+            dirichlet_values=dirichlet_values,
+            solver_options=solver_options,
+            solver_info_0=info.increment_nl_iteration(),
+            x_0=u_f,
         )
-
-        # Solve the boundary value problem
-        match solver_options.linear_solve_type:
-
-            case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
-                # NOTE Forms the sparse Jacobian in memory
-                J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                J_sparse_ff = apply_dirichlet_bcs_lhs(
-                    J_sparse_ff,
-                    dirichlet_dofs,
-                )
-                delta_u = spsolve(J_sparse_ff, -R_f)
-
-            case LinearSolverType.DIRECT_INVERSE_JNP:
-                # NOTE Forms the dense Jacobian matrix in memory
-                # NOTE jacfwd of residual_func_w_dirichlet will automatically include in-place
-                #      elimination of Dirichlet BCs.
-                jacobian = jax.jacfwd(residual_func_w_dirichlet)(u_0_g)
-                delta_u = jnp.array(jnp.dot(jnp.linalg.inv(jacobian), -R_f))
-
-            case LinearSolverType.DIRECT_INVERSE_JAXOPT:
-                delta_u = linear_solve.solve_inv(matvec=jacobian_vector_product, b=-R_f)
-
-            case LinearSolverType.CG_SCIPY:
-                delta_u, _ = jax.scipy.sparse.linalg.cg(
-                    A=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.CG_SCIPY_W_INFO:
-                delta_u, cg_info = cg_w_info(
-                    A=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                    maxiter=solver_options.linear_max_iter,
-                )
-                info = SolverResultInfo(
-                    nonlinear_iterations=nl_iteration,
-                    cumulative_linear_iterations=info.cumulative_linear_iterations
-                    + cg_info["iterations"],
-                    linear_iterations_per_nonlinear_iteration=info.linear_iterations_per_nonlinear_iteration.at[
-                        nl_iteration
-                    ].set(
-                        cg_info["iterations"]
-                    ),
-                    cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                        operand=info.cumulative_residual_norm_history,
-                        update=cg_info["residual_norm_history"],
-                        start_indices=[
-                            info.cumulative_linear_iterations + nl_iteration
-                        ],
-                    ),
-                )
-
-            case LinearSolverType.CG_JACOBI_SCIPY:
-                diag_J_f = jacobian_diag_func_wo_dirichlet(u_0_g)
-                M_inv_diag = 1.0 / diag_J_f
-
-                def jacobi_preconditioner(x):
-                    return M_inv_diag * x
-
-                delta_u, _ = jax.scipy.sparse.linalg.cg(
-                    A=jacobian_vector_product,
-                    M=jacobi_preconditioner,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.CG_JACOBI_SCIPY_W_INFO:
-                diag_J_f = jacobian_diag_func_wo_dirichlet(u_0_g)
-                M_inv_diag = 1.0 / diag_J_f
-
-                def jacobi_preconditioner(x):
-                    return M_inv_diag * x
-
-                delta_u, cg_info = cg_w_info(
-                    A=jacobian_vector_product,
-                    M=jacobi_preconditioner,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                    maxiter=solver_options.linear_max_iter,
-                )
-                info = SolverResultInfo(
-                    nonlinear_iterations=nl_iteration,
-                    cumulative_linear_iterations=info.cumulative_linear_iterations
-                    + cg_info["iterations"],
-                    linear_iterations_per_nonlinear_iteration=info.linear_iterations_per_nonlinear_iteration.at[
-                        nl_iteration
-                    ].set(
-                        cg_info["iterations"]
-                    ),
-                    cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                        operand=info.cumulative_residual_norm_history,
-                        update=cg_info["residual_norm_history"],
-                        start_indices=[
-                            info.cumulative_linear_iterations + nl_iteration
-                        ],
-                    ),
-                )
-
-            case LinearSolverType.CG_ILU_SCIPY_W_INFO:
-                J_sparse_ff = jacobian_func_wo_dirichlet(u_0_g)
-                J_sparse_ff = apply_dirichlet_bcs_lhs(
-                    J_sparse_ff,
-                    dirichlet_dofs,
-                )
-
-                ilu_ctx = cupy_spilu_init(J_sparse_ff)
-                def ilu_preconditioner(x):
-                    return cupy_spilu_solve(ilu_ctx, x)
-
-                delta_u, cg_info = cg_w_info(
-                    A=jacobian_vector_product,
-                    M=ilu_preconditioner,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                    maxiter=solver_options.linear_max_iter,
-                )
-                info = SolverResultInfo(
-                    nonlinear_iterations=nl_iteration,
-                    cumulative_linear_iterations=info.cumulative_linear_iterations
-                    + cg_info["iterations"],
-                    linear_iterations_per_nonlinear_iteration=info.linear_iterations_per_nonlinear_iteration.at[
-                        nl_iteration
-                    ].set(
-                        cg_info["iterations"]
-                    ),
-                    cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                        operand=info.cumulative_residual_norm_history,
-                        update=cg_info["residual_norm_history"],
-                        start_indices=[
-                            info.cumulative_linear_iterations + nl_iteration
-                        ],
-                    ),
-                )
-
-            case LinearSolverType.CG_JAXOPT:
-                delta_u = linear_solve.solve_cg(
-                    matvec=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.GMRES_SCIPY:
-                delta_u, _ = jax.scipy.sparse.linalg.gmres(
-                    A=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.GMRES_JAXOPT:
-                delta_u = linear_solve.solve_gmres(
-                    matvec=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.BICGSTAB_SCIPY:
-                delta_u, _ = jax.scipy.sparse.linalg.bicgstab(
-                    A=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.BICGSTAB_JAXOPT:
-                delta_u = linear_solve.solve_bicgstab(
-                    matvec=jacobian_vector_product,
-                    b=-R_f,
-                    tol=solver_options.linear_relative_tol,
-                    atol=solver_options.linear_absolute_tol,
-                )
-
-            case LinearSolverType.CHOLESKY_JAXOPT:
-                delta_u = linear_solve.solve_cholesky(
-                    matvec=jacobian_vector_product, b=-R_f
-                )
-
-            case LinearSolverType.LU_JAXOPT:
-                delta_u = linear_solve.solve_lu(matvec=jacobian_vector_product, b=-R_f)
-
-            case _:
-                raise Exception(
-                    f"Linear solver type {solver_options.linear_solve_type} is not implemented"
-                )
-
-        # Note: consider implementing spai preconditioner
-        # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
-
-        # jax.scipy solvers will not arrive at the right values for the constraints for any size of
-        # problem but even the jaxopt solvers will only get close for large enough problems.
-        # Consequently, overwrite the values directly to ensure the BCs are right, even though the
-        # residual may increase.
-        delta_u = jnp.multiply(1.0 - dirichlet_mask_g, delta_u) + jnp.multiply(
-            dirichlet_mask_g, dirichlet_values_g - u_f
-        )
-        # jax.debug.print("delta u = {x}", x=delta_u)
 
         u_f = u_f + delta_u
         R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
@@ -1367,7 +1071,7 @@ def solve_nonlinear_step(
             u_0_g,
             R_f,
             new_internal_state_beqi,
-            get_solver_info(solver_options),
+            init_solver_info(solver_options),
         ),
     )
 
@@ -1552,47 +1256,7 @@ def solve_bvp(
         print(
             f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}"
         )
-
         if plot_convergence:
-
-            import matplotlib.pyplot as plt
-
-            x_iter = jnp.linspace(
-                0,
-                info.cumulative_linear_iterations,
-                info.cumulative_linear_iterations + 1,
-                dtype=jnp.int32,
-            )
-            y_r_norm = info.cumulative_residual_norm_history[
-                0 : info.cumulative_linear_iterations + 1
-            ]
-
-            plt.plot(x_iter, y_r_norm)
-            plt.title(
-                f"Residual History During Iteration Using {solver_options.linear_solve_type}"
-            )
-            plt.xlabel("iteration")
-            plt.ylabel("|R|")
-            plt.yscale("log")
-
-            cum_iters = np.concat(
-                [
-                    [0],
-                    np.cumsum(
-                        np.asarray(info.linear_iterations_per_nonlinear_iteration)
-                    ),
-                ]
-            )
-            for i in range(info.nonlinear_iterations + 1):
-                plt.axvline(
-                    x=cum_iters[i],
-                    color="r",
-                    linestyle="--",
-                    label=f"Start of nonlinear iter {i}",
-                )
-            plt.legend()
-
-            plt.show()
-            plt.savefig("solver_convergence.png")
+            plot_solver_info(opts=solver_options, info=info)
 
     return (u, residual, element_batches)
