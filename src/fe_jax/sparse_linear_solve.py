@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
 import jax.extend as jextend
 from jax.experimental.buffer_callback import buffer_callback
+from jax.experimental import checkify
 from jax.dlpack import from_dlpack
 
 from jaxopt import linear_solve as jaxopt_linear_solve
@@ -116,7 +117,7 @@ class JacobianDiagonl:
     dirichlet_bcs_builtin: bool = struct.field(pytree_node=False)
 
 
-@partial(jax.jit, static_argnames=["solver_options"])
+@partial(jax.jit, static_argnames=["solver_options", "check_consistency"])
 def linear_solve(
     residual: Residual,
     jacobian: Optional[Jacobian],
@@ -125,6 +126,7 @@ def linear_solve(
     dirichlet_values: jnp.ndarray,
     solver_options: SolverOptions,
     solver_info_0: SolverResultInfo,
+    check_consistency: bool,
     x_0: jnp.ndarray,
     *args,
     **kwargs,
@@ -139,17 +141,17 @@ def linear_solve(
         raise Exception("TODO (straightforward) implementation needed")
 
     if jacobian is not None:
-        if not jacobian.dirichlet_bcs_builtin:
+        if jacobian.dirichlet_bcs_builtin:
+            J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
+        else:
             J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
                 jacobian.function(x, *args, **kwargs), dirichlet_dofs
             )
-        else:
-            J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
     else:
         J_w_dirichlet = None
 
     if jacobian_diagonal is not None:
-        if not jacobian_diagonal.dirichlet_bcs_builtin:
+        if jacobian_diagonal.dirichlet_bcs_builtin:
             diag_J_w_dirichlet = lambda x: jacobian_diagonal.function(
                 x, *args, **kwargs
             )
@@ -171,8 +173,32 @@ def linear_solve(
         x_0,
     )
 
-    # TODO consider adding an optional check to ensure the provided jacobian function is consistent
-    #      with the corrolary via autodiff (though test will of course form the dense matrix)
+    if check_consistency:
+        v = jax.random.uniform(jax.random.key(0), x_0.shape, x_0.dtype)
+        J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
+
+        jax.debug.print(
+            "Jacobian-vector product via autodiff matches product via dense Jacobian from jacfwd: {}",
+            jnp.isclose(J_vp(v), J_dense @ v).all(),
+        )
+
+        if J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian inferred from residual (via jacfwd) matches given Jacobian function: {}",
+                jnp.isclose(J_dense, J_w_dirichlet(x_0).todense()).all(),
+            )
+
+        if diag_J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian diagonal inferred from residual (via diag(jacfwd)) matches Jacobian diagonal function: {}",
+                jnp.isclose(jnp.diag(J_dense), diag_J_w_dirichlet(x_0)).all(),
+            )
+
+        if J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian-vector product via autodiff matches product via the given Jacobian function: {}",
+                jnp.isclose(J_vp(v), J_w_dirichlet(x_0) @ v).all(),
+            )
 
     R_0 = R_w_dirichlet(x_0)
     info = solver_info_0
@@ -426,7 +452,7 @@ def plot_solver_info(opts: SolverOptions, info: SolverResultInfo):
             np.cumsum(np.asarray(info.linear_iterations_per_nonlinear_iteration)),
         ]
     )
-    for i in range(info.nonlinear_iterations + 1):
+    for i in range(info.nonlinear_iterations):
         plt.axvline(
             x=cum_iters[i],
             color="r",

@@ -11,7 +11,7 @@ from .sparse_linear_solve import (
     LinearSolverType,
     SolverResultInfo,
     init_solver_info,
-    plot_solver_info
+    plot_solver_info,
 )
 
 import jax.numpy as jnp
@@ -1025,11 +1025,19 @@ def solve_nonlinear_step(
         absolute_error = jnp.linalg.norm(R_f)
         relative_error = absolute_error / initial_R_f_norm
         jax.debug.print(
-            "Iteration {z} rel error {x}, abs error {y}",
-            x=relative_error,
-            y=absolute_error,
-            z=nl_iteration,
+            "End of iteration {x} rel error {y}, abs error {z}",
+            x=nl_iteration - 1,
+            y=relative_error,
+            z=absolute_error,
         )
+        """
+        jax.debug.print(
+            "Convergence criteria: {} {} {}",
+            nl_iteration < solver_options.nonlinear_max_iter,
+            relative_error > solver_options.nonlinear_relative_tol,
+            absolute_error > solver_options.nonlinear_absolute_tol,
+        )
+        """
         return (
             (nl_iteration < solver_options.nonlinear_max_iter)
             & (relative_error > solver_options.nonlinear_relative_tol)
@@ -1043,25 +1051,35 @@ def solve_nonlinear_step(
 
         delta_u, info = linear_solve(
             residual=Residual(
-                function=jax.tree_util.Partial(residual_func_w_dirichlet), dirichlet_bcs_builtin=True
+                function=jax.tree_util.Partial(residual_func_w_dirichlet),
+                dirichlet_bcs_builtin=True,
             ),
             jacobian=Jacobian(
-                function=jax.tree_util.Partial(jacobian_func_wo_dirichlet), dirichlet_bcs_builtin=False
+                function=jax.tree_util.Partial(jacobian_func_wo_dirichlet),
+                dirichlet_bcs_builtin=False,
             ),
             jacobian_diagonal=JacobianDiagonl(
-                function=jax.tree_util.Partial(jacobian_diag_func_wo_dirichlet), dirichlet_bcs_builtin=True
+                function=jax.tree_util.Partial(jacobian_diag_func_wo_dirichlet),
+                dirichlet_bcs_builtin=False,
             ),
             dirichlet_dofs=dirichlet_dofs,
             dirichlet_values=dirichlet_values,
             solver_options=solver_options,
-            solver_info_0=info.increment_nl_iteration(),
+            solver_info_0=info,
+            check_consistency=False,
             x_0=u_f,
         )
 
         u_f = u_f + delta_u
         R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
-        return (nl_iteration + 1, u_f, R_f, new_internal_state_beqi, info)
+        return (
+            nl_iteration + 1,
+            u_f,
+            R_f,
+            new_internal_state_beqi,
+            info.increment_nl_iteration(),
+        )
 
     _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
         cond_fun=while_cond,
@@ -1077,6 +1095,7 @@ def solve_nonlinear_step(
 
     absolute_error = jnp.linalg.norm(R_f)
     relative_error = absolute_error / initial_R_f_norm
+
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
 
@@ -1251,7 +1270,6 @@ def solve_bvp(
         u.block_until_ready()
         stop_memory_profile("solve_linear_step")
 
-    print(f"solver relative error: {relative_error}")
     if info.cumulative_linear_iterations > 0:
         print(
             f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}"
