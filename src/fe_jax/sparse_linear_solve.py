@@ -29,29 +29,37 @@ from .sparse_matrix import *
 from .solve_cg import cg as cg_w_info
 
 
+class PreconditionerType(Enum):
+    NONE = 0
+    JACOBI = 1
+    ILU_CUPY = 2
+    # Note: consider implementing spai preconditioner
+    # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
+
+
 class LinearSolverType(Enum):
-    DIRECT_SPARSE_SOLVE_JNP = (0,)
-    DIRECT_INVERSE_JNP = 5
-    DIRECT_INVERSE_JAXOPT = 6
-    CG_JAXOPT = 10
-    CG_SCIPY = 11
-    CG_SCIPY_W_INFO = 12
-    CG_JACOBI_SCIPY = 13
-    CG_JACOBI_SCIPY_W_INFO = 14
-    CG_ILU_SCIPY = 15
-    CG_ILU_SCIPY_W_INFO = 16
-    GMRES_JAXOPT = 20
-    GMRES_SCIPY = 21
-    BICGSTAB_JAXOPT = 30
-    BICGSTAB_SCIPY = 31
-    CHOLESKY_JAXOPT = 40
-    LU_JAXOPT = 50
-    LU_CUPY = 51
+    DENSE_INVERSE_JNP = 0
+    DENSE_INVERSE_JAXOPT = 1
+    SPSOLVE_CUPY = 10
+    LU_JAXOPT = 11
+    LU_CUPY = 12
+    CHOLESKY_JAXOPT = 13
+    CG_JAXOPT = 20
+    CG_JAX_SCIPY = 21
+    CG_JAX_SCIPY_W_INFO = 22
+    GMRES_JAXOPT = 30
+    GMRES_JAX_SCIPY = 31
+    # TODO GMRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.gmres.html
+    # TODO CGS_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.cgs.html
+    # TODO MINRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.minres.html
+    BICGSTAB_JAXOPT = 40
+    BICGSTAB_JAX_SCIPY = 41
 
 
 @dataclass(eq=True, frozen=True)
 class SolverOptions:
-    linear_solve_type: LinearSolverType = LinearSolverType.DIRECT_INVERSE_JNP
+    linear_precond_type: PreconditionerType = PreconditionerType.NONE
+    linear_solve_type: LinearSolverType = LinearSolverType.LU_CUPY
     linear_max_iter: int = 1000
     linear_relative_tol: float = 1e-14
     linear_absolute_tol: float = 1e-10
@@ -71,6 +79,10 @@ class SolverResultInfo:
     cumulative_residual_norm_history: jnp.ndarray
 
     def increment_nl_iteration(self):
+        """
+        Call at the end of each nonlinear iteration to create a copy of the struct that carries
+        the solver history forward.
+        """
         return SolverResultInfo(
             nonlinear_iterations=self.nonlinear_iterations + 1,
             cumulative_linear_iterations=self.cumulative_linear_iterations,
@@ -80,6 +92,9 @@ class SolverResultInfo:
 
 
 def init_solver_info(opts: SolverOptions):
+    """
+    Initialize a SolverResultInfo object to begin tracking solves.
+    """
     return SolverResultInfo(
         nonlinear_iterations=0,
         cumulative_linear_iterations=0,
@@ -132,7 +147,9 @@ def linear_solve(
     **kwargs,
 ) -> tuple[jnp.ndarray, SolverResultInfo]:
     """
-    TODO document
+    Solve a linear system of equations emerging from Newton's method: J(x) * x = -R(x)
+
+    TODO finish documentation
     """
 
     if residual.dirichlet_bcs_builtin:
@@ -203,9 +220,55 @@ def linear_solve(
     R_0 = R_w_dirichlet(x_0)
     info = solver_info_0
 
+    match solver_options.linear_precond_type:
+        case PreconditionerType.NONE:
+            preconditioner = None
+
+        case PreconditionerType.JACOBI:
+            assert (
+                diag_J_w_dirichlet is not None
+            ), f"{solver_options.linear_precond_type} requires the `jacobian_diagonal` argument to be provided."
+
+            preconditioner = lambda x: x / diag_J_w_dirichlet(x_0)
+
+        case PreconditionerType.ILU_CUPY:
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+            ilu_ctx = cupy_spilu_init(J_sparse)
+            preconditioner = lambda x: cupy_solve(ilu_ctx, x)
+
+        case _:
+            raise Exception(
+                f"Preconditioner type {solver_options.linear_precond_type} is not implemented"
+            )
+
     match solver_options.linear_solve_type:
 
-        case LinearSolverType.DIRECT_SPARSE_SOLVE_JNP:
+        case LinearSolverType.DENSE_INVERSE_JNP:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            # NOTE jacfwd of R_w_dirichlet will automatically include in-place elimination
+            #      of Dirichlet BCs.
+            J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
+            delta_x = jnp.array(jnp.dot(jnp.linalg.inv(J_dense), -R_0))
+
+        case LinearSolverType.DENSE_INVERSE_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_inv(matvec=J_vp, b=-R_0)
+
+        case LinearSolverType.SPSOLVE_CUPY:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
             assert (
                 J_w_dirichlet is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
@@ -213,191 +276,14 @@ def linear_solve(
             J_sparse = J_w_dirichlet(x_0)
             delta_x = spsolve(J_sparse, -R_0)
 
-        case LinearSolverType.DIRECT_INVERSE_JNP:
-            # NOTE jacfwd of R_w_dirichlet will automatically include in-place elimination
-            #      of Dirichlet BCs.
-            J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
-            delta_x = jnp.array(jnp.dot(jnp.linalg.inv(J_dense), -R_0))
-
-        case LinearSolverType.DIRECT_INVERSE_JAXOPT:
-            delta_x = jaxopt_linear_solve.solve_inv(matvec=J_vp, b=-R_0)
-
-        case LinearSolverType.CG_SCIPY:
-            delta_x, _ = jax.scipy.sparse.linalg.cg(
-                A=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.CG_SCIPY_W_INFO:
-            delta_x, cg_info = cg_w_info(
-                A=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-                maxiter=solver_options.linear_max_iter,
-            )
-            info = SolverResultInfo(
-                nonlinear_iterations=solver_info_0.nonlinear_iterations,
-                cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
-                + cg_info["iterations"],
-                linear_iterations_per_nonlinear_iteration=solver_info_0.linear_iterations_per_nonlinear_iteration.at[
-                    solver_info_0.nonlinear_iterations
-                ].set(
-                    cg_info["iterations"]
-                ),
-                cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                    operand=solver_info_0.cumulative_residual_norm_history,
-                    update=cg_info["residual_norm_history"],
-                    start_indices=[
-                        solver_info_0.cumulative_linear_iterations
-                        + solver_info_0.nonlinear_iterations
-                    ],
-                ),
-            )
-
-        case LinearSolverType.CG_JACOBI_SCIPY:
-            assert (
-                diag_J_w_dirichlet is not None
-            ), f"{solver_options.linear_solve_type} requires the `jacobian_diagonal` argument to be provided."
-
-            M_inv_diag = 1.0 / diag_J_w_dirichlet(x_0)
-
-            def jacobi_preconditioner(x):
-                return M_inv_diag * x
-
-            delta_x, _ = jax.scipy.sparse.linalg.cg(
-                A=J_vp,
-                M=jacobi_preconditioner,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.CG_JACOBI_SCIPY_W_INFO:
-            assert (
-                diag_J_w_dirichlet is not None
-            ), f"{solver_options.linear_solve_type} requires the `jacobian_diagonal` argument to be provided."
-
-            M_inv_diag = 1.0 / diag_J_w_dirichlet(x_0)
-
-            def jacobi_preconditioner(x):
-                return M_inv_diag * x
-
-            delta_x, cg_info = cg_w_info(
-                A=J_vp,
-                M=jacobi_preconditioner,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-                maxiter=solver_options.linear_max_iter,
-            )
-            info = SolverResultInfo(
-                nonlinear_iterations=solver_info_0.nonlinear_iterations,
-                cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
-                + cg_info["iterations"],
-                linear_iterations_per_nonlinear_iteration=solver_info_0.linear_iterations_per_nonlinear_iteration.at[
-                    solver_info_0.nonlinear_iterations
-                ].set(
-                    cg_info["iterations"]
-                ),
-                cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                    operand=solver_info_0.cumulative_residual_norm_history,
-                    update=cg_info["residual_norm_history"],
-                    start_indices=[
-                        solver_info_0.cumulative_linear_iterations
-                        + solver_info_0.nonlinear_iterations
-                    ],
-                ),
-            )
-
-        case LinearSolverType.CG_ILU_SCIPY_W_INFO:
-            assert (
-                J_w_dirichlet is not None
-            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
-
-            J_sparse = J_w_dirichlet(x_0)
-
-            ilu_ctx = cupy_spilu_init(J_sparse)
-
-            def ilu_preconditioner(x):
-                return cupy_solve(ilu_ctx, x)
-
-            delta_x, cg_info = cg_w_info(
-                A=J_vp,
-                M=ilu_preconditioner,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-                maxiter=solver_options.linear_max_iter,
-            )
-            info = SolverResultInfo(
-                nonlinear_iterations=solver_info_0.nonlinear_iterations,
-                cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
-                + cg_info["iterations"],
-                linear_iterations_per_nonlinear_iteration=solver_info_0.linear_iterations_per_nonlinear_iteration.at[
-                    solver_info_0.nonlinear_iterations
-                ].set(
-                    cg_info["iterations"]
-                ),
-                cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
-                    operand=solver_info_0.cumulative_residual_norm_history,
-                    update=cg_info["residual_norm_history"],
-                    start_indices=[
-                        solver_info_0.cumulative_linear_iterations
-                        + solver_info_0.nonlinear_iterations
-                    ],
-                ),
-            )
-
-        case LinearSolverType.CG_JAXOPT:
-            delta_x = jaxopt_linear_solve.solve_cg(
-                matvec=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.GMRES_SCIPY:
-            delta_x, _ = jax.scipy.sparse.linalg.gmres(
-                A=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.GMRES_JAXOPT:
-            delta_x = jaxopt_linear_solve.solve_gmres(
-                matvec=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.BICGSTAB_SCIPY:
-            delta_x, _ = jax.scipy.sparse.linalg.bicgstab(
-                A=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.BICGSTAB_JAXOPT:
-            delta_x = jaxopt_linear_solve.solve_bicgstab(
-                matvec=J_vp,
-                b=-R_0,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
-            )
-
-        case LinearSolverType.CHOLESKY_JAXOPT:
-            delta_x = jaxopt_linear_solve.solve_cholesky(matvec=J_vp, b=-R_0)
-
         case LinearSolverType.LU_JAXOPT:
             delta_x = jaxopt_linear_solve.solve_lu(matvec=J_vp, b=-R_0)
 
         case LinearSolverType.LU_CUPY:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
             assert (
                 J_w_dirichlet is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
@@ -407,8 +293,103 @@ def linear_solve(
             ilu_ctx = cupy_splu_init(J_sparse)
             delta_x = cupy_solve(ilu_ctx, -R_0)
 
-        # Note: consider implementing spai preconditioner
-        # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
+        case LinearSolverType.CHOLESKY_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_cholesky(matvec=J_vp, b=-R_0)
+
+        case LinearSolverType.CG_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_cg(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.CG_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.cg(
+                A=J_vp,
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.CG_JAX_SCIPY_W_INFO:
+            delta_x, cg_info = cg_w_info(
+                A=J_vp,
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+                maxiter=solver_options.linear_max_iter,
+            )
+            info = SolverResultInfo(
+                nonlinear_iterations=solver_info_0.nonlinear_iterations,
+                cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
+                + cg_info["iterations"],
+                linear_iterations_per_nonlinear_iteration=solver_info_0.linear_iterations_per_nonlinear_iteration.at[
+                    solver_info_0.nonlinear_iterations
+                ].set(
+                    cg_info["iterations"]
+                ),
+                cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
+                    operand=solver_info_0.cumulative_residual_norm_history,
+                    update=cg_info["residual_norm_history"],
+                    start_indices=[
+                        solver_info_0.cumulative_linear_iterations
+                        + solver_info_0.nonlinear_iterations
+                    ],
+                ),
+            )
+
+        case LinearSolverType.GMRES_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_gmres(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.GMRES_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.gmres(
+                A=J_vp,
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.BICGSTAB_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_bicgstab(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.BICGSTAB_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.bicgstab(
+                A=J_vp,
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
 
         case _:
             raise Exception(
@@ -528,7 +509,6 @@ from cupyx.scipy.sparse.linalg._solve import CusparseLU
 _OBJECT_STORE = {}
 _NEXT_ID = 0
 
-
 def _store_object(obj):
     global _NEXT_ID
     uid = _NEXT_ID
@@ -538,7 +518,6 @@ def _store_object(obj):
 
 
 def _retrieve_object(uid):
-    # Ensure uid is a standard Python int for dict lookup
     return _OBJECT_STORE[int(uid)]
 
 
@@ -561,7 +540,6 @@ def _cupy_spilu_init_impl(A: jsparse.CSR):
 def cupy_spilu_init(A: jsparse.COO) -> CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     handle = jax.pure_callback(_cupy_spilu_init_impl, result_info, coo_to_csr(A))
-    jax.debug.print("cupy_ilu_ctx {}", handle)
     return CupyCtx(handle=handle)
 
 
@@ -579,7 +557,6 @@ def _cupy_splu_init_impl(A: jsparse.CSR):
 def cupy_splu_init(A: jsparse.COO) -> CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     handle = jax.pure_callback(_cupy_splu_init_impl, result_info, coo_to_csr(A))
-    jax.debug.print("cupy_ilu_ctx {}", handle)
     return CupyCtx(handle=handle)
 
 

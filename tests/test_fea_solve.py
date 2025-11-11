@@ -28,7 +28,7 @@ fe_type = FiniteElementType(
     quadrature_type=QuadratureType.default,
     quadrature_degree=2,
 )
-Q = get_quadrature(fe_type=fe_type)[0].shape[0] # number of quadrature points
+Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
 
 
 # Define random Dirichlet boundary conditions
@@ -47,7 +47,7 @@ dirichlet_values = 0.001 * np.random.rand(dirichlet_bcs.shape[0])
 # Set material properties at the quadrature point level randomly seeded such that
 # E = [90e9, 100e9] and nu = 0.25
 tmp_mat_params = np.random.rand(E, Q, M)
-tmp_mat_params[..., 0] = 100e9 #90e9 * tmp_mat_params[..., 0] + 10e9
+tmp_mat_params[..., 0] = 100e9  # 90e9 * tmp_mat_params[..., 0] + 10e9
 tmp_mat_params[..., 1] = 0.25
 mat_params_eqm = jnp.array(tmp_mat_params)
 
@@ -64,7 +64,7 @@ element_batches = [
         n_dofs_per_basis=2,
         connectivity_en=cells,
         constitutive_model=elastic_isotropic,
-        material_params_eqm=mat_params_eqm
+        material_params_eqm=mat_params_eqm,
     )
 ]
 
@@ -76,8 +76,11 @@ u, residual, element_batches = solve_bvp(
     u_0_g=jnp.zeros(shape=(V * U)),
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_JACOBI_SCIPY_W_INFO),
-    plot_convergence=True
+    solver_options=SolverOptions(
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+        linear_precond_type=PreconditionerType.JACOBI,
+    ),
+    plot_convergence=True,
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)
