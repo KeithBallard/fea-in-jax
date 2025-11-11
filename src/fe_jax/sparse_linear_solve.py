@@ -237,8 +237,8 @@ def linear_solve(
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
             J_sparse = J_w_dirichlet(x_0)
-            ilu_ctx = cupy_spilu_init(J_sparse)
-            preconditioner = lambda x: cupy_solve(ilu_ctx, x)
+            ilu_ctx = __cupy_spilu_init(J_sparse)
+            preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
 
         case _:
             raise Exception(
@@ -274,7 +274,7 @@ def linear_solve(
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
             J_sparse = J_w_dirichlet(x_0)
-            delta_x = spsolve(J_sparse, -R_0)
+            delta_x = __spsolve(J_sparse, -R_0)
 
         case LinearSolverType.LU_JAXOPT:
             delta_x = jaxopt_linear_solve.solve_lu(matvec=J_vp, b=-R_0)
@@ -290,8 +290,8 @@ def linear_solve(
 
             J_sparse = J_w_dirichlet(x_0)
 
-            ilu_ctx = cupy_splu_init(J_sparse)
-            delta_x = cupy_solve(ilu_ctx, -R_0)
+            ilu_ctx = __cupy_splu_init(J_sparse)
+            delta_x = __cupy_solve(ilu_ctx, -R_0)
 
         case LinearSolverType.CHOLESKY_JAXOPT:
             if preconditioner is not None:
@@ -464,7 +464,7 @@ def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
 
 
 @jax.jit
-def cupy_spsolve(A: jsparse.CSR, b: jnp.ndarray):
+def __cupy_spsolve(A: jsparse.CSR, b: jnp.ndarray):
 
     def kernel(ctx, out, A: jsparse.CSR, b):
         A_cp = cpsparse.csr_matrix(
@@ -487,10 +487,10 @@ def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
     Returns the solution, x.
     """
     A_csr = coo_to_csr(A)
-    return cupy_spsolve(A_csr, b)
+    return __cupy_spsolve(A_csr, b)
 
 
-def spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
+def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
     """
     Sparse direct solve for system A*x = b.
     Returns the solution, x.
@@ -509,7 +509,7 @@ from cupyx.scipy.sparse.linalg._solve import CusparseLU
 _OBJECT_STORE = {}
 _NEXT_ID = 0
 
-def _store_object(obj):
+def __store_object(obj):
     global _NEXT_ID
     uid = _NEXT_ID
     _OBJECT_STORE[uid] = obj
@@ -517,56 +517,56 @@ def _store_object(obj):
     return np.int64(uid)  # Return as a JAX-compatible type
 
 
-def _retrieve_object(uid):
+def __retrieve_object(uid):
     return _OBJECT_STORE[int(uid)]
 
 
 @struct.dataclass
-class CupyCtx:
+class __CupyCtx:
     handle: jnp.ndarray
 
 
-def _cupy_spilu_init_impl(A: jsparse.CSR):
+def __cupy_spilu_init_impl(A: jsparse.CSR):
     A_cp = cpsparse.csr_matrix(
         (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
         shape=A.shape,
     )
     A_cp.has_canonical_format = True
     ilu_obj = cplinalg.spilu(A_cp, fill_factor=1.0)
-    return _store_object(ilu_obj)
+    return __store_object(ilu_obj)
 
 
 @jax.jit
-def cupy_spilu_init(A: jsparse.COO) -> CupyCtx:
+def __cupy_spilu_init(A: jsparse.COO) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    handle = jax.pure_callback(_cupy_spilu_init_impl, result_info, coo_to_csr(A))
-    return CupyCtx(handle=handle)
+    handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, coo_to_csr(A))
+    return __CupyCtx(handle=handle)
 
 
-def _cupy_splu_init_impl(A: jsparse.CSR):
+def __cupy_splu_init_impl(A: jsparse.CSR):
     A_cp = cpsparse.csr_matrix(
         (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
         shape=A.shape,
     )
     A_cp.has_canonical_format = True
     ilu_obj = cplinalg.splu(A_cp)
-    return _store_object(ilu_obj)
+    return __store_object(ilu_obj)
 
 
 @jax.jit
-def cupy_splu_init(A: jsparse.COO) -> CupyCtx:
+def __cupy_splu_init(A: jsparse.COO) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    handle = jax.pure_callback(_cupy_splu_init_impl, result_info, coo_to_csr(A))
-    return CupyCtx(handle=handle)
+    handle = jax.pure_callback(__cupy_splu_init_impl, result_info, coo_to_csr(A))
+    return __CupyCtx(handle=handle)
 
 
-def _cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     # Retrieve the opaque object using the handle
-    cupy_obj = _retrieve_object(cp.asarray(handle))
+    cupy_obj = __retrieve_object(cp.asarray(handle))
     cp.asarray(out)[...] = cupy_obj.solve(cp.asarray(b))
 
 
 @jax.jit
-def cupy_solve(ctx: CupyCtx, b: jnp.ndarray):
+def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(_cupy_solve_impl, result_info)(ctx.handle, b)
+    return buffer_callback(__cupy_solve_impl, result_info)(ctx.handle, b)
