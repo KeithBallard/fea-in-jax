@@ -33,6 +33,7 @@ class PreconditionerType(Enum):
     NONE = 0
     JACOBI = 1
     ILU_CUPY = 2
+    # TODO AMGX https://pyamgx.readthedocs.io/en/latest/
     # Note: consider implementing spai preconditioner
     # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
 
@@ -54,6 +55,7 @@ class LinearSolverType(Enum):
     # TODO MINRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.minres.html
     BICGSTAB_JAXOPT = 40
     BICGSTAB_JAX_SCIPY = 41
+    AMGX = 50
 
 
 @dataclass(eq=True, frozen=True)
@@ -391,6 +393,20 @@ def linear_solve(
                 atol=solver_options.linear_absolute_tol,
             )
 
+        case LinearSolverType.AMGX:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+            ctx = __amgx_init(J_sparse)
+            delta_x = __amgx_solve(ctx, -R_0, x_0)
+            __amgx_finalize(ctx)
+
         case _:
             raise Exception(
                 f"Linear solver type {solver_options.linear_solve_type} is not implemented"
@@ -444,6 +460,45 @@ def plot_solver_info(opts: SolverOptions, info: SolverResultInfo):
 
     plt.show()
     plt.savefig("solver_convergence.png")
+
+
+##################################################################################################
+# Object store for external library context information
+
+# Global registry to hold generic Python objects
+_OBJECT_STORE = {}
+_NEXT_ID = 0
+
+
+def __store_object(obj):
+    global _NEXT_ID
+    uid = _NEXT_ID
+    _OBJECT_STORE[uid] = obj
+    _NEXT_ID += 1
+    return np.int64(uid)  # Return as a JAX-compatible type
+
+
+def __retrieve_object(uid):
+    return _OBJECT_STORE[int(uid)]
+
+
+@struct.dataclass
+class __SolverCtx:
+    handle: jnp.ndarray
+
+
+@struct.dataclass
+class __AMGXCtx:
+    cfg_handle: jnp.ndarray
+    rsc_handle: jnp.ndarray
+    A_handle: jnp.ndarray
+    b_handle: jnp.ndarray
+    x_handle: jnp.ndarray
+    solver_handle: jnp.ndarray
+
+
+##################################################################################################
+# CUPY wrappers
 
 
 def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
@@ -503,29 +558,6 @@ def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
     raise Exception(f"Backend {jextend.backend.get_backend().platform} unsupported.")
 
 
-from cupyx.scipy.sparse.linalg._solve import CusparseLU
-
-# Global registry to hold generic Python objects
-_OBJECT_STORE = {}
-_NEXT_ID = 0
-
-def __store_object(obj):
-    global _NEXT_ID
-    uid = _NEXT_ID
-    _OBJECT_STORE[uid] = obj
-    _NEXT_ID += 1
-    return np.int64(uid)  # Return as a JAX-compatible type
-
-
-def __retrieve_object(uid):
-    return _OBJECT_STORE[int(uid)]
-
-
-@struct.dataclass
-class __CupyCtx:
-    handle: jnp.ndarray
-
-
 def __cupy_spilu_init_impl(A: jsparse.CSR):
     A_cp = cpsparse.csr_matrix(
         (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
@@ -537,10 +569,10 @@ def __cupy_spilu_init_impl(A: jsparse.CSR):
 
 
 @jax.jit
-def __cupy_spilu_init(A: jsparse.COO) -> __CupyCtx:
+def __cupy_spilu_init(A: jsparse.COO) -> __SolverCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, coo_to_csr(A))
-    return __CupyCtx(handle=handle)
+    return __SolverCtx(handle=handle)
 
 
 def __cupy_splu_init_impl(A: jsparse.CSR):
@@ -554,10 +586,10 @@ def __cupy_splu_init_impl(A: jsparse.CSR):
 
 
 @jax.jit
-def __cupy_splu_init(A: jsparse.COO) -> __CupyCtx:
+def __cupy_splu_init(A: jsparse.COO) -> __SolverCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     handle = jax.pure_callback(__cupy_splu_init_impl, result_info, coo_to_csr(A))
-    return __CupyCtx(handle=handle)
+    return __SolverCtx(handle=handle)
 
 
 def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
@@ -567,6 +599,146 @@ def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
 
 @jax.jit
-def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
+def __cupy_solve(ctx: __SolverCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
     return buffer_callback(__cupy_solve_impl, result_info)(ctx.handle, b)
+
+
+##################################################################################################
+# AMGX wrappers
+
+import pyamgx
+
+print('calling initialize')
+pyamgx.initialize()
+
+cfg = pyamgx.Config().create_from_dict(
+    {
+        "config_version": 2,
+        "determinism_flag": 1,
+        "exception_handling": 1,
+        "solver": {
+            "monitor_residual": 1,
+            "solver": "BICGSTAB",
+            "convergence": "RELATIVE_INI_CORE",
+            "preconditioner": {"solver": "NOSOLVER"},
+        },
+    }
+)
+
+rsc = pyamgx.Resources().create_simple(cfg)
+
+def __amgx_init_impl(
+    A: jsparse.CSR,
+) -> tuple[np.int64, np.int64, np.int64, np.int64, np.int64, np.int64]:
+
+    
+
+    A_amgx = pyamgx.Matrix().create(rsc)
+    A_cp = cpsparse.csr_matrix(
+        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+        shape=A.shape,
+    )
+    A_amgx.upload_CSR(A_cp)
+
+    b_amgx = pyamgx.Vector().create(rsc)
+    x_amgx = pyamgx.Vector().create(rsc)
+
+    solver = pyamgx.Solver().create(rsc, cfg)
+    solver.setup(A_amgx)
+
+    return (
+        __store_object(cfg),
+        __store_object(rsc),
+        __store_object(A_amgx),
+        __store_object(b_amgx),
+        __store_object(x_amgx),
+        __store_object(solver),
+    )
+
+
+@jax.jit
+def __amgx_init(A: jsparse.COO) -> __AMGXCtx:
+    result_info = (
+        jax.ShapeDtypeStruct((), jnp.int64),
+        jax.ShapeDtypeStruct((), jnp.int64),
+        jax.ShapeDtypeStruct((), jnp.int64),
+        jax.ShapeDtypeStruct((), jnp.int64),
+        jax.ShapeDtypeStruct((), jnp.int64),
+        jax.ShapeDtypeStruct((), jnp.int64),
+    )
+    cfg_handle, rsc_handle, A_handle, b_handle, x_handle, solver_handle = jax.pure_callback(
+        __amgx_init_impl, result_info, coo_to_csr(A)
+    )
+    return __AMGXCtx(
+        cfg_handle=cfg_handle,
+        rsc_handle=rsc_handle,
+        A_handle=A_handle,
+        b_handle=b_handle,
+        x_handle=x_handle,
+        solver_handle=solver_handle,
+    )
+
+
+def __amgx_solve_impl(
+    ctx,
+    out,
+    b_handle: jnp.ndarray,
+    x_handle: jnp.ndarray,
+    solver_handle: jnp.ndarray,
+    b: jnp.ndarray,
+    x0: jnp.ndarray,
+):
+    # Retrieve the opaque object using the handle
+    b_amgx = __retrieve_object(cp.asarray(b_handle))
+    x_amgx = __retrieve_object(cp.asarray(x_handle))
+    solver_amgx = __retrieve_object(cp.asarray(solver_handle))
+
+    b_amgx.upload(cp.asarray(b))
+    x_amgx.upload(cp.asarray(x0))
+    solver_amgx.solve(b_amgx, x_amgx)
+
+    #x = cp.zeros_like(cp.asarray(b))
+    cp.asarray(out)[...] = cp.asarray(x_amgx.download())
+
+
+@jax.jit
+def __amgx_solve(ctx: __AMGXCtx, b: jnp.ndarray, x0: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    return buffer_callback(__amgx_solve_impl, result_info)(
+        ctx.x_handle, ctx.b_handle, ctx.solver_handle, b, x0
+    )
+
+
+def __amgx_finalize_impl(
+    A_handle: jnp.ndarray,
+    b_handle: jnp.ndarray,
+    x_handle: jnp.ndarray,
+    solver_handle: jnp.ndarray,
+    rsc_handle: jnp.ndarray,
+):
+    import pyamgx
+
+    A_amgx = __retrieve_object(cp.asarray(A_handle))
+    b_amgx = __retrieve_object(cp.asarray(b_handle))
+    x_amgx = __retrieve_object(cp.asarray(x_handle))
+    solver_amgx = __retrieve_object(cp.asarray(solver_handle))
+    rsc = __retrieve_object(cp.asarray(rsc_handle))
+
+    A_amgx.destroy()
+    x_amgx.destroy()
+    b_amgx.destroy()
+    solver_amgx.destroy()
+    rsc.destroy()
+    pyamgx.finalize()
+
+
+def __amgx_finalize(ctx: __AMGXCtx):
+    jax.pure_callback(
+        __amgx_finalize_impl,
+        ctx.A_handle,
+        ctx.x_handle,
+        ctx.b_handle,
+        ctx.solver_handle,
+        ctx.rsc_handle,
+    )

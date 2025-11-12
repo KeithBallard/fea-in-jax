@@ -1,3 +1,11 @@
+# Getting Started
+
+(Optional) Install pyamgx to enable GPU-accelerated algebraic multigrid preconditioners
+1. Install NVidia's CUDA Toolkit: `sudo apt install nvidia-cuda-toolkit` for Ubuntu
+2. Install NVidia's AMGX: https://github.com/NVIDIA/AMGX?tab=readme-ov-file#quickstart
+3. Install `scipy` and `cython` via pip
+3. Install Python wrappers: https://pyamgx.readthedocs.io/en/latest/install.html
+
 # Nonlinear Solver
 
 To derive Newton's method, it is convenient to start with a Taylor series expansion of the residual function:

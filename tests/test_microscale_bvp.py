@@ -103,8 +103,8 @@ u, residual, element_batches = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-        linear_precond_type=PreconditionerType.JACOBI,
+        linear_solve_type=LinearSolverType.AMGX,
+        linear_precond_type=PreconditionerType.NONE,
     ),
     plot_convergence=True
 )
