@@ -614,15 +614,39 @@ pyamgx.initialize()
 
 cfg = pyamgx.Config().create_from_dict(
     {
-        "config_version": 2,
-        "determinism_flag": 1,
-        "exception_handling": 1,
+        "config_version": 2, 
         "solver": {
-            "monitor_residual": 1,
-            "solver": "BICGSTAB",
-            "convergence": "RELATIVE_INI_CORE",
-            "preconditioner": {"solver": "NOSOLVER"},
-        },
+            "preconditioner": {
+                "print_grid_stats": 1, 
+                "print_vis_data": 0, 
+                "solver": "AMG", 
+                "smoother": {
+                    "scope": "jacobi", 
+                    "solver": "BLOCK_JACOBI", 
+                    "monitor_residual": 0, 
+                    "print_solve_stats": 0
+                }, 
+                "print_solve_stats": 0, 
+                "presweeps": 1, 
+                "interpolator": "D2",
+                "max_iters": 1, 
+                "monitor_residual": 0, 
+                "store_res_history": 0, 
+                "scope": "amg", 
+                "max_levels": 50, 
+                "cycle": "W", 
+                "postsweeps": 1
+            }, 
+            "solver": "PCGF", 
+            "print_solve_stats": 1, 
+            "obtain_timings": 1, 
+            "max_iters": 1000, 
+            "monitor_residual": 1, 
+            "convergence": "RELATIVE_INI", 
+            "scope": "main", 
+            "tolerance" : 1e-06, 
+            "norm": "L2"
+        }
     }
 )
 
