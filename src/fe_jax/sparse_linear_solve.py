@@ -5,6 +5,7 @@ import jax.extend as jextend
 from jax.experimental.buffer_callback import buffer_callback
 from jax.experimental import checkify
 from jax.dlpack import from_dlpack
+import jax.dlpack as jdl
 
 from jaxopt import linear_solve as jaxopt_linear_solve
 
@@ -14,6 +15,7 @@ import scipy.sparse
 import scipy.sparse.linalg
 
 # For GPU solvers
+import cupy
 import cupy as cp
 import cupyx.scipy.sparse as cpsparse
 import cupyx.scipy.sparse.linalg as cplinalg
@@ -54,6 +56,7 @@ class LinearSolverType(Enum):
     # TODO MINRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.minres.html
     BICGSTAB_JAXOPT = 40
     BICGSTAB_JAX_SCIPY = 41
+    PETSC = 50
 
 
 @dataclass(eq=True, frozen=True)
@@ -391,6 +394,20 @@ def linear_solve(
                 atol=solver_options.linear_absolute_tol,
             )
 
+        case LinearSolverType.PETSC:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+
+            ctx = __petsc_init(J_sparse)
+            delta_x = __petsc_solve(ctx, -R_0)
+
         case _:
             raise Exception(
                 f"Linear solver type {solver_options.linear_solve_type} is not implemented"
@@ -509,6 +526,7 @@ from cupyx.scipy.sparse.linalg._solve import CusparseLU
 _OBJECT_STORE = {}
 _NEXT_ID = 0
 
+
 def __store_object(obj):
     global _NEXT_ID
     uid = _NEXT_ID
@@ -570,3 +588,62 @@ def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
     return buffer_callback(__cupy_solve_impl, result_info)(ctx.handle, b)
+
+
+##################################################################################################
+# PETSc wrappers
+
+from petsc4py import PETSc
+
+
+def __petsc_init_impl(A: jsparse.CSR):
+    A_petsc = PETSc.Mat()
+    A_petsc.create(PETSc.COMM_WORLD)
+    A_petsc.setSizes([A.shape[0], A.shape[1]])
+    A_petsc.createAIJWithArrays(
+        size=(A.shape[0], A.shape[1]),
+        csr=(
+            cp.asarray(A.indptr).get().astype(np.int32),
+            cp.asarray(A.indices).get().astype(np.int32),
+            cp.asarray(A.data).get(),
+        ),
+    )
+    # NOTE this appears to be moved to CPU for these calls.
+    # TODO figure out how to populate A with GPU arrays.
+    #A_petsc.setType(PETSc.Mat.Type.AIJCUSPARSE)
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(A_petsc)
+    ksp.setType("bcgs")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("none")
+
+    return __store_object(ksp)
+
+
+@jax.jit
+def __petsc_init(A: jsparse.COO) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
+    return __CupyCtx(handle=handle)
+
+
+def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ksp = __retrieve_object(cp.asarray(handle))
+
+    b_petsc = PETSc.Vec()
+    b_petsc.createWithDLPack(cp.asarray(b))
+
+    x_petsc = b_petsc.duplicate()
+    x_petsc.set(0.0)
+
+    ksp.solve(b_petsc, x_petsc)
+
+    cp.asarray(out)[...] = cupy.from_dlpack(x_petsc)
+
+
+@jax.jit
+def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    return buffer_callback(__petsc_solve_impl, result_info)(ctx.handle, b)
