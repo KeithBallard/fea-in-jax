@@ -2,8 +2,8 @@ from helper import *
 
 jax.config.update("jax_enable_x64", True)
 
-import jax.extend
-print(jax.extend.backend.get_backend().platform)
+# import jax.extend
+# print(jax.extend.backend.get_backend().platform)
 
 # from jax_smi import initialise_tracking
 # initialise_tracking()
@@ -74,6 +74,7 @@ def get_properties():
     fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 3].set(7.55e9)  # G_xy
     return (matrix_mat_params_eqm, fiber_mat_params_eqm)
 
+
 matrix_mat_params_eqm, fiber_mat_params_eqm = get_properties()
 print(fiber_mat_params_eqm[0, 0, :])
 
@@ -83,31 +84,38 @@ element_batches = [
         n_dofs_per_basis=2,
         connectivity_en=matrix_cells,
         constitutive_model=elastic_isotropic,
-        material_params_eqm=matrix_mat_params_eqm
+        material_params_eqm=matrix_mat_params_eqm,
     ),
     ElementBatch(
         fe_type=fe_type,
         n_dofs_per_basis=2,
         connectivity_en=fiber_cells,
         constitutive_model=elastic_orthotropic,
-        material_params_eqm=fiber_mat_params_eqm
+        material_params_eqm=fiber_mat_params_eqm,
     ),
 ]
 
+u_0 = jnp.zeros(shape=(V * U))
+
 # Solve the boundary value problem
-u, residual, element_batches = solve_bvp(
+#u, residual, element_batches = 
+result = timeit(
+    solve_bvp,
+    # timeit args
+    n_calls=3,
+    # args passed along to solve_bvp
     element_residual_func=linear_elasticity_residual,
     vertices_vd=points,
     element_batches=element_batches,
-    u_0_g=jnp.zeros(shape=(V * U)),
+    u_0_g=u_0,
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.AMGX,
-        linear_precond_type=PreconditionerType.NONE,
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+        linear_precond_type=PreconditionerType.JACOBI
     ),
-    plot_convergence=True
 )
+u, residual, element_batches = result[0]
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)
 

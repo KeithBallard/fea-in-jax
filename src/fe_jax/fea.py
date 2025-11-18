@@ -59,25 +59,25 @@ class ElementBatchCollection:
     B: int = struct.field(pytree_node=False)
     # Number of elements for each batch
     # Note: static, not traced
-    E: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    E: tuple[int, ...] = struct.field(pytree_node=False)
     # Number of nodes per element for each batch
     # Note: static, not traced
-    N: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    N: tuple[int, ...] = struct.field(pytree_node=False)
     # Number of degrees of freedom (unknowns) per a node for each batch
     # Note: static, not traced
-    U: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    U: tuple[int, ...] = struct.field(pytree_node=False)
     # Number of quadrature points per an element for each batch
     # Note: static, not traced
-    Q: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    Q: tuple[int, ...] = struct.field(pytree_node=False)
     # Dimensionality of parametric coordinate system for each batch
     # Note: static, not traced
-    P: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    P: tuple[int, ...] = struct.field(pytree_node=False)
     # Number of material parameters required for each batch (at a point)
     # Note: static, not traced
-    M: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    M: tuple[int, ...] = struct.field(pytree_node=False)
     # Number of internal state variables required for each batch (at a point)
     # Note: static, not traced
-    I: np.ndarray[Any, np.dtype[np.int64]] = struct.field(pytree_node=False)
+    I: tuple[int, ...] = struct.field(pytree_node=False)
 
     # --- Mesh / property / state information ---
 
@@ -106,7 +106,9 @@ class ElementBatchCollection:
 
     # Constitutive model for each batch, length=B
     # Note: static, not traced
-    constitutive_models: list[jax.tree_util.Partial] = struct.field(pytree_node=False)
+    constitutive_models: tuple[jax.tree_util.Partial, ...] = struct.field(
+        pytree_node=False
+    )
 
     # --- Offsets / sizes into expanded arrays for slicing ---
 
@@ -124,20 +126,16 @@ class ElementBatchCollection:
     # Offset for each batch into `material_params`, shape=(B+1,)
     material_params_offsets: jnp.ndarray
     # Size of each batch stored in `material_params`, shape=(B,)
-    material_params_sizes: np.ndarray[Any, np.dtype[np.int64]] = struct.field(
-        pytree_node=False
-    )
+    material_params_sizes: tuple[int, ...] = struct.field(pytree_node=False)
     # Offset for each batch into `internal_state`, shape=(B+1,)
     internal_state_offsets: jnp.ndarray
     # Size of each batch stored in `internal_state`, shape=(B,)
-    internal_state_sizes: np.ndarray[Any, np.dtype[np.int64]] = struct.field(
-        pytree_node=False
-    )
+    internal_state_sizes: tuple[int, ...] = struct.field(pytree_node=False)
 
     # Type of quadrature / basis for each batch, which can be either same quadrature / basis
     # for the entire batch or a different set of quad points / basis for each element.
     # Note: static, not traced
-    quadrature_types: list[QuadratureArrayType] = struct.field(pytree_node=False)
+    quadrature_types: tuple[QuadratureArrayType, ...] = struct.field(pytree_node=False)
     # Offset for each batch into `xi`, shape=(B+1,)
     xi_offsets: jnp.ndarray
     # Offset for each batch into `weights`, shape=(B+1,)
@@ -312,18 +310,16 @@ def batch_to_collection(
     """
     Converts a list of ElementBatch's to a BatchCollection, which is ameniable to JIT operations.
     """
-    E = np.array([b.connectivity_en.shape[0] for b in element_batches])
-    N = np.array([b.connectivity_en.shape[1] for b in element_batches])
-    U = np.array([b.n_dofs_per_basis for b in element_batches])
-    Q = np.array(
-        [get_quadrature(fe_type=b.fe_type)[0].shape[0] for b in element_batches]
-    )
-    M = np.array([b.material_params_eqm.shape[-1] for b in element_batches])
-    I = np.array(
-        [
+    E = tuple((b.connectivity_en.shape[0] for b in element_batches))
+    N = tuple((b.connectivity_en.shape[1] for b in element_batches))
+    U = tuple((b.n_dofs_per_basis for b in element_batches))
+    Q = tuple((get_quadrature(fe_type=b.fe_type)[0].shape[0] for b in element_batches))
+    M = tuple((b.material_params_eqm.shape[-1] for b in element_batches))
+    I = tuple(
+        (
             b.internal_state_eqi.shape[-1] if b.internal_state_eqi is not None else 0
             for b in element_batches
-        ]
+        )
     )
 
     xi_bqp, W_bq = zip(*[get_quadrature(fe_type=b.fe_type) for b in element_batches])
@@ -348,7 +344,7 @@ def batch_to_collection(
         U=U,
         Q=Q,
         M=M,
-        P=np.array([xi_qp.shape[-1] for xi_qp in xi_bqp]),
+        P=tuple([xi_qp.shape[-1] for xi_qp in xi_bqp]),
         I=I,
         # --- Mesh / property / state information ---
         x=jnp.hstack([x_end.ravel() for x_end in x_bend]),
@@ -374,11 +370,13 @@ def batch_to_collection(
         phi=jnp.hstack([phi_qn.ravel() for phi_qn in phi_bqn]),
         dphi_dxi=jnp.hstack([dphi_dxi_qnp.ravel() for dphi_dxi_qnp in dphi_dxi_bqnp]),
         # --- Callable functions ---
-        constitutive_models=[
-            jax.tree_util.Partial(b.constitutive_model) for b in element_batches
-        ],
+        constitutive_models=tuple(
+            [jax.tree_util.Partial(b.constitutive_model) for b in element_batches]
+        ),
         # --- Offsets / sizes into expanded arrays for slicing ---
-        EN_offsets=jnp.hstack([jnp.array([0]), jnp.cumsum(E * N)]),
+        EN_offsets=jnp.hstack(
+            [jnp.array([0]), jnp.cumsum(jnp.array(E) * jnp.array(N))]
+        ),
         material_params_types=[
             MaterialPropertyArrayType(len(b.material_params_eqm.shape))
             for b in element_batches
@@ -391,7 +389,7 @@ def batch_to_collection(
                 ),
             ]
         ),
-        material_params_sizes=np.array(
+        material_params_sizes=tuple(
             [b.material_params_eqm.size for b in element_batches]
         ),
         internal_state_offsets=jnp.hstack(
@@ -411,13 +409,13 @@ def batch_to_collection(
                 ),
             ]
         ),
-        internal_state_sizes=np.array(
+        internal_state_sizes=tuple(
             [
                 b.internal_state_eqi.size if b.internal_state_eqi is not None else 0
                 for b in element_batches
             ]
         ),
-        quadrature_types=[QuadratureArrayType.Q for b in element_batches],
+        quadrature_types=tuple([QuadratureArrayType.Q for b in element_batches]),
         xi_offsets=jnp.hstack(
             [
                 jnp.array([0]),
@@ -1152,7 +1150,7 @@ def solve_bvp(
     # print(ebc)
 
     assert (
-        ebc.U == ebc.U[0]
+        np.array(ebc.U) == ebc.U[0]
     ).all(), """The number of DoFs per a point (U) must be the same across all batches.
     To relax this constrain much of the infrastructure code in fea.py would have to be adapted to
     support varying number of DoFs per a batch.
