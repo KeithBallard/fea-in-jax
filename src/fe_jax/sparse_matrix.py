@@ -148,6 +148,7 @@ def coo_to_csr(A: jsparse.COO):
     # This is a cumulative sum of the non-zero counts per row.
     # The first element of indptr is always 0.
     indptr = jnp.concatenate([jnp.array([0]), jnp.cumsum(nnz_per_row)])
+    jax.debug.print("indptr: {}", indptr)
 
     return jsparse.CSR((data, cols, indptr), shape=A.shape)
 

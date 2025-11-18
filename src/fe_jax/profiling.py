@@ -68,13 +68,13 @@ def timer(time_jit=False, n_calls=1):
 
 def timeit(
     f: Callable,
-    fixed_kwargs: dict,
-    generated_kwargs: dict,
+    generated_kwargs: dict = {},
     time_jit: bool = True,
     n_calls: int = 1,
     timings_figure_filepath: str = "",
     return_timing = False,
-    return_memory = False
+    return_memory = False,
+    **fixed_kwargs
 ):
     """
     Times a function call, possibly timing just-in-time compilation on the first call and takes
