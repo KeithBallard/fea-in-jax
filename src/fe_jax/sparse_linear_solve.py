@@ -600,6 +600,7 @@ def __petsc_init_impl(A: jsparse.CSR):
     A_petsc = PETSc.Mat()
     A_petsc.create(PETSc.COMM_WORLD)
     A_petsc.setSizes([A.shape[0], A.shape[1]])
+    
     A_petsc.createAIJWithArrays(
         size=(A.shape[0], A.shape[1]),
         csr=(
@@ -612,6 +613,7 @@ def __petsc_init_impl(A: jsparse.CSR):
     # TODO figure out how to populate A with GPU arrays.
     #A_petsc.setType(PETSc.Mat.Type.AIJCUSPARSE)
 
+
     ksp = PETSc.KSP().create()
     ksp.setOperators(A_petsc)
     ksp.setType("bcgs")
@@ -621,9 +623,12 @@ def __petsc_init_impl(A: jsparse.CSR):
     return __store_object(ksp)
 
 
+
+
 @jax.jit
 def __petsc_init(A: jsparse.COO) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    print("got result shape")
     handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
     return __CupyCtx(handle=handle)
 
@@ -632,15 +637,36 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     # Retrieve the opaque object using the handle
     ksp = __retrieve_object(cp.asarray(handle))
 
+    print("fetched ksp")
+
+    barray = cp.asarray(b)
+
+    print(type(barray))
+
     b_petsc = PETSc.Vec()
-    b_petsc.createWithDLPack(cp.asarray(b))
+
+    b_petsc.createWithArray(cp.asnumpy(barray))
+    print("converted to array")
+
 
     x_petsc = b_petsc.duplicate()
     x_petsc.set(0.0)
 
-    ksp.solve(b_petsc, x_petsc)
+    n = 3
 
-    cp.asarray(out)[...] = cupy.from_dlpack(x_petsc)
+    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+    
+    ksp.setConvergenceHistory(n)
+    ksp.solve(b_petsc,x_petsc)
+
+    convergenceHist = ksp.getConvergenceHistory()
+
+    print(convergenceHist)
+    print(x_petsc.view())
+
+    cp.asarray(out)[...] = convergenceHist
+
+    
 
 
 @jax.jit
