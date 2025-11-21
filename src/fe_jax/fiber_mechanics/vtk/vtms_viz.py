@@ -6,9 +6,21 @@ from vtkmodules.numpy_interface.dataset_adapter import numpyTovtkDataArray as np
 
 def to_vtk_polydata(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkPolyData:
     """
-    Given an entire fabric, creates a VTK object to render each fiber as a poly line.
-    """
+    Converts a fabric or bundle object into VTK PolyData lines with attributes.
 
+    Generates a polyline for every fiber and attaches point-data arrays for
+    tow ID, fiber ID, material ID, and radius.
+
+    Parameters
+    ----------
+    vtms_obj : VTMSFabric | VTMSBundle
+        The fabric or bundle data structure to convert.
+
+    Returns
+    -------
+    vtk.vtkPolyData
+        The combined polydata object containing lines for all fibers.
+    """
     append_polydata = vtk.vtkAppendPolyData()
 
     fiber_id = 0
@@ -63,7 +75,20 @@ def to_vtk_polydata(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkPolyData:
 
 def to_vtk_tubes(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkTubeFilter:
     """
-    Given an entire fabric, creates a VTK object to render each fiber as a tube.
+    Creates a VTK Tube Filter to render fibers as volumetric tubes.
+
+    Uses the radius attribute attached to the polydata (via `to_vtk_polydata`) 
+    to vary the tube thickness.
+
+    Parameters
+    ----------
+    vtms_obj : VTMSFabric | VTMSBundle
+        The fabric or bundle data structure to convert.
+
+    Returns
+    -------
+    vtk.vtkTubeFilter
+        The configured tube filter (connect to a mapper or writer to use).
     """
     tube_filter = vtk.vtkTubeFilter()
     tube_filter.SetInputData(to_vtk_polydata(vtms_obj))
@@ -77,9 +102,17 @@ def to_vtk_tubes(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkTubeFilter:
 
 def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as_tubes = True):
     """
-    TODO document
+    Writes the fabric geometry to a legacy .vtk file.
 
-    NOTE Requires `vtk` Python library
+    Parameters
+    ----------
+    vtms_obj : VTMSFabric | VTMSBundle
+        The data object to write.
+    filepath : str | Path
+        The destination file path.
+    fibers_as_tubes : bool, optional
+        If True, generates 3D tubes based on fiber radius. If False, writes
+        simple polylines. Default is True.
     """
     filepath = Path(filepath)
 
@@ -96,9 +129,15 @@ def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as
 
 def render(vtms_obj: VTMSFabric | VTMSBundle, fibers_as_tubes = True):
     """
-    TODO document
+    Opens an interactive VTK window to visualize the fabric.
 
-    NOTE Requires `vtk` Python library
+    Parameters
+    ----------
+    vtms_obj : VTMSFabric | VTMSBundle
+        The data object to render.
+    fibers_as_tubes : bool, optional
+        If True, renders fibers as 3D tubes. If False, renders as lines.
+        Default is True.
     """
     mesh_mapper = vtk.vtkPolyDataMapper()
     if not fibers_as_tubes:

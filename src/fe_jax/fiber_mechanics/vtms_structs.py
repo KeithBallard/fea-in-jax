@@ -89,7 +89,20 @@ class VTMSFabric:
 
 def read_fabric(filepath: str | Path) -> VTMSFabric:
     """
-    TODO document
+    Reads a fabric definition file and aggregates the referenced fiber bundles.
+
+    Parses a fabric file to identify individual bundle files, reads them
+    recursively, and flattens their data into a single `VTMSFabric` structure.
+
+    Parameters
+    ----------
+    filepath : str | Path
+        Path to the fabric file containing metadata and a list of bundle filenames.
+
+    Returns
+    -------
+    VTMSFabric
+        The aggregated fabric object containing combined data from all bundles.
     """
     filepath = Path(filepath)
     assert filepath.is_file(), f"File {filepath} did not exist."
@@ -127,7 +140,18 @@ def read_fabric(filepath: str | Path) -> VTMSFabric:
 
 def read_fib(filepath: str | Path) -> VTMSBundle:
     """
-    TODO document
+    Reads a single fiber bundle file and parses its geometry and properties.
+
+    Parameters
+    ----------
+    filepath : str | Path
+        Path to the fiber bundle file to be read.
+
+    Returns
+    -------
+    VTMSBundle
+        The parsed fiber bundle object containing point data, offsets,
+        and material properties.
     """
     filepath = Path(filepath)
 
