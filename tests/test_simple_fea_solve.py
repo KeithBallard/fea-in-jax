@@ -73,7 +73,7 @@ print("dirichlet_values = ", dirichlet_values)
 tmp_mat_params = np.zeros((E, Q, 2))
 tmp_mat_params[..., 0] = 30e6
 tmp_mat_params[..., 1] = 0.25
-mat_params_eqp = jnp.array(tmp_mat_params)
+mat_params_ep = jnp.array(tmp_mat_params)
 
 # Setup element batches
 element_batches = [
@@ -82,14 +82,14 @@ element_batches = [
         n_dofs_per_basis=U,
         connectivity_en=cells[:1,:],
         constitutive_model=elastic_isotropic,
-        material_params_eqm=mat_params_eqp[:1,:]
+        material_params=mat_params_ep[:1,:]
     ),
     ElementBatch(
         fe_type=fe_type,
         n_dofs_per_basis=U,
         connectivity_en=cells[1:,:],
         constitutive_model=elastic_isotropic,
-        material_params_eqm=mat_params_eqp[1:,:]
+        material_params=mat_params_ep[1:,:]
     ),
 ]
 
@@ -102,9 +102,7 @@ u, residual, new_internal_state_beqi = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.DIRECT_SPARSE_SOLVE_JNP,
-        linear_relative_tol=1e-2,
-        linear_absolute_tol=0,
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
     ),
 )
 
@@ -117,3 +115,86 @@ assert u[4] == u[6] == 0.0
 # Write output
 mesh.point_data["u"] = u.reshape((points.shape[0], U))
 mesh.write(get_output("test_simple_fea_solve_out.vtk"))
+
+
+#################################################################################################
+# Now verify that material properties could be given on a per element or per batch basis
+
+# Material properties
+tmp_mat_params = np.zeros((E, 2))
+tmp_mat_params[..., 0] = 30e6
+tmp_mat_params[..., 1] = 0.25
+mat_params_ep = jnp.array(tmp_mat_params)
+
+# Setup element batches
+element_batches = [
+    ElementBatch(
+        fe_type=fe_type,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[:1,:],
+        constitutive_model=elastic_isotropic,
+        material_params=mat_params_ep[:1,:]
+    ),
+    ElementBatch(
+        fe_type=fe_type,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[1:,:],
+        constitutive_model=elastic_isotropic,
+        material_params=mat_params_ep[1:,:]
+    ),
+]
+
+# Solve the boundary value problem
+u2, residual, new_internal_state_beqi = solve_bvp(
+    element_residual_func=linear_elasticity_residual,
+    vertices_vd=points,
+    element_batches=element_batches,
+    u_0_g=jnp.zeros(shape=(V * U)),
+    dirichlet_bcs=dirichlet_bcs,
+    dirichlet_values=dirichlet_values,
+    solver_options=SolverOptions(
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+    ),
+)
+
+assert jnp.isclose(u, u2).all()
+
+
+# Material properties
+tmp_mat_params = np.zeros((2,))
+tmp_mat_params[..., 0] = 30e6
+tmp_mat_params[..., 1] = 0.25
+mat_params_ep = jnp.array(tmp_mat_params)
+
+# Setup element batches
+element_batches = [
+    ElementBatch(
+        fe_type=fe_type,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[:1,:],
+        constitutive_model=elastic_isotropic,
+        material_params=mat_params_ep[:1]
+    ),
+    ElementBatch(
+        fe_type=fe_type,
+        n_dofs_per_basis=U,
+        connectivity_en=cells[1:,:],
+        constitutive_model=elastic_isotropic,
+        material_params=mat_params_ep[1:]
+    ),
+]
+
+# Solve the boundary value problem
+u2, residual, new_internal_state_beqi = solve_bvp(
+    element_residual_func=linear_elasticity_residual,
+    vertices_vd=points,
+    element_batches=element_batches,
+    u_0_g=jnp.zeros(shape=(V * U)),
+    dirichlet_bcs=dirichlet_bcs,
+    dirichlet_values=dirichlet_values,
+    solver_options=SolverOptions(
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+    ),
+)
+
+assert jnp.isclose(u, u2).all()

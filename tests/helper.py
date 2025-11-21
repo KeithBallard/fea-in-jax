@@ -18,5 +18,8 @@ os.environ["XLA_FLAGS"] = (
 def get_mesh(mesh_name: str):
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'meshes', mesh_name)
 
+def get_fabric(fabric_name: str):
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'fabrics', fabric_name, f'{fabric_name}.fab')
+
 def get_output(filename: str):
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'output', filename)

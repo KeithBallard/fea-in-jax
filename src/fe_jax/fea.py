@@ -21,15 +21,57 @@ class ElementBatch:
     Describes a batch of elements. Passed into solve_bvp()
     """
 
-    fe_type: FiniteElementType = struct.field(pytree_node=False)
+    # Defines the type of finite element formulation (basis functions and quadrature) for the
+    # elements in this batch.
+    fe_type: FiniteElementType
     # Number of degrees of freedom per basis function (typically also per a node)
     n_dofs_per_basis: int
     # List of vertex indices for each element (refers to list of vertices passed to solve_bvp(),
     # not internal batch numbering)
     connectivity_en: np.ndarray[Any, np.dtype[np.uint64]]
-    constitutive_model: Callable = struct.field(pytree_node=False)
-    material_params_eqm: jnp.ndarray
-    internal_state_eqi: jnp.ndarray | None = None
+    # A callable constitutive model for the batch of elements, which is passed along to the residual
+    # function as an argument to perform the residual calculation.
+    constitutive_model: Callable
+    # Array can 1, 2, or 3 dimensions depending on whether parameters are defined 1) the same
+    # for all quad points / elements in the batch [shape should be (M,)], 2) the same for all quad points
+    # but varying across elements [shape should be (E, M)], or 3) varying across each quad point /
+    # element in the batch [shape should be (E, Q, M)], respectively.
+    material_params: jnp.ndarray
+    # Array can 2 or 3 dimensions depending on whether state variables are defined 1) the same for
+    # all quad points but varying across elements [shape should be (E, I)], or 3) varying across
+    # each quad point / element in the batch [shape should be (E, Q, I)], respectively.
+    internal_state: jnp.ndarray | None = None
+
+    def __post_init__(self):
+        Q = get_quadrature(fe_type=self.fe_type)[0].shape[0]
+        if len(self.material_params.shape) == 2:
+            # Dimensions should be (E, M)
+            assert (
+                self.material_params.shape[0] == self.connectivity_en.shape[0]
+            ), f"`material_params` had dimension 2, which means the shape should be (E, M). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `material_params.shape[0]` ({self.material_params.shape[0]})"
+        elif len(self.material_params.shape) == 3:
+            # Dimensions should be (E, Q, M)
+            assert (
+                self.material_params.shape[0] == self.connectivity_en.shape[0]
+            ), f"`material_params` had dimension 3, which means the shape should be (E, Q, M). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `material_params.shape[0]` ({self.material_params.shape[0]})"
+            assert (
+                self.material_params.shape[1] == Q
+            ), f"`material_params` had dimension 3, which means the shape should be (E, Q, M). However, `fe_type` results in Q = {Q}, which did not match `material_params.shape[1]` ({self.material_params.shape[1]})"
+        if self.internal_state is not None:
+            if len(self.internal_state.shape) == 2:
+                # Dimensions should be (E, I)
+                assert (
+                    self.internal_state.shape[0] == self.connectivity_en.shape[0]
+                ), f"`internal_state` had dimension 2, which means the shape should be (E, I). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `internal_state.shape[0]` ({self.internal_state.shape[0]})"
+            elif len(self.internal_state.shape) == 3:
+                # Dimensions should be (E, Q, M)
+                assert (
+                    self.internal_state.shape[0] == self.connectivity_en.shape[0]
+                ), f"`internal_state` had dimension 3, which means the shape should be (E, Q, I). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `internal_state.shape[0]` ({self.internal_state.shape[0]})"
+                assert (
+                    self.internal_state.shape[1] == Q
+                ), f"`internal_state` had dimension 3, which means the shape should be (E, Q, I). However, `fe_type` results in Q = {Q}, which did not match `internal_state.shape[1]` ({self.internal_state.shape[1]})"
+
 
 
 class MaterialPropertyArrayType(Enum):
@@ -185,13 +227,13 @@ class ElementBatchCollection:
                 return jax.lax.dynamic_slice(
                     self.material_params,
                     start_indices=(self.material_params_offsets[i],),
-                    slice_sizes=(self.E[i] * self.Q[i] * self.M[i],),
+                    slice_sizes=(self.E[i] * self.M[i],),
                 ).reshape((self.E[i], self.M[i]))
-            case _:  # E
+            case _:  # M
                 return jax.lax.dynamic_slice(
                     self.material_params,
                     start_indices=(self.material_params_offsets[i],),
-                    slice_sizes=(self.E[i] * self.Q[i] * self.M[i],),
+                    slice_sizes=(self.M[i],),
                 ).reshape((self.M[i],))
 
     @partial(jax.jit, static_argnames="i")
@@ -314,10 +356,10 @@ def batch_to_collection(
     N = tuple((b.connectivity_en.shape[1] for b in element_batches))
     U = tuple((b.n_dofs_per_basis for b in element_batches))
     Q = tuple((get_quadrature(fe_type=b.fe_type)[0].shape[0] for b in element_batches))
-    M = tuple((b.material_params_eqm.shape[-1] for b in element_batches))
+    M = tuple((b.material_params.shape[-1] for b in element_batches))
     I = tuple(
         (
-            b.internal_state_eqi.shape[-1] if b.internal_state_eqi is not None else 0
+            b.internal_state.shape[-1] if b.internal_state is not None else 0
             for b in element_batches
         )
     )
@@ -352,13 +394,13 @@ def batch_to_collection(
             [b.connectivity_en.ravel() for b in element_batches], dtype=jnp.int64
         ),
         material_params=jnp.hstack(
-            [b.material_params_eqm.ravel() for b in element_batches]
+            [b.material_params.ravel() for b in element_batches]
         ),
         internal_state=jnp.hstack(
             [
                 (
-                    b.internal_state_eqi.ravel()
-                    if b.internal_state_eqi is not None
+                    b.internal_state.ravel()
+                    if b.internal_state is not None
                     else jnp.zeros(shape=(E[i], Q[i], I[i])).ravel()
                 )
                 for i, b in enumerate(element_batches)
@@ -378,19 +420,19 @@ def batch_to_collection(
             [jnp.array([0]), jnp.cumsum(jnp.array(E) * jnp.array(N))]
         ),
         material_params_types=[
-            MaterialPropertyArrayType(len(b.material_params_eqm.shape))
+            MaterialPropertyArrayType(len(b.material_params.shape))
             for b in element_batches
         ],
         material_params_offsets=jnp.hstack(
             [
                 jnp.array([0]),
                 jnp.cumsum(
-                    jnp.array([b.material_params_eqm.size for b in element_batches])
+                    jnp.array([b.material_params.size for b in element_batches])
                 ),
             ]
         ),
         material_params_sizes=tuple(
-            [b.material_params_eqm.size for b in element_batches]
+            [b.material_params.size for b in element_batches]
         ),
         internal_state_offsets=jnp.hstack(
             [
@@ -399,8 +441,8 @@ def batch_to_collection(
                     jnp.array(
                         [
                             (
-                                b.internal_state_eqi.size
-                                if b.internal_state_eqi is not None
+                                b.internal_state.size
+                                if b.internal_state is not None
                                 else 0
                             )
                             for b in element_batches
@@ -411,7 +453,7 @@ def batch_to_collection(
         ),
         internal_state_sizes=tuple(
             [
-                b.internal_state_eqi.size if b.internal_state_eqi is not None else 0
+                b.internal_state.size if b.internal_state is not None else 0
                 for b in element_batches
             ]
         ),
@@ -482,8 +524,8 @@ def _calculate_jacobian_batch_element_kernel(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    material_params_eqm: jnp.ndarray,
-    internal_state_eqi: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state: jnp.ndarray,
 ) -> jnp.ndarray:
     """
     Calculates the element-level jacobian matrices for a batch of elements without any modification
@@ -518,7 +560,7 @@ def _calculate_jacobian_batch_element_kernel(
         return R_nu.reshape(N * U)
 
     J_ett = jax.vmap(jax.jacfwd(residual_kernel, argnums=0))(
-        u_et, x_end, material_params_eqm, internal_state_eqi
+        u_et, x_end, material_params, internal_state
     )
 
     assert J_ett.shape == (
@@ -534,8 +576,8 @@ def _calculate_jacobian_batch_element_kernel(
 def _calculate_jacobian_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
-    material_params_eqm: jnp.ndarray,
-    internal_state_eqi: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state: jnp.ndarray,
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
@@ -560,8 +602,8 @@ def _calculate_jacobian_coo_terms_batch(
         x_end=x_end,
         dphi_dxi_qnp=dphi_dxi_qnp,
         W_q=W_q,
-        material_params_eqm=material_params_eqm,
-        internal_state_eqi=internal_state_eqi,
+        material_params=material_params,
+        internal_state=internal_state,
     )
     # debug_print(J_ett)
 
@@ -586,8 +628,8 @@ def calculate_jacobian_wo_dirichlet(
             _calculate_jacobian_coo_terms_batch(
                 element_residual_func=element_residual_func,
                 constitutive_model=ebc.constitutive_models[i],
-                material_params_eqm=ebc.get_material_params(i),
-                internal_state_eqi=ebc.get_internal_state(i),
+                material_params=ebc.get_material_params(i),
+                internal_state=ebc.get_internal_state(i),
                 x_end=ebc.get_x(i),
                 dphi_dxi_qnp=ebc.get_dphi_dxi(i),
                 W_q=ebc.get_weights(i),
@@ -626,8 +668,8 @@ def _calculate_jacobian_diag_batch_element_kernel(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    material_params_eqm: jnp.ndarray,
-    internal_state_eqi: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state: jnp.ndarray,
 ) -> jnp.ndarray:
     """
     Calculates the element-level jacobian matrices for a batch of elements without any modification
@@ -669,7 +711,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
             )
         )
 
-    diag_J_et = vmap_diag_J(u_et, x_end, material_params_eqm, internal_state_eqi)
+    diag_J_et = vmap_diag_J(u_et, x_end, material_params, internal_state)
 
     assert diag_J_et.shape == (
         E,
@@ -683,8 +725,8 @@ def _calculate_jacobian_diag_batch_element_kernel(
 def _calculate_jacobian_diag_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
-    material_params_eqm: jnp.ndarray,
-    internal_state_eqi: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state: jnp.ndarray,
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
@@ -706,8 +748,8 @@ def _calculate_jacobian_diag_coo_terms_batch(
         x_end=x_end,
         dphi_dxi_qnp=dphi_dxi_qnp,
         W_q=W_q,
-        material_params_eqm=material_params_eqm,
-        internal_state_eqi=internal_state_eqi,
+        material_params=material_params,
+        internal_state=internal_state,
     )
     # debug_print(diag_J_et)
 
@@ -731,8 +773,8 @@ def calculate_jacobian_diag_wo_dirichlet(
             _calculate_jacobian_diag_coo_terms_batch(
                 element_residual_func=element_residual_func,
                 constitutive_model=ebc.constitutive_models[i],
-                material_params_eqm=ebc.get_material_params(i),
-                internal_state_eqi=ebc.get_internal_state(i),
+                material_params=ebc.get_material_params(i),
+                internal_state=ebc.get_internal_state(i),
                 x_end=ebc.get_x(i),
                 dphi_dxi_qnp=ebc.get_dphi_dxi(i),
                 W_q=ebc.get_weights(i),
@@ -759,8 +801,8 @@ def calculate_jacobian_diag_wo_dirichlet(
 def _calculate_residual_wo_dirichlet_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
-    material_params_eqm: jnp.ndarray,
-    internal_state_eqi: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state: jnp.ndarray,
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
@@ -786,23 +828,23 @@ def _calculate_residual_wo_dirichlet_batch(
             0,  # x_end -> x_nd
             None,  # dphi_dxi_qnp
             None,  # W_q
-            0,  # material_params_eqm -> material_params_qm
-            0,  # internal_state_eqi -> internal_state_qi
+            None if material_params.ndim < 3 else 0,  # material_params_eqm -> material_params_qm
+            None if internal_state.ndim < 3 else 0,  # internal_state_eqi -> internal_state_qi
             None,  # constitutive_model
         ),
     )
 
-    R_enu, internal_state_eqi = R_vmap(
+    R_enu, internal_state = R_vmap(
         u_enu,
         x_end,
         dphi_dxi_qnp,
         W_q,
-        material_params_eqm,
-        internal_state_eqi,
+        material_params,
+        internal_state,
         constitutive_model,
     )
 
-    return R_enu, internal_state_eqi
+    return R_enu, internal_state
 
 
 def calculate_residual_wo_dirichlet(
@@ -829,8 +871,8 @@ def calculate_residual_wo_dirichlet(
         _calculate_residual_wo_dirichlet_batch(
             element_residual_func=element_residual_func,
             constitutive_model=ebc.constitutive_models[i],
-            material_params_eqm=ebc.get_material_params(i),
-            internal_state_eqi=ebc.get_internal_state(i),
+            material_params=ebc.get_material_params(i),
+            internal_state=ebc.get_internal_state(i),
             x_end=ebc.get_x(i),
             dphi_dxi_qnp=ebc.get_dphi_dxi(i),
             W_q=ebc.get_weights(i),
@@ -838,7 +880,7 @@ def calculate_residual_wo_dirichlet(
             u_f=u_f,
         )
         for i in range(ebc.B)
-    ]  # for each item, 0: R_end, 1: internal_state_eqi
+    ]  # for each item, 0: R_end, 1: internal_state
 
     R_f = jnp.zeros_like(u_f)
     for i in range(ebc.B):
@@ -854,11 +896,11 @@ def calculate_residual_wo_dirichlet(
     # Keeping this implementation here to revisit for optimization.
     """
     def fori_body(i, R_f) -> jnp.ndarray:
-        R_enu, internal_state_eqi = _calculate_residual_wo_dirichlet_batch(
+        R_enu, internal_state = _calculate_residual_wo_dirichlet_batch(
             element_residual_func=element_residual_func,
             constitutive_model=constitutive_model_b[i],
-            material_params_eqm=material_params_beqm[i],
-            internal_state_eqi=internal_state_beqi[i],
+            material_params=material_params_beqm[i],
+            internal_state=internal_state_beqi[i],
             x_end=x_bend[i],
             dphi_dxi_qnp=dphi_dxi_bqnp[i],
             W_q=W_bq[i],
@@ -1133,7 +1175,6 @@ def solve_bvp(
     assert dirichlet_bcs.shape[1] == 2
     assert dirichlet_values.shape[0] == dirichlet_bcs.shape[0]
     for b in element_batches:
-        assert b.connectivity_en.shape[0] == b.material_params_eqm.shape[0]
         assert b.connectivity_en.shape[1] <= V
 
     # Wrap the provided callable to be compatible with jit
@@ -1205,8 +1246,8 @@ def solve_bvp(
     )
     is_mat_params_homogeneous = all(
         map(
-            lambda b: b.material_params_eqm.shape
-            == element_batches[0].material_params_eqm.shape,
+            lambda b: b.material_params.shape
+            == element_batches[0].material_params.shape,
             element_batches,
         )
     )
@@ -1251,7 +1292,7 @@ def solve_bvp(
     # Update internal state variables for the element batches
     # TODO need to update
     # for i, b in enumerate(element_batches):
-    #    b.internal_state_eqi = internal_state_beqi[i]
+    #    b.internal_state = internal_state_beqi[i]
 
     # capture memory usage after and analyze
     if profile_memory:
