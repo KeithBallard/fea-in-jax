@@ -46,7 +46,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../../src") #every time python imports from a parent directory an angel weeps
 
-
+import jax
+print(jax.devices())
 
 
 def get_petsc_location():
@@ -69,8 +70,7 @@ def get_petsc_location():
             return None
 
 
-get_petsc_location()
-exit(1)
+
 
 
 
