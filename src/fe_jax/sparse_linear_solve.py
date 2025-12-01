@@ -661,10 +661,12 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     convergenceHist = ksp.getConvergenceHistory()
 
-    print(convergenceHist)
-    print(x_petsc.view())
+    #print(convergenceHist)
+    print(x_petsc.getArray())
 
-    cp.asarray(out)[...] = convergenceHist
+    cp.asarray(out)[...] = x_petsc.getArray()
+
+    print("reached")
 
     
 
