@@ -526,6 +526,8 @@ from cupyx.scipy.sparse.linalg._solve import CusparseLU
 _OBJECT_STORE = {}
 _NEXT_ID = 0
 
+_SOLUTION_STORE = {} #THIS IS MEANT TO HOLD A SOLUTION VECTOR FOR PETSC
+
 
 def __store_object(obj):
     global _NEXT_ID
@@ -537,6 +539,16 @@ def __store_object(obj):
 
 def __retrieve_object(uid):
     return _OBJECT_STORE[int(uid)]
+
+
+def __store_solution(obj):
+    global _NEXT_ID
+    uid = _NEXT_ID
+    _SOLUTION_STORE[uid] = obj
+    return np.int64(uid)
+
+def __retrieve_solution(uid):
+    return _SOLUTION_STORE[int(uid)]   #For now each object gets it's own solution vector. In theory it'd be better to do this some other way, but we'll worry about that later.
 
 
 @struct.dataclass
@@ -611,7 +623,7 @@ def __petsc_init_impl(A: jsparse.CSR):
     )
     # NOTE this appears to be moved to CPU for these calls.
     # TODO figure out how to populate A with GPU arrays.
-    #A_petsc.setType(PETSc.Mat.Type.AIJCUSPARSE)
+    A_petsc.setType("aij")
 
 
     ksp = PETSc.KSP().create()
@@ -619,6 +631,9 @@ def __petsc_init_impl(A: jsparse.CSR):
     ksp.setType("bcgs")
     ksp.setConvergenceHistory()
     ksp.getPC().setType("none")
+
+
+
 
     return __store_object(ksp)
 
@@ -641,8 +656,6 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     barray = cp.asarray(b)
 
-    print(type(barray))
-
     b_petsc = PETSc.Vec()
 
     b_petsc.createWithArray(cp.asnumpy(barray))
@@ -662,10 +675,13 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     convergenceHist = ksp.getConvergenceHistory()
 
     #print(convergenceHist)
-    print(cp.asarray((x_petsc.getArray())))
+    print("solution",cp.asarray((x_petsc.getArray())))
+
+    __store_solution(cp.asarray((x_petsc.getArray())))
 
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
-
+    
+    
 
     
 
@@ -674,3 +690,4 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
     return buffer_callback(__petsc_solve_impl, result_info)(ctx.handle, b)
+

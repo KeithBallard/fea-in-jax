@@ -89,8 +89,11 @@ jaxCOO = jsp.coo_fromdense(A_sp.todense())
 testVec = jnp.array([1,2,3])
 
 matDictVal = sparse_linear_solve.__petsc_init(jaxCOO)
-solutionObject = sparse_linear_solve.__petsc_solve(matDictVal,testVec)
-print(solutionObject)
+print("matDictVal",matDictVal.handle)
+solutionCall = sparse_linear_solve.__petsc_solve(matDictVal,testVec)    #this +1 is here because the creation of an object increases the global counter, but that means that the solution's ID is one off the ksp. There's a more sophisticated solution for this, but for now we're stuck with this until I figure out why it's not writing back to out.
+solutionValue = sparse_linear_solve.__retrieve_solution(matDictVal.handle + 1)
+print(solutionValue)
+
 
 
 
