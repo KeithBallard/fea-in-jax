@@ -24,11 +24,22 @@ class DirichletConstraint:
     dep_dof: int
     value: float
 
+@dataclass
 class MultiPointConstraint:
     """
     Represents a multi-point constraint equation:
     [dep_dof] = sum(factor_i * indep_dof_i) + constant
     """
+    # The dependent degree of freedom
+    dep_dof: int
+    # Terms that are independent degrees of freedom
+    # Stored as a dictionary mapping indep_dof -> factor for easier access
+    indep_dof_terms: Dict[int, float] = field(default_factory=dict)
+    # Terms that get moved to the constant due to Dirichlet constraints
+    # Stored as list of (DirichletConstraint, factor)
+    dirichlet_terms: List[Tuple[DirichletConstraint, float]] = field(default_factory=list)
+    # The constant part of the RHS (including resolved Dirichlet terms)
+    rhs_constant: float = 0.0
 
     def __init__(self, dep_dof: int, indep_dofs: List[int], factors: List[float], rhs_constant: float = 0.0):
         self.dep_dof = dep_dof

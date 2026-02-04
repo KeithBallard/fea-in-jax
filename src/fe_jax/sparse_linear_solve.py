@@ -58,13 +58,12 @@ except ImportError:
         "'pyamgx' was not imported successfully, skipping related solvers/preconditioners."
     )
 
-
 try:
     import pypardiso
 
-    assert (
-        CUPY_AVAILABLE
-    ), "The interface to `pypardiso` requires `cupy`, which was not available. Please install `cupy`."
+    if not CUPY_AVAILABLE:
+        print("Warning: 'pypardiso' was imported successfully, but 'cupy' is not available. 'pypardiso' will not be available.")
+    assert CUPY_AVAILABLE
     PYPARDISO_AVAILABLE = True
     print("'pypardiso' imported, adding related solvers.")
 except ImportError:

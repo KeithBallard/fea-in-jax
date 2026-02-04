@@ -3,6 +3,7 @@ from .utils import *
 from .solve_cg import cg as cg_w_info
 from .sparse_matrix import *
 from .sparse_linear_solve import *
+from .multipoint_constraints import *
 
 import jax.numpy as jnp
 import jax
@@ -485,6 +486,37 @@ def batch_to_collection(
             ]
         ),
     )
+
+
+@struct.dataclass
+class ConstraintSystem:
+    """
+    Describes a linear constraint system of the form P x = g, where P is a sparse projection matrix
+    and g is a vector of offsets. Nominally, P should be of the shape (# of reduced DOFs, # of all DOFs),
+    where the reduced DOFs are the DOFs that are not constrained. This approach would result in entries
+    for every DOF, even those that are not constrained. For efficiency, this stores the projection
+    matrix and offset vector only for the DOFs that are not constrained.
+    """
+    # The DOFs that are constrained via linear constraints
+    dep_dofs: jnp.ndarray
+
+    # The projection matrix P (Sparse COO). Note: there should not be a non-zero entry for any
+    # column corresponding to a dependent DOF. Otherwise, constrained DOFs could be functions of
+    # other constrained DOFs. Instead, consolidation of constraints is required first.
+    # Shape: (# of dependant DOF, # of all DOFs)
+    P: jsparse.BCOO
+    
+    # The offset vector g
+    # Shape: (# of dependant DOF,)
+    g: jnp.ndarray
+
+
+def mpcs_to_constraint_system(mpcs: List[MultiPointConstraint]) -> ConstraintSystem:
+    """
+    Converts a list of MultiPointConstraint (used for consolidation of constraints) to a
+    ConstraintSystem (used for enforcement of constraints).
+    """
+    pass
 
 
 @partial(jax.jit, static_argnames="n_vertices")
