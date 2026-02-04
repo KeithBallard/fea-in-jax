@@ -5,13 +5,16 @@ meshio
 #jax
 # GPU version with CUDA 12
 #jax[cuda12]
+#cupy-cuda12x
 # GPU version with CUDA 13 (recommended)
 #jax[cuda13]
+#cupy-cuda13x
 jaxopt
 libigl
 matplotlib
 mpi4py
 fenics-basix
 psutil
-cupy-cuda12x
 flax
+# Intel MKL Pardiso solver (optional)
+#pypardiso

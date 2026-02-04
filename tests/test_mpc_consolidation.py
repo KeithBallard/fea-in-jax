@@ -1,17 +1,4 @@
-import sys
-import os
-import importlib.util
-
-# Load module directly to bypass package __init__ which requires jax (missing in env)
-src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../src/fe_jax/multipoint_constraints.py"))
-spec = importlib.util.spec_from_file_location("multipoint_constraints", src_path)
-mpc_module = importlib.util.module_from_spec(spec)
-sys.modules["multipoint_constraints"] = mpc_module
-spec.loader.exec_module(mpc_module)
-
-MultiPointConstraint = mpc_module.MultiPointConstraint
-DirichletConstraint = mpc_module.DirichletConstraint
-consolidate_multipoint_constraints = mpc_module.consolidate_multipoint_constraints
+from helper import *
 
 def test_mpc_consolidation():
     # 1. DOF 0 = DOF 1 + 0.1 * DOF 2
@@ -40,6 +27,8 @@ def test_mpc_consolidation():
     
     # 2. DOF 1 = 0.1
     #    (as above)
+
+    print(consolidated_mpcs)
     
     assert len(consolidated_mpcs) == 2
     

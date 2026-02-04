@@ -7,139 +7,136 @@ from .utils import rank2_tensor_to_voigt, rank2_voigt_to_tensor, is_required
 
 
 @jax.jit
-def elastic_isotropic(eps_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
+def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     """
     A constitive relation for a linear elastic isotropic material.
 
     Parameters
     ----------
-    eps_qdd       : infinitesimal strain tensor, ndarray[float, (Q, D, D)]
-    mat_params_qm : material parameters, ndarray[float, (Q, M)]
+    eps_dd       : infinitesimal strain tensor, ndarray[float, (D, D)]
+    material_params_m : material parameters, ndarray[float, (M,)]
 
     Returns
     -------
-    stress_qdd  : stress tensor, ndarray[float, (Q, D, D)]
+    stress_dd  : stress tensor, ndarray[float, (D, D)]
     """
 
-    E = material_params_qm[..., 0]
-    nu = material_params_qm[..., 1]
+    E = material_params_m[..., 0]
+    nu = material_params_m[..., 1]
     G = 0.5 * E / (1.0 + nu)
-    zero = jnp.zeros_like(nu)
-    if eps_qdd.shape[2] == 1:  # 1D
-        C_qss = E.transpose((1, 0))[:, jnp.newaxis]
-    elif eps_qdd.shape[2] == 2:  # 2D
-        C_qss = jnp.linalg.inv(
+    if eps_dd.shape[1] == 1:  # 1D
+        C_ss = E
+    elif eps_dd.shape[1] == 2:  # 2D
+        C_ss = jnp.linalg.inv(
             jnp.array(
                 [
-                    [1.0 / E, -nu / E, zero],
-                    [-nu / E, 1.0 / E, zero],
-                    [zero, zero, 1.0 / G],
+                    [1.0 / E, -nu / E, 0.0],
+                    [-nu / E, 1.0 / E, 0.0],
+                    [0.0, 0.0, 1.0 / G],
                 ]
-            ).transpose((2, 0, 1))
+            )
         )
-    elif eps_qdd.shape[2] == 3:  # 3D
-        C_qss = jnp.linalg.inv(
+    elif eps_dd.shape[1] == 3:  # 3D
+        C_ss = jnp.linalg.inv(
             jnp.array(
                 [
-                    [1.0 / E, -nu / E, -nu / E, zero, zero, zero],
-                    [-nu / E, 1.0 / E, -nu / E, zero, zero, zero],
-                    [-nu / E, -nu / E, 1.0 / E, zero, zero, zero],
-                    [zero, zero, zero, 1.0 / G, zero, zero],
-                    [zero, zero, zero, zero, 1.0 / G, zero],
-                    [zero, zero, zero, zero, zero, 1.0 / G],
+                    [1.0 / E, -nu / E, -nu / E, 0.0, 0.0, 0.0],
+                    [-nu / E, 1.0 / E, -nu / E, 0.0, 0.0, 0.0],
+                    [-nu / E, -nu / E, 1.0 / E, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0 / G, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 1.0 / G, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G],
                 ]
-            ).transpose((2, 0, 1))
+            )
         )
     else:
         raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
 
-    stress_qdd = rank2_voigt_to_tensor(
-        jnp.einsum("qsi,qi->qs", C_qss, rank2_tensor_to_voigt(eps_qdd))
+    stress_dd = rank2_voigt_to_tensor(
+        jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
     )
-    return stress_qdd, jnp.zeros(shape=(material_params_qm.shape[0], 0)) # no internal state
+    return stress_dd, jnp.array([]) # no internal state
 
 
 @jax.jit
 def elastic_orthotropic(
-    eps_qdd: jnp.ndarray, material_params_qm: jnp.ndarray
+    eps_dd: jnp.ndarray, material_params_m: jnp.ndarray
 ):
     """
-    A constitive relation for a linear elastic isotropic material.
+    A constitive relation for a linear elastic orthotropic material.
 
     Parameters
     ----------
-    eps_qdd       : infinitesimal strain tensor, ndarray[float, (Q, D, D)]
-    mat_params_qm : material parameters, ndarray[float, (Q, M)]
+    eps_dd       : infinitesimal strain tensor, ndarray[float, (D, D)]
+    mat_params_m : material parameters, ndarray[float, (M,)]
 
     Returns
     -------
-    stress_qdd  : stress tensor, ndarray[float, (Q, D, D)]
+    stress_dd  : stress tensor, ndarray[float, (D, D)]
     """
-    zero = jnp.zeros(shape=(material_params_qm.shape[0:1]))
-    if eps_qdd.shape[2] == 1:  # 1D
+    if eps_dd.shape[1] == 1:  # 1D
         assert (
-            material_params_qm.shape[-1] == 1
-        ), f"Orthotropic elasticity in 1D requires 1 material parameter, received {material_params_qm.shape[-1]}"
+            material_params_m.shape[-1] == 1
+        ), f"Orthotropic elasticity in 1D requires 1 material parameter, received {material_params_m.shape[-1]}"
 
-        E = material_params_qm[..., 0]
-        C_qss = E.transpose((1, 0))[:, jnp.newaxis]
+        C_ss = material_params_m[0]
 
-    elif eps_qdd.shape[2] == 2:  # 2D
+    elif eps_dd.shape[1] == 2:  # 2D
         assert (
-            material_params_qm.shape[-1] == 4
-        ), f"Orthotropic elasticity in 2D requires 4 material parameters, received {material_params_qm.shape[-1]}"
+            material_params_m.shape[-1] == 4
+        ), f"Orthotropic elasticity in 2D requires 4 material parameters, received {material_params_m.shape[-1]}"
 
-        E_xx = material_params_qm[..., 0]
-        E_yy = material_params_qm[..., 1]
-        nu_xy = material_params_qm[..., 2]
-        G_xy = material_params_qm[..., 3]
+        E_xx = material_params_m[0]
+        E_yy = material_params_m[1]
+        nu_xy = material_params_m[2]
+        G_xy = material_params_m[3]
 
-        C_qss = jnp.linalg.inv(
+        C_ss = jnp.linalg.inv(
             jnp.array(
                 [
-                    [1.0 / E_xx, -nu_xy / E_xx, zero],
-                    [-nu_xy / E_xx, 1.0 / E_yy, zero],
-                    [zero, zero, 1.0 / G_xy],
+                    [1.0 / E_xx, -nu_xy / E_xx, 0.0],
+                    [-nu_xy / E_xx, 1.0 / E_yy, 0.0],
+                    [0.0, 0.0, 1.0 / G_xy],
                 ]
-            ).transpose((2, 0, 1))
+            )
         )
 
-    elif eps_qdd.shape[2] == 3:  # 3D
+    elif eps_dd.shape[1] == 3:  # 3D
         assert (
-            material_params_qm.shape[-1] == 9
-        ), f"Orthotropic elasticity in 3D requires 9 material parameters, received {material_params_qm.shape[-1]}"
+            material_params_m.shape[-1] == 9
+        ), f"Orthotropic elasticity in 3D requires 9 material parameters, received {material_params_m.shape[-1]}"
 
-        E_xx = material_params_qm[..., 0]
-        E_yy = material_params_qm[..., 1]
-        E_zz = material_params_qm[..., 2]
-        nu_xy = material_params_qm[..., 3]
-        nu_yz = material_params_qm[..., 4]
-        nu_xz = material_params_qm[..., 5]
-        G_xy = material_params_qm[..., 6]
-        G_yz = material_params_qm[..., 7]
-        G_xz = material_params_qm[..., 8]
+        E_xx = material_params_m[0]
+        E_yy = material_params_m[1]
+        E_zz = material_params_m[2]
+        nu_xy = material_params_m[3]
+        nu_yz = material_params_m[4]
+        nu_xz = material_params_m[5]
+        G_xy = material_params_m[6]
+        G_yz = material_params_m[7]
+        G_xz = material_params_m[8]
 
         # Note: inv could be avoided if it is a bottleneck, see:
         # https://www.efunda.com/formulae/solid_mechanics/mat_mechanics/hooke_orthotropic.cfm
-        C_qss = jnp.linalg.inv(
+        C_ss = jnp.linalg.inv(
             jnp.array(
                 [
-                    [1.0 / E_xx, -nu_xy / E_xx, -nu_xz / E_xx, zero, zero, zero],
-                    [-nu_xy / E_xx, 1.0 / E_yy, -nu_yz / E_yy, zero, zero, zero],
-                    [-nu_xz / E_xx, -nu_yz / E_yy, 1.0 / E_zz, zero, zero, zero],
-                    [zero, zero, zero, 1.0 / G_yz, zero, zero],
-                    [zero, zero, zero, zero, 1.0 / G_xz, zero],
-                    [zero, zero, zero, zero, zero, 1.0 / G_xy],
+                    [1.0 / E_xx, -nu_xy / E_xx, -nu_xz / E_xx, 0.0, 0.0, 0.0],
+                    [-nu_xy / E_xx, 1.0 / E_yy, -nu_yz / E_yy, 0.0, 0.0, 0.0],
+                    [-nu_xz / E_xx, -nu_yz / E_yy, 1.0 / E_zz, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0 / G_yz, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 1.0 / G_xz, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G_xy],
                 ]
-            ).transpose((2, 0, 1))
+            )
         )
     else:
         raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
 
-    stress_qdd = rank2_voigt_to_tensor(
-        jnp.einsum("qsi,qi->qs", C_qss, rank2_tensor_to_voigt(eps_qdd))
+    stress_dd = rank2_voigt_to_tensor(
+        jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
     )
-    return stress_qdd, jnp.zeros(shape=(material_params_qm.shape[0], 0)) # no internal state
+    return stress_dd, jnp.array([]) # no internal state
 
 
 @jax.jit
@@ -148,7 +145,7 @@ def linear_elasticity_residual(
     x_nd: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    material_params_qm: jnp.ndarray,
+    material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
     constitutive_model: Callable,
 ):
@@ -163,9 +160,9 @@ def linear_elasticity_residual(
     dphi_dxi_qnp  : derivative of basis functions in parametric coordinate system at
                     quadrature points, ndarray[float, (Q, N, P)]
     W_q           : quadrature weights, ndarray[float, (Q,)]
-    mat_params_qm : material parameters, ndarray[float, (Q, M)]
+    material_params : material parameters, ndarray[float, (Q, M)] or ndarray[float, (M,)]
     constitutive_relation : constitutive stress-strain relation, function with arguments
-                  (eps_qdd: jnp.ndarray, material_params_qm: jnp.ndarray)
+                  (eps_dd: jnp.ndarray, material_params: jnp.ndarray)
 
     Returns
     -------
@@ -186,18 +183,26 @@ def linear_elasticity_residual(
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
 
-    constitutive_args = {}
+    constitutive_args = []
+    in_axes = []
 
-    if is_required(constitutive_model, "eps_qdd"):
-        constitutive_args["eps_qdd"] = eps_qdd
+    if is_required(constitutive_model, "eps_dd"):
+        constitutive_args.append(eps_qdd)
+        in_axes.append(0)
 
-    if is_required(constitutive_model, "material_params_qm"):
-        constitutive_args["material_params_qm"] = material_params_qm
+    if is_required(constitutive_model, "material_params_m"):
+        constitutive_args.append(material_params)
+        if material_params.ndim == 1:
+            in_axes.append(None)
+        else:
+            in_axes.append(0)
 
-    if is_required(constitutive_model, "internal_state_qi"):
-        constitutive_args["internal_state_qi"] = internal_state_qi
+    if is_required(constitutive_model, "internal_state_i"):
+        constitutive_args.append(internal_state_i)
+        in_axes.append(0)
 
-    stress_qdd, new_internal_state_qi = constitutive_model(**constitutive_args)
+    constitutive_model_vmap = jax.vmap(constitutive_model, in_axes=tuple(in_axes))
+    stress_qdd, new_internal_state_qi = constitutive_model_vmap(*constitutive_args)
 
     grad_dphi_dx_stress_qnd = jnp.einsum("qni,qid->qnd", dphi_dx_qnd, stress_qdd)
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)

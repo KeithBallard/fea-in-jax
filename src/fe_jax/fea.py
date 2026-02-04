@@ -546,22 +546,28 @@ def _calculate_jacobian_batch_element_kernel(
 
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
-    def residual_kernel(u_t, x_nd, material_params_qm, internal_state_qi):
+    def residual_kernel(u_t, x_nd, material_params, internal_state_qi):
         u_nd = u_t.reshape(N, D)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
             dphi_dxi_qnp=dphi_dxi_qnp,
             W_q=W_q,
-            material_params_qm=material_params_qm,
+            material_params=material_params,
             internal_state_qi=internal_state_qi,
             constitutive_model=constitutive_model,
         )[0]
         return R_nu.reshape(N * U)
 
-    J_ett = jax.vmap(jax.jacfwd(residual_kernel, argnums=0))(
-        u_et, x_end, material_params, internal_state
-    )
+    J_ett = jax.vmap(
+        jax.jacfwd(residual_kernel, argnums=0),
+        in_axes=(
+            0,
+            0,
+            None if material_params.ndim == 1 else 0,
+            None if internal_state.ndim < 3 else 0,
+        ),
+    )(u_et, x_end, material_params, internal_state)
 
     assert J_ett.shape == (
         E,
@@ -690,28 +696,37 @@ def _calculate_jacobian_diag_batch_element_kernel(
 
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
-    def residual_kernel(u_t, x_nd, material_params_qm, internal_state_qi):
+    def residual_kernel(u_t, x_nd, material_params, internal_state):
         u_nd = u_t.reshape(N, D)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
             dphi_dxi_qnp=dphi_dxi_qnp,
             W_q=W_q,
-            material_params_qm=material_params_qm,
-            internal_state_qi=internal_state_qi,
+            material_params=material_params,
+            internal_state_qi=internal_state,
             constitutive_model=constitutive_model,
         )[0]
         return R_nu.reshape(N * U)
 
-    @jax.vmap
-    def vmap_diag_J(u_t, x_nd, material_params_qm, internal_state_qi):
+    def diag_J(u_t, x_nd, material_params, internal_state):
         return jnp.diagonal(
             jax.jacfwd(residual_kernel, argnums=0)(
-                u_t, x_nd, material_params_qm, internal_state_qi
+                u_t, x_nd, material_params, internal_state
             )
         )
 
-    diag_J_et = vmap_diag_J(u_et, x_end, material_params, internal_state)
+    diag_J_vmap = jax.vmap(
+        diag_J,
+        in_axes=(
+            0,
+            0,
+            None if material_params.ndim == 1 else 0,
+            None if internal_state.ndim < 3 else 0,
+        ),
+    )
+
+    diag_J_et = diag_J_vmap(u_et, x_end, material_params, internal_state)
 
     assert diag_J_et.shape == (
         E,
@@ -828,7 +843,7 @@ def _calculate_residual_wo_dirichlet_batch(
             0,  # x_end -> x_nd
             None,  # dphi_dxi_qnp
             None,  # W_q
-            None if material_params.ndim < 3 else 0,  # material_params_eqm -> material_params_qm
+            None if material_params.ndim == 1 else 0,  # material_params_eqm -> material_params_qm or material_params_em -> material_params_m
             None if internal_state.ndim < 3 else 0,  # internal_state_eqi -> internal_state_qi
             None,  # constitutive_model
         ),
