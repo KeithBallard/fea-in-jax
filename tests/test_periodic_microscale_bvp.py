@@ -3,6 +3,7 @@ from helper import *
 jax.config.update("jax_enable_x64", True)
 
 import jax.extend
+
 print(jax.extend.backend.get_backend().platform)
 
 # from jax_smi import initialise_tracking
@@ -41,32 +42,33 @@ right_points = np.isclose(points[:, 0], max_xy[0], atol=1e-16).nonzero()[0]
 bottom_points = np.isclose(points[:, 1], min_xy[1], atol=1e-16).nonzero()[0]
 top_points = np.isclose(points[:, 1], max_xy[1], atol=1e-16).nonzero()[0]
 
-# Boundary conditions:
-# - Fix left nodes along x-direction
-# - Fix right nodes such that the model is subjected to 1% strain along x-axis
-# - Fix bottom nodes along y-direction
-# - Fix top nodes along y-direction
-dirichlet_bcs, dirichlet_values = build_dirichlet_arrays_from_lists(
-    point_indices=[left_points, right_points, bottom_points, top_points],
-    components=[0, 0, 1, 1],
-    values=[0.0, (max_xy[0] - min_xy[0]) / 100.0, 0.0, 0.0],
-)
+# NOTE: commenting out the U * V term for now
+mpcs = [
+    MultiPointConstraint(
+        dep_dof=U * right_points[i],
+        indep_dofs=[U * left_points[i]],  # , U * V],
+        factors=[1.0],  # , max_xy[0] - min_xy[0]],
+    )
+    for i in range(len(left_points))
+]
+
+right_u_val = (max_xy[0] - min_xy[0]) / 100.0
+dirichlet_constraints = [
+    DirichletConstraint(dep_dof=U * i, value=right_u_val) for i in left_points
+] + [DirichletConstraint(dep_dof=U * i + 1, value=0.0) for i in bottom_points]
+
+print(mpcs[0])
+
 
 # Extract cells for each subdomain
 matrix_cells = cells[cell_domain_ids == 0]
 fiber_cells = cells[cell_domain_ids == 1]
 
 # Set material properties
-matrix_mat_params = jnp.array([
-    3.45e9, # E
-    0.35 # nu
-])
-fiber_mat_params = jnp.array([
-    26e9, # E_xx
-    26e9, # E_yy
-    0.7218543046357615, # nu_xy
-    7.55e9 # G_xy
-])
+matrix_mat_params = jnp.array([3.45e9, 0.35])  # E  # nu
+fiber_mat_params = jnp.array(
+    [26e9, 26e9, 0.7218543046357615, 7.55e9]  # E_xx  # E_yy  # nu_xy  # G_xy
+)
 
 element_batches = [
     ElementBatch(
@@ -93,10 +95,12 @@ u, residual, element_batches = solve_bvp(
     vertices_vd=points,
     element_batches=element_batches,
     u_0_g=u_0,
-    dirichlet_bcs=dirichlet_bcs,
-    dirichlet_values=dirichlet_values,
+    dirichlet_bcs=dirichlet_constraints,
+    multipoint_constraints=mpcs,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+        linear_precond_type=PreconditionerType.JACOBI,
+        # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
     ),
 )
 print("|R| = ", jnp.linalg.norm(residual))
@@ -108,4 +112,4 @@ assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
 
 # Write output
 mesh.point_data["u"] = u.reshape((points.shape[0], U))
-mesh.write(get_output("test_microscale_bvp_out.vtk"))
+mesh.write(get_output(Path(__file__).stem + ".vtk"))

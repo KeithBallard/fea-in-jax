@@ -230,7 +230,7 @@ def linear_solve(
             J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
         else:
             J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
-                jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                jacobian.function(x, *args, **kwargs), constraints.dep_dofs
             )
     else:
         J_w_dirichlet = None
