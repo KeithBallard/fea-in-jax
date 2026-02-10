@@ -9,7 +9,8 @@ print(jax.extend.backend.get_backend().platform)
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
-points = np.linspace(0, 1, 2, dtype=np.float32).reshape((-1, 1))
+n_elements = 2
+points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
 cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
 cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
 
@@ -41,7 +42,7 @@ mpcs = [
 
 dirichlet_constraints = [
     DirichletConstraint(dep_dof=0, value=0.0),
-    DirichletConstraint(dep_dof=1, value=0.1),
+    DirichletConstraint(dep_dof=F - 1, value=0.1),
 ]
 
 print(mpcs)

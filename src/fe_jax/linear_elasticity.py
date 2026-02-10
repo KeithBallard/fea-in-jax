@@ -3,7 +3,12 @@ import jax.numpy as jnp
 from functools import partial
 from typing import Callable
 
-from .utils import rank2_tensor_to_voigt, rank2_voigt_to_tensor, is_required
+from .utils import (
+    rank2_tensor_to_voigt,
+    rank2_voigt_to_tensor,
+    is_required,
+    debug_print,
+)
 
 
 @jax.jit
@@ -198,7 +203,7 @@ def linear_elasticity_residual(
             in_axes.append(0)
 
     if is_required(constitutive_model, "internal_state_i"):
-        constitutive_args.append(internal_state_i)
+        constitutive_args.append(internal_state_qi)
         in_axes.append(0)
 
     constitutive_model_vmap = jax.vmap(constitutive_model, in_axes=tuple(in_axes))
