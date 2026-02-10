@@ -25,7 +25,7 @@ def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     nu = material_params_m[..., 1]
     G = 0.5 * E / (1.0 + nu)
     if eps_dd.shape[1] == 1:  # 1D
-        C_ss = E
+        C_ss = jnp.array([[E]])
     elif eps_dd.shape[1] == 2:  # 2D
         C_ss = jnp.linalg.inv(
             jnp.array(
@@ -55,13 +55,11 @@ def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     stress_dd = rank2_voigt_to_tensor(
         jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
     )
-    return stress_dd, jnp.array([]) # no internal state
+    return stress_dd, jnp.array([])  # no internal state
 
 
 @jax.jit
-def elastic_orthotropic(
-    eps_dd: jnp.ndarray, material_params_m: jnp.ndarray
-):
+def elastic_orthotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     """
     A constitive relation for a linear elastic orthotropic material.
 
@@ -136,7 +134,7 @@ def elastic_orthotropic(
     stress_dd = rank2_voigt_to_tensor(
         jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
     )
-    return stress_dd, jnp.array([]) # no internal state
+    return stress_dd, jnp.array([])  # no internal state
 
 
 @jax.jit
@@ -171,7 +169,9 @@ def linear_elasticity_residual(
 
     D = u_nd.shape[1]
     P = dphi_dxi_qnp.shape[2]
-    assert P == D
+    assert (
+        P == D
+    ), f"Number of dimensions in the parametric coordinate system of the element must match the dimension of the problem, {P} != {D}"
     # Formulation assumes solid elements otherwise a different approach is needed (i.e. shells)
 
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)

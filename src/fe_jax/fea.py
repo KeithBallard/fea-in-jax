@@ -1246,6 +1246,10 @@ def solve_bvp(
     element_batches : element batches with updated internal state variables
     """
 
+    # For 1D problems, the vertices may be given as a 1D array, so we need to reshape it to a 2D array
+    if vertices_vd.ndim == 1:
+        vertices_vd = np.expand_dims(vertices_vd, axis=1)
+
     B = len(element_batches)
     V = vertices_vd.shape[0]
     D = vertices_vd.shape[1]
@@ -1304,7 +1308,7 @@ def solve_bvp(
         print("Batches are homogeneous, using JIT compilation for solve_linear_step")
         inner_solve = jax.jit(
             solve_nonlinear_step,
-            donate_argnames="internal_state_beqi",
+            # donate_argnames="internal_state_beqi",
             static_argnames=["solver_options", "jacobian_nnz"],
         )
 

@@ -164,7 +164,7 @@ def rank2_tensor_to_voigt(tensor: jnp.ndarray) -> jnp.ndarray:
     tensor   : dense 3d-array with shape (..., N_qp, N_eps)
     """
     if tensor.shape[-1] == 1:  # 1D
-        return tensor
+        return tensor[..., [0], [0]]
     elif tensor.shape[-1] == 2:  # 2D
         voigt = tensor[..., [0, 1, 0], [0, 1, 1]]
         return voigt.at[..., 2].multiply(2.0)
@@ -190,7 +190,7 @@ def rank2_voigt_to_tensor(voigt: jnp.ndarray) -> jnp.ndarray:
     tensor   : dense 4d-array with shape (N_e, N_qp, N_x, N_x)
     """
     if voigt.shape[-1] == 1:  # 1D
-        return voigt
+        return voigt[..., [0]].reshape((*voigt.shape[:-1], 1, 1))
     elif voigt.shape[-1] == 3:  # 2D
         # 0  1  2
         # xx yy xy
