@@ -11,4 +11,5 @@ from .profiling import *
 from .setup import *
 from .sparse_matrix import *
 from .utils import *
-from .multipoint_constraints import *
+from .constraint_system import *
+from .constraints import *

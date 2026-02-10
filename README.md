@@ -1,98 +1,93 @@
-# Getting Started
+# FEA in JAX
 
-(Optional) Install pyamgx to enable GPU-accelerated algebraic multigrid preconditioners
-1. Install NVidia's CUDA Toolkit: `sudo apt install nvidia-cuda-toolkit` for Ubuntu
-2. Install NVidia's AMGX: https://github.com/NVIDIA/AMGX?tab=readme-ov-file#quickstart
-3. Install `scipy` and `cython` via pip
-3. Install Python wrappers: https://pyamgx.readthedocs.io/en/latest/install.html
+`fea-in-jax` is a Finite Element Analysis (FEA) library written in JAX. It leverages JAX's composable function transformations—JIT compilation, automatic differentiation, and vectorization—to provide a high-performance solver capable of running on GPUs and TPUs.
 
-# Nonlinear Solver
+## Features
 
-To derive Newton's method, it is convenient to start with a Taylor series expansion of the residual function:
+*   **GPU Acceleration**: Native support for hardware acceleration via JAX.
+*   **Differentiability**: Differentiate through the physics simulation for gradient-based optimization and machine learning integration.
+*   **Batched Computation**: Designed to efficiently handle large batches of elements and quadrature points.
 
-$$ R(u_i) = R(u_{i-1}) + \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{u} + O(||\Delta \textbf{u}||^2) $$
+## Project Structure
 
-We want to solve for $ R(u_i) = 0 $, so rearrange the equations to solve for $\Delta \textbf{u}$:
+*   `src/fe_jax`: Core library source code, including element definitions, quadrature rules, and solver implementations.
+*   `tests`: extensive test suite that also serves as a catalogue of usage examples.
+*   `docs`: Documentation and theoretical background.
 
-$$ \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{u} \approx -R(u_{i-1}) $$
+## Getting Started
 
-By iterating, $u_i$ will quadratically converge given the $R(u)$ meets certain conditions.
+### Prerequisites
 
-To enforce Dirichlet boundary conditions (BCs), we typically use in-place elimination, which effectively eliminates the constrained degrees of freedom (DoFs) while leaving the respective rows / columns in the system of equations. Let $\textbf{U}_i$ be a vector that is the values of the Dirichlet BCs where applicable and 0 elsewhere. The Jacobian, $\frac{\partial \textbf{R}}{\partial \textbf{u}}$, can be modified to have 0's in the rows / columns and 1 on the diagonal for the constrained DoFs, but the RHS must be modified as well.
+*   Python 3.10+
+*   [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) (optional, strictly for GPU acceleration)
 
-If we let $\textbf{D}_i$ be the indices of the Dirichlet DoFs, then the incremental solution for the Dirichlet BCs can be calculated
+### Installation
 
-$$ [\Delta \textbf{U}_i]_j = 
-    \{\begin{array}{lr} 
-        [\textbf{U}_i]_j - [\textbf{u}_{i-1}]_j, & \text{if } j \in \textbf{D}_i] \\
-        0, & \text{otherwise}
-    \end{array}\} $$
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository_url>
+    cd fea-in-jax
+    ```
 
-The adjusted system of equations that is typically solved becomes
+2.  **Set up a virtual environment (recommended):**
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```
 
-$$ \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{u} = -R(u_{i-1}) - \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{U}_i $$
+3.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *Note: `jax` installation instructions vary depending on your hardware (CPU, GPU, TPU). Please refer to the [JAX installation guide](https://github.com/google/jax#installation) if the default pip install does not match your system configuration.*
 
-However, in `calculate_residual_w_dirichlet`, the residual calculated is:
+4.  **(Optional) Install `pyamgx`:**
+    To enable GPU-accelerated algebraic multigrid preconditioners:
+    1.  Install NVIDIA's [AMGX](https://github.com/NVIDIA/AMGX?tab=readme-ov-file#quickstart).
+    2.  Install [pyamgx](https://pyamgx.readthedocs.io/en/latest/install.html).
 
-$$ \textbf{R} =  \frac{\partial \textbf{R}}{\partial \textbf{u}} \textbf{v} $$
+## Running Tests
 
-where $\textbf{v}$ is adjusted to include the Dirichlet BCs. Importantly, this means, that $\textbf{R}$ already incorporates the RHS term
+To verify the installation and run the test suite:
 
-$$ - \frac{\partial \textbf{R}}{\partial \textbf{u}} \Delta \textbf{U}_i $$
+```bash
+pytest tests
+```
 
+## Usage
 
-# Resources
+The `tests` directory contains numerous examples demonstrating how to define meshes, apply boundary conditions, and solve boundary value problems.
 
-Great crash course notes on numerical methods, Python, and HPC: https://tbetcke.github.io/hpc_lecture_notes/intro.html
+*   **Basic Linear Elasticity**: See `tests/test_simple_fea_solve.py` for a straightforward example.
+*   **Complex Scenarios**: See `tests/test_fea_solve.py`.
 
-External Callbacks: https://apxml.com/courses/advanced-jax/chapter-5-jax-interoperability-custom-operations/using-jax-pure-callback
+## Theory and Implementation
 
-Wrapping scipy KD trees: https://robertdyro.com/articles/jax_advanced/
+For detailed information on the nonlinear solver derivation, handling of Dirichlet boundary conditions, and internal variable definitions, please refer to [docs/theory.md](docs/theory.md).
 
-JAX GPU Performance guide: https://jax.readthedocs.io/en/latest/gpu_performance_tips.html
+## Resources
 
-Useful guide on ahead-of-time compilation: https://jax.readthedocs.io/en/latest/aot.html
+*   **JAX Interoperability**: [External Callbacks](https://apxml.com/courses/advanced-jax/chapter-5-jax-interoperability-custom-operations/using-jax-pure-callback)
+*   **Scientific Computing in JAX**:
+    *   [Wrapping Scipy KD trees](https://robertdyro.com/articles/jax_advanced/)
+    *   [HPC Lecture Notes](https://tbetcke.github.io/hpc_lecture_notes/intro.html)
+*   **Performance Optimization**:
+    *   [JAX GPU Performance Tips](https://jax.readthedocs.io/en/latest/gpu_performance_tips.html)
+    *   [JAX AOT Compilation](https://jax.readthedocs.io/en/latest/aot.html)
+    *   [Multi-Process/Distributed Support](https://jax.readthedocs.io/en/latest/gpu_performance_tips.html#multi-process)
 
-Useful time for distributed process structure: https://jax.readthedocs.io/en/latest/gpu_performance_tips.html#multi-process
+### Profiling Performance
 
-# Profiling Performance
+*   [JAX Profiling Docs](https://jax.readthedocs.io/en/latest/profiling.html)
+*   [NVIDIA JAX Toolbox](https://github.com/NVIDIA/JAX-Toolbox/blob/main/docs/profiling.md)
+*   [NSys-JAX Wrapper](https://github.com/NVIDIA/JAX-Toolbox/blob/main/docs/nsys-jax.md)
+*   [JAX Device Memory Profiling](https://jax.readthedocs.io/en/latest/device_memory_profiling.html)
+*   [jax-smi (GPU Memory Tracking)](https://github.com/ayaka14732/jax-smi)
 
-JAX docs: https://jax.readthedocs.io/en/latest/profiling.html
+To profile time and memory for JIT-compiled sections:
+1.  Collect trace: `jax.profiler.start_trace("<directory>/prof")`
+2.  Visualize: using TensorBoard or `xprof`.
 
-Using NVidia tools to profile overall performance via sampling: https://github.com/NVIDIA/JAX-Toolbox/blob/main/docs/profiling.md
+## Public Release Information
 
-A neat wrapper to simplying profiling for JAX: https://github.com/NVIDIA/JAX-Toolbox/blob/main/docs/nsys-jax.md
-
-Also can use NVidia Nsight Compute to see efficiency of the CUDA kernels themselves and see reccommendations to improve performance.
-
-To profile time and memory for JIT sections:
-* Use the following to collect information, `jax.profiler.start_trace("<fea-in-jax directory>/prof")`
-* Use `xprof` to visualize
-
-# Profiling GPU memory
-
-Use Google pprof to profile memory: https://jax.readthedocs.io/en/latest/device_memory_profiling.html
-
-Useful script to track GPU memory: https://github.com/ayaka14732/jax-smi
-
-# Variables Indicating Dimensions of Arrays
-Superscripts will be used to denote the rank, since within the programming implementation the shape of arrays will not include the rank index. The rank index is useful to discuss the distributed algorithm but does not affect the stored quantities.
-* $\mathcal{R}$: total # of MPI ranks
-* $\mathcal{B}^i$: # of batches of elements used for computations on the $i^\mathsf{th}$ MPI rank
-* $\mathcal{V}^i$: # of nodes used for computations on the $i^\mathsf{th}$ MPI rank
-* $\mathcal{E}^i_j$: # of elements in the $j^\mathsf{th}$ batch on the $i^\mathsf{th}$ rank
-* $\mathcal{D}$: # of dimensions in the global coordinate system, which is also # components for displacement
-* $\mathcal{I}^i_j$: # of dimensions in the isoparametric coordinate system for the $j^\mathsf{th}$ batch of elements, on the $i^\mathsf{th}$ rank. (should match $\mathcal{D}$ for solid elements)
-* $\mathcal{N}^i_j$: # of nodes for each element in the $j^\mathsf{th}$ batch of elements on the $i^\mathsf{th}$ rank.
-* $\mathcal{Q}^i_j$: # of quadrature points in each element for the $j^\mathsf{th}$ batch of elements on the $i^\mathsf{th}$ rank.
-* $\mathcal{M}^i_j$: # of material parameters in the constitutive model for the $j^\mathsf{th}$ batch of elements on the $i^\mathsf{th}$ rank.
-* $\mathcal{S}$: # of strain components (generally determined by $\mathcal{D}$ and/or $\mathcal{U}$)
-* $\mathcal{U}$: # of components of the solution per basis function
-* $\mathcal{F}^i$: total # of degrees of freedom on the $i^\mathsf{th}$ rank. 
-* $\mathcal{P}^i$: # patches on MPI rank $i$
-* $\mathcal{K}^i_{j}$: # of vertices on patch $j$ on MPI rank $i$
-* $\mathcal{L}^i_{j}$: # of elements on patch $j$ on MPI rank $i$
-* $\mathcal{G}^i_{j}$: # of degrees of freedom on patch $j$ on MPI rank $i$
-
-# Public Release Information
-Distribution Statement A.  Approved for public release: distribution is unlimited. Case #: AFRL-2025-4644
+Distribution Statement A. Approved for public release: distribution is unlimited. Case #: AFRL-2025-4644

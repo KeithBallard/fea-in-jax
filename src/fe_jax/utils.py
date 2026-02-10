@@ -15,24 +15,23 @@ import inspect
 
 def debug_print(x):
     prev_frame = inspect.currentframe().f_back
-    #prev_fame_info = inspect.getframeinfo(prev_frame)
+    # prev_fame_info = inspect.getframeinfo(prev_frame)
     callers_local_vars = prev_frame.f_locals.items()
     x_names = [var_name for var_name, var_val in callers_local_vars if var_val is x]
     x_name = x_names[0] if len(x_names) > 0 else "<non-named value>"
     jax.debug.print(
         "{a}, shape={b} = \n{c}",
-        #"From {d} line {e}:\n {a}, shape={b} = \n{c}",
+        # "From {d} line {e}:\n {a}, shape={b} = \n{c}",
         a=x_name,
         b=x.shape,
         c=x,
-        #d=prev_fame_info.filename,
-        #e=prev_fame_info.lineno,
+        # d=prev_fame_info.filename,
+        # e=prev_fame_info.lineno,
     )
 
 
 def is_required(fn, arg_name) -> bool:
-    """Helper function to query if an argument is required by a function given the argument name.
-    """
+    """Helper function to query if an argument is required by a function given the argument name."""
     s = inspect.signature(fn)
     return arg_name in s.parameters.keys()
 
@@ -121,9 +120,11 @@ def shard_across_local_devices(
 
     else:
         return (sharded_slice,)
-    
 
-def slice_for_local_sharding(array: np.ndarray[Any, np.dtype] | jnp.ndarray, axis: int = 0):
+
+def slice_for_local_sharding(
+    array: np.ndarray[Any, np.dtype] | jnp.ndarray, axis: int = 0
+):
     """
     TODO document
     """
@@ -148,55 +149,6 @@ def slice_for_local_sharding(array: np.ndarray[Any, np.dtype] | jnp.ndarray, axi
 
     else:
         return (shard_slice,)
-
-
-
-def build_dirichlet_arrays(
-    point_indices: NPArray_1_D_int64,
-    component: int,
-    value: float,
-) -> tuple[NPArray_2_D2_uint64, NPArray_1_D_float64]:
-    """
-    Builds arrays that describe dirichlet boundary conditions.
-
-    Returns tuple of:
-      Array that is (# of constrained DoFs, 2) with each row being (point index, component of solution)
-      Array with shape (# of constrained DoFs,) with each row being the value
-    """
-    dirichlet_bcs = np.zeros(shape=(point_indices.shape[0], 2), dtype=np.uint64)
-    dirichlet_bcs[-1][:, 0] = point_indices
-    dirichlet_bcs[-1][:, 1] = component
-    dirichlet_values = value * np.ones(
-        shape=(dirichlet_bcs[-1].shape[0],), dtype=np.float64
-    )
-    return (dirichlet_bcs, dirichlet_values)
-
-
-def build_dirichlet_arrays_from_lists(
-    point_indices: list[NPArray_1_D_int64],
-    components: list[int],
-    values: list[float],
-) -> tuple[NPArray_2_D2_uint64, NPArray_1_D_float64]:
-    """
-    Builds arrays that describe dirichlet boundary conditions.
-
-    Returns tuple of:
-      Array that is (# of constrained DoFs, 2) with each row being (point index, component of solution)
-      Array with shape (# of constrained DoFs,) with each row being the value
-    """
-    dirichlet_bcs = []
-    dirichlet_values = []
-    for i in range(len(point_indices)):
-        dirichlet_bcs.append(
-            np.zeros(shape=(point_indices[i].shape[0], 2), dtype=np.uint64)
-        )
-        dirichlet_bcs[-1][:, 0] = point_indices[i]
-        dirichlet_bcs[-1][:, 1] = components[i]
-        dirichlet_values.append(
-            values[i] * np.ones(shape=(dirichlet_bcs[-1].shape[0],))
-        )
-    return (np.vstack(dirichlet_bcs), np.concat(dirichlet_values))
-
 
 
 def rank2_tensor_to_voigt(tensor: jnp.ndarray) -> jnp.ndarray:

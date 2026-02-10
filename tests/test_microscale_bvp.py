@@ -46,10 +46,12 @@ top_points = np.isclose(points[:, 1], max_xy[1], atol=1e-16).nonzero()[0]
 # - Fix right nodes such that the model is subjected to 1% strain along x-axis
 # - Fix bottom nodes along y-direction
 # - Fix top nodes along y-direction
-dirichlet_bcs, dirichlet_values = build_dirichlet_arrays_from_lists(
-    point_indices=[left_points, right_points, bottom_points, top_points],
-    components=[0, 0, 1, 1],
-    values=[0.0, (max_xy[0] - min_xy[0]) / 100.0, 0.0, 0.0],
+right_u_val = (max_xy[0] - min_xy[0]) / 100.0
+dirichlet_constraints = (
+    [DirichletConstraint(dep_dof=U * i, value=0.0) for i in left_points]
+    + [DirichletConstraint(dep_dof=U * i, value=right_u_val) for i in right_points]
+    + [DirichletConstraint(dep_dof=U * i + 1, value=0.0) for i in bottom_points]
+    + [DirichletConstraint(dep_dof=U * i + 1, value=0.0) for i in top_points]
 )
 
 # Extract cells for each subdomain
@@ -98,7 +100,7 @@ element_batches = [
 u_0 = jnp.zeros(shape=(V * U))
 
 # Solve the boundary value problem
-#u, residual, element_batches = 
+# u, residual, element_batches =
 result = timeit(
     solve_bvp,
     # timeit args
@@ -108,11 +110,10 @@ result = timeit(
     vertices_vd=points,
     element_batches=element_batches,
     u_0_g=u_0,
-    dirichlet_bcs=dirichlet_bcs,
-    dirichlet_values=dirichlet_values,
+    dirichlet_bcs=dirichlet_constraints,
     solver_options=SolverOptions(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-        linear_precond_type=PreconditionerType.JACOBI
+        linear_precond_type=PreconditionerType.JACOBI,
     ),
 )
 u, residual, element_batches = result[0]
