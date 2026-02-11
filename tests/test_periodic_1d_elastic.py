@@ -9,7 +9,7 @@ print(jax.extend.backend.get_backend().platform)
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
-n_elements = 2
+n_elements = 3
 points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
 cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
 cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
@@ -33,23 +33,19 @@ print("# DoFs = ", F)
 
 # Periodic boundary conditions
 mpcs = [
-    #    MultiPointConstraint(
-    #        dep_dof=F - 1,
-    #        indep_dofs=[0],
-    #        factors=[1.0],
-    #    )
+    MultiPointConstraint(dep_dof=F - 1, indep_dofs=[0], factors=[1.0], rhs_constant=0.1)
 ]
 
 dirichlet_constraints = [
-    DirichletConstraint(dep_dof=0, value=0.0),
-    DirichletConstraint(dep_dof=F - 1, value=0.1),
+    DirichletConstraint(dep_dof=1, value=0.05),
+    # DirichletConstraint(dep_dof=2, value=0.1),
 ]
 
 print(mpcs)
 
 
 # Set material properties
-matrix_mat_params = jnp.array([3.45e9])  # E
+matrix_mat_params = jnp.array([1.0e9])  # E
 element_batches = [
     ElementBatch(
         fe_type=fe_type,
@@ -69,9 +65,12 @@ u, residual, element_batches = solve_bvp(
     multipoint_constraints=mpcs,
     solver_options=SolverOptions(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-        linear_precond_type=PreconditionerType.JACOBI,
+        # linear_precond_type=PreconditionerType.JACOBI,
         # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        nonlinear_max_iter=1,
+        linear_max_iter=5,
     ),
+    plot_convergence=True,
 )
 print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)

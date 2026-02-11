@@ -1029,7 +1029,9 @@ def calculate_residual_w_constraints(
     # Note: this is neccessary to ensure the Jacobian is symmetric. Without this,
     # the autodiff would result in 0's on rows (except on the diagonal) for entries
     # corresponding to Dirichlet BC's, but the columns would be non-zero.
+    # debug_print(u_f)
     u_f_w_constraints = constraints.apply_to_solution(u_f)
+    # debug_print(u_f_w_constraints)
 
     R_f, new_internal_state_beqi = calculate_residual_wo_constraints(
         element_residual_func=element_residual_func,
@@ -1040,7 +1042,9 @@ def calculate_residual_w_constraints(
 
     # Zero out terms corresponding to Dirichlet BCs and add (solution - what it should be) for those constrained DoFs.
     # This will ensure there will be a 1 on the diagonal of the Jacobian and also return the right residual.
+    # debug_print(R_f)
     R_f = constraints.apply_to_residual(R_f, u_f)
+    # debug_print(R_f)
 
     return R_f, new_internal_state_beqi
 
@@ -1211,39 +1215,15 @@ def solve_nonlinear_step(
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
 
-def solve_bvp(
+def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
     element_residual_func: Callable,
     dirichlet_bcs: List[DirichletConstraint],
     multipoint_constraints: List[MultiPointConstraint] = [],
-    u_0_g: jnp.ndarray | None = None,
-    solver_options: SolverOptions = SolverOptions(),
-    plot_convergence: bool = False,
-    profile_memory: bool = False,
-) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
+):
     """
-    Solve a boundary value problem for static linear elasticity.
-
-    Parameters
-    ----------
-    vertices_vd          : vertices needed for all cells on the rank, ndarray[float, (V, D)]
-    element_batches      : batch of elements for this rank
-    element_residual_func: residual function emerging from weak form of governing equations
-    dirichlet_bcs        : Dirichlet boundary conditions, list[DirichletConstraint]
-    multipoint_constraints : Linear constraints between degrees of freedom, list[MultiPointConstraint]
-    u_0_g                : initial guess for the solution, ndarray[float, (V * D)] or None (default, zeros will be used)
-    solver_options       : options for the linear/nonlinear solvers
-    plot_convergence     : indicates if the convergence history for the linear solver should be
-                           plotted via matplotlib as a figure
-    profile_memory       : indicates if GPU memory usage should be profiled, which will create *.prof
-                           files in the current directory
-
-    Returns
-    -------
-    u               : solution (displacement), ndarray[float, (V * D)]
-    R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
-    element_batches : element batches with updated internal state variables
+    Converts information from a user-facing format to a JAX-ameniable format.
     """
 
     # For 1D problems, the vertices may be given as a 1D array, so we need to reshape it to a 2D array
@@ -1280,12 +1260,6 @@ def solve_bvp(
     support varying number of DoFs per a batch.
     """
 
-    # If an initial guess was not provided, then use zeros
-    if u_0_g is None:
-        u_0_g = jnp.zeros(shape=(V * ebc.U[0],))
-    else:
-        assert u_0_g.shape == (V * ebc.U[0],)
-
     # Structures for mapping between cell-level arrays and global arrays
     assembly_map_b = [
         mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
@@ -1302,6 +1276,66 @@ def solve_bvp(
         mpcs=multipoint_constraints,
         n_total_dofs=V * ebc.U[0],
     )
+
+    return (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+    )
+
+
+def solve_bvp(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: Callable,
+    dirichlet_bcs: List[DirichletConstraint],
+    multipoint_constraints: List[MultiPointConstraint] = [],
+    u_0_g: jnp.ndarray | None = None,
+    solver_options: SolverOptions = SolverOptions(),
+    plot_convergence: bool = False,
+    profile_memory: bool = False,
+) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
+    """
+    Solve a boundary value problem for static linear elasticity.
+
+    Parameters
+    ----------
+    vertices_vd          : vertices needed for all cells on the rank, ndarray[float, (V, D)]
+    element_batches      : batch of elements for this rank
+    element_residual_func: residual function emerging from weak form of governing equations
+    dirichlet_bcs        : Dirichlet boundary conditions, list[DirichletConstraint]
+    multipoint_constraints : Linear constraints between degrees of freedom, list[MultiPointConstraint]
+    u_0_g                : initial guess for the solution, ndarray[float, (V * D)] or None (default, zeros will be used)
+    solver_options       : options for the linear/nonlinear solvers
+    plot_convergence     : indicates if the convergence history for the linear solver should be
+                           plotted via matplotlib as a figure
+    profile_memory       : indicates if GPU memory usage should be profiled, which will create *.prof
+                           files in the current directory
+
+    Returns
+    -------
+    u               : solution (displacement), ndarray[float, (V * D)]
+    R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
+    element_batches : element batches with updated internal state variables
+    """
+
+    ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func = (
+        preprocess_bvp(
+            vertices_vd=vertices_vd,
+            element_batches=element_batches,
+            element_residual_func=element_residual_func,
+            dirichlet_bcs=dirichlet_bcs,
+            multipoint_constraints=multipoint_constraints,
+        )
+    )
+
+    # If an initial guess was not provided, then use zeros
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(vertices_vd.shape[0] * ebc.U[0],))
+    else:
+        assert u_0_g.shape == (vertices_vd.shape[0] * ebc.U[0],)
 
     inner_solve = solve_nonlinear_step
     if ebc.is_homogeneous:

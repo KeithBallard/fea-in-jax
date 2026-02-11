@@ -14,12 +14,13 @@ from typing import List
 from flax import struct
 
 from .constraints import DirichletConstraint, MultiPointConstraint
+from .utils import debug_print
 
 
 @struct.dataclass
 class ConstraintSystem:
     """
-    Describes a linear constraint system of the form P x = g, where P is a sparse projection matrix
+    Describes a linear constraint system of the form u_constrained = P u + g, where P is a sparse projection matrix
     and g is a vector of offsets.
 
     Nominally, P should be of the shape (# of reduced DOFs, # of all DOFs), where the reduced DOFs
@@ -54,9 +55,58 @@ class ConstraintSystem:
         corresponding to dependent DOFs are the mismatch between the current solution and the
         value per the constraints.
         """
-        return R.at[self.dep_dofs].set(
-            u.at[self.dep_dofs].get() - (self.P @ u) - self.g
+        return (
+            (R + self.P.T @ R[self.dep_dofs])
+            .at[self.dep_dofs]
+            .set(u[self.dep_dofs] - self.g)
         )
+
+    def __str__(self) -> str:
+        n_constraints = self.dep_dofs.shape[0]
+        n_total_dofs = self.P.shape[1]
+        n_nnz = self.P.nse
+
+        if n_total_dofs < 10 and n_constraints > 0:
+            P_dense = self.P.todense()
+            lines = []
+
+            # Helper to format a row of a matrix
+            def format_row(row):
+                return "  ".join(f"{val:g}" for val in row)
+
+            for i in range(n_constraints):
+                dep_dof = self.dep_dofs[i]
+                row_str = format_row(P_dense[i])
+                g_val = f"{self.g[i]:g}"
+
+                if i == 0:
+                    prefix = f"[{dep_dof}] = "
+                    suffix = f" [ u ] + [{g_val}]"
+                    line = f"{prefix}[ {row_str} ]{suffix}"
+                else:
+                    # Align with the first line
+                    prefix_0 = f"[{self.dep_dofs[0]}] = "
+                    prefix_i = f"[{dep_dof}]"
+                    padding = " " * (len(prefix_0) - len(prefix_i))
+
+                    # Offset for [ u ] +
+                    u_padding = " " * 9
+                    line = f"{prefix_i}{padding}[ {row_str} ]{u_padding}[{g_val}]"
+
+                lines.append(line)
+
+            return "\n".join(lines)
+
+        return (
+            f"ConstraintSystem(\n"
+            f"  n_constraints={n_constraints},\n"
+            f"  n_total_dofs={n_total_dofs},\n"
+            f"  n_nnz={n_nnz}\n"
+            f")"
+        )
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 def convert_constraints_to_system(
