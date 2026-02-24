@@ -1142,7 +1142,13 @@ def solve_bvp(
     element_residual_func = jax.tree_util.Partial(element_residual_func)
 
     # Structures for mapping between cell-level arrays and global arrays
-    assembly_map_b = [
+    assembl
+    return (matrix_mat_params_eqm, fiber_mat_params_eqm)
+
+matrix_mat_params_eqm, fiber_mat_params_eqm = get_properties()
+print(fiber_mat_params_eqm[0, 0, :])
+# 3D properties, in case a 3D test is needed
+# fiber_mat_params_eqm[:, :, 0] = 26e9 # E_xxy_map_b = [
         mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
         for b in element_batches
     ]
