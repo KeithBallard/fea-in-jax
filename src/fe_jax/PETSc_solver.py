@@ -26,10 +26,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from functools import partial
 
-from .utils import debug_print
-from .sparse_matrix import *
-from .solve_cg import cg as cg_w_info
 
+# PETSc interfaces
+from petsc4py import PETSc
 
 class PreconditionerType(Enum):
     NONE = 0
@@ -522,172 +521,46 @@ def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
 
 from cupyx.scipy.sparse.linalg._solve import CusparseLU
 
-# Global registry to hold generic Python objects
-_OBJECT_STORE = {}
-_NEXT_ID = 0
 
-_SOLUTION_STORE = {} #THIS IS MEANT TO HOLD A SOLUTION VECTOR FOR PETSC
+#-------------methods for handling sparse petsc solving---------------
 
+def constructMatCOO(vals,rows,cols,size, comm = PETSc.COMM_SELF):
 
-def __store_object(obj):
-    global _NEXT_ID
-    uid = _NEXT_ID
-    _OBJECT_STORE[uid] = obj
-    _NEXT_ID += 1
-    return np.int64(uid)  # Return as a JAX-compatible type
+    mat = PETSc.Mat().create(comm=comm)
+    mat.setSizes(size)
+    mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
 
+    mat.setPreallocationCOO(rows, cols)
+    mat.setValuesCOO(np.asarray(vals)) #the problem is that this doesn't seem to support cuda_array_interface
 
-def __retrieve_object(uid):
-    return _OBJECT_STORE[int(uid)]
+    mat.assemblyBegin()
+    mat.assemblyEnd()
 
+    return mat
 
-def __store_solution(obj):
-    global _NEXT_ID
-    uid = _NEXT_ID
-    _SOLUTION_STORE[uid] = obj
-    return np.int64(uid)
-
-def __retrieve_solution(uid):
-    return _SOLUTION_STORE[int(uid)]   #For now each object gets it's own solution vector. In theory it'd be better to do this some other way, but we'll worry about that later.
-
-
-@struct.dataclass
-class __CupyCtx:
-    handle: jnp.ndarray
-
-
-def __cupy_spilu_init_impl(A: jsparse.CSR):
-    A_cp = cpsparse.csr_matrix(
-        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
-        shape=A.shape,
-    )
-    A_cp.has_canonical_format = True
-    ilu_obj = cplinalg.spilu(A_cp, fill_factor=1.0)
-    return __store_object(ilu_obj)
-
-
-@jax.jit
-def __cupy_spilu_init(A: jsparse.COO) -> __CupyCtx:
-    result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, coo_to_csr(A))
-    return __CupyCtx(handle=handle)
-
-
-def __cupy_splu_init_impl(A: jsparse.CSR):
-    A_cp = cpsparse.csr_matrix(
-        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
-        shape=A.shape,
-    )
-    A_cp.has_canonical_format = True
-    ilu_obj = cplinalg.splu(A_cp)
-    return __store_object(ilu_obj)
-
-
-@jax.jit
-def __cupy_splu_init(A: jsparse.COO) -> __CupyCtx:
-    result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    handle = jax.pure_callback(__cupy_splu_init_impl, result_info, coo_to_csr(A))
-    return __CupyCtx(handle=handle)
-
-
-def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
-    # Retrieve the opaque object using the handle
-    cupy_obj = __retrieve_object(cp.asarray(handle))
-    cp.asarray(out)[...] = cupy_obj.solve(cp.asarray(b))
-
-
-@jax.jit
-def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
-    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(__cupy_solve_impl, result_info)(ctx.handle, b)
-
-
-##################################################################################################
-# PETSc wrappers
-
-from petsc4py import PETSc
-
-
-def __petsc_init_impl(A: jsparse.CSR):
-    A_petsc = PETSc.Mat()
-    A_petsc.create(PETSc.COMM_WORLD)
-    A_petsc.setSizes([A.shape[0], A.shape[1]])
-    
-    A_petsc.createAIJWithArrays(
-        size=(A.shape[0], A.shape[1]),
-        csr=(
-            cp.asarray(A.indptr).get().astype(np.int32),
-            cp.asarray(A.indices).get().astype(np.int32),
-            cp.asarray(A.data).get(),
-        ),
-    )
-    # NOTE this appears to be moved to CPU for these calls.
-    # TODO figure out how to populate A with GPU arrays.
-    A_petsc.setType("aij")
-
-
-    ksp = PETSc.KSP().create()
-    ksp.setOperators(A_petsc)
-    ksp.setType("bcgs")
-    ksp.setConvergenceHistory()
-    ksp.getPC().setType("none")
+def constructVec(vector):
+    vec = PETSc.Vec().createWithArray(vector) #chances are this also constructs on the
+    vec.setType(PETSc.Vec.Type.SEQCUDA)
+    return vec
 
 
 
 
-    return __store_object(ksp)
+rows = jnp.arange(10000,dtype=jnp.int32)
+cols = jnp.arange(10000,dtype=jnp.int32)
 
+vals = jnp.ones((10000,1),dtype=jnp.float32)
 
+mat = constructMatCOO(vals,rows,cols,[10000,10000],PETSc.COMM_SELF)
+vec = constructVec(vals*0)
 
+x = constructVec(vals)
 
-@jax.jit
-def __petsc_init(A: jsparse.COO) -> __CupyCtx:
-    result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    print("got result shape")
-    handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
-    return __CupyCtx(handle=handle)
+ksp = PETSc.KSP()
+ksp.create(PETSc.COMM_WORLD)
+ksp.setOperators(mat)
+ksp.setType('cg')
 
+ksp.solve(vec,x)
 
-def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
-    # Retrieve the opaque object using the handle
-    ksp = __retrieve_object(cp.asarray(handle))
-
-    print("fetched ksp")
-
-    barray = cp.asarray(b)
-
-    b_petsc = PETSc.Vec()
-
-    b_petsc.createWithArray(cp.asnumpy(barray))
-    print("converted to array")
-
-
-    x_petsc = b_petsc.duplicate()
-    x_petsc.set(0.0)
-
-    n = 3
-
-    ksp.setTolerances(rtol=1e-9,atol=1e-9)
-    
-    ksp.setConvergenceHistory(n)
-    ksp.solve(b_petsc,x_petsc)
-
-    convergenceHist = ksp.getConvergenceHistory()
-
-    #print(convergenceHist)
-    print("solution",cp.asarray((x_petsc.getArray())))
-
-    __store_solution(cp.asarray((x_petsc.getArray())))
-
-    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
-    
-    
-
-    
-
-
-@jax.jit
-def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
-    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(__petsc_solve_impl, result_info)(ctx.handle, b)
-
+print(x.getArray())
