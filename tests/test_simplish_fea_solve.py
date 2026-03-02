@@ -146,7 +146,7 @@ phi_bqn, dphi_dxi_bqnp = zip(
 #print("dphi_dxi_bqnp = ", dphi_dxi_bqnp)
 
 
-callBuild = False
+callBuild = True
 
 if callBuild:
     jac = buildJacobian(

@@ -3,19 +3,25 @@ from petsc4py import PETSc
 import numpy as np
 from scipy.sparse import csr_matrix
 
+from scipy.sparse.linalg import LaplacianNd
+
+import jax
+
 import jax.numpy as jnp
 from jax import random
 from jax.experimental import sparse
 
 import cupy as cp
 
+
 import sys
 import os.path
 
+import matplotlib.pyplot as plt
 
 testPreallocate1 = False
-testPreallocate2 = True
-testPreallocate3 = True
+testPreallocate2 = False
+testPreallocate3 = False
 testPreallocate4 = False
 
 M = 100
@@ -165,3 +171,107 @@ if testPreallocate4:
 
     mat.setPreallocationCOO(rows.get(), cols.get())
     mat.setValuesCOO(vals)   # one safe host copy
+
+
+
+
+
+
+
+
+rows = jnp.arange(100,dtype=jnp.int32)
+cols = jnp.arange(100,dtype=jnp.int32)
+comm = PETSc.COMM_SELF
+mat = PETSc.Mat().create(comm=comm)
+mat.setSizes([M, N])
+mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
+mat.setPreallocationCOO(rows, cols)
+
+gpu_coo_array = cp.ones((100,1), dtype=cp.float16)
+
+import ctypes as ct
+lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+coo_ptr = ct.c_void_p(gpu_coo_array.data.ptr)  # the pointer to GPU memory
+
+print(ct.alignment(mat_ptr))
+exit(1)
+
+MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.ADD)
+
+
+
+mat.view()
+
+
+exit(1)
+
+nx, ny = (1000, 1000)
+x = np.linspace(0, 1, nx)
+y = np.linspace(0, 1, ny)
+xv, yv = np.meshgrid(x, y)
+
+func_x = jax.vmap(lambda x,y: jnp.sin(jnp.pi*(x))*jnp.sin(jnp.pi*(y)),in_axes=(0,0))
+func_b = jax.vmap(lambda x,y: -2*jnp.pi**2 * jnp.sin(jnp.pi*(x))*jnp.sin(jnp.pi*(y)),in_axes=(0,0))
+
+xv = xv.flatten()
+yv = yv.flatten()
+
+vals = func_b(xv,yv)
+
+lapMatCSR = LaplacianNd((nx,ny),boundary_conditions='dirichlet').tosparse()
+
+data = jnp.asarray(lapMatCSR.data,dtype=jnp.float32)
+indices = jnp.asarray(lapMatCSR.indices,dtype=jnp.int32)
+indptr = jnp.asarray(lapMatCSR.indptr,dtype=jnp.int32)
+
+"""
+results_jax = sparse.linalg.spsolve(data,indices,indptr,vals)
+
+plt.scatter(xv,yv,c=results_jax)
+plt.show()
+
+"""
+
+lapMatCOO = lapMatCSR.tocoo()
+data = jnp.asarray(lapMatCOO.data,dtype=jnp.float32)
+row = jnp.asarray(lapMatCOO.row,dtype=jnp.int32)
+col = jnp.asarray(lapMatCOO.col,dtype=jnp.int32)
+
+
+#results = sparse.linalg.spsolve(data,indices,intptr,vals) fails, not enough memory
+
+comm = PETSc.COMM_SELF
+mat = PETSc.Mat().create(comm=comm)
+mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
+mat.setSizes([nx**2, ny**2])
+mat.setPreallocationCOO(row,col)
+mat.setValuesCOO(data)
+
+mat.assemblyBegin()
+mat.assemblyEnd()
+
+vec = PETSc.Vec().createWithArray(vals)
+vec.setType(PETSc.Vec.Type.SEQCUDA)
+
+x = vec.duplicate()
+
+
+ksp = PETSc.KSP()
+ksp.create(PETSc.COMM_WORLD)
+ksp.setOperators(mat)
+ksp.setType('qmrcgs')
+ksp.solve(vec,x)
+
+results_petsc = x.getArray()
+
+plt.scatter(xv,yv,c=results_petsc)
+plt.show()
+
+vals_x = func_x(xv,yv)
+
+plt.scatter(xv,yv,c=vals_x)
+plt.show()
