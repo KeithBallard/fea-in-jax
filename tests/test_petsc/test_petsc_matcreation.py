@@ -187,7 +187,8 @@ mat.setSizes([M, N])
 mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
 mat.setPreallocationCOO(rows, cols)
 
-gpu_coo_array = cp.ones((100,1), dtype=cp.float16)
+
+gpu_coo_array = cp.ones((100,1), dtype=cp.float64)*4
 
 import ctypes as ct
 lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
@@ -197,13 +198,8 @@ MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscSca
 mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
 coo_ptr = ct.c_void_p(gpu_coo_array.data.ptr)  # the pointer to GPU memory
 
-print(ct.alignment(mat_ptr))
-exit(1)
 
-MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.ADD)
-
-
-
+MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
 mat.view()
 
 
