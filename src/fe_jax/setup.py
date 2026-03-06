@@ -301,6 +301,7 @@ def transform_global_to_element_node(
     ).reshape(E, V, U)
 
 
+
 @partial(jax.jit, static_argnames=["E"])
 def transform_global_unraveled_to_element_node(
     assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int
@@ -320,6 +321,22 @@ def transform_global_unraveled_to_element_node(
         v_g.reshape(1, V, U),
         dimension_numbers=(((1,), (1,)), ((0,), (0,))),
     ).reshape(E, N, U)
+
+@partial(jax.jit, static_argnames=["N_ge", "N_n", "N_u"])
+def transform_global_unraveled_to_element_node_jacobian(
+    assembly_map: jsparse.BCSR, v_g: jnp.ndarray, N_ge: int, N_n: int, N_u: int
+):
+    """
+    Transforms a vector that represents a global assembled vector that is unraveled into the
+    element-node representation.
+
+    TODO: change this to transform into batches (keep batch info in Dimensions)
+    """
+    return jsparse.bcsr_dot_general(
+        assembly_map,
+        v_g.reshape(1, v_g.shape[0] // N_u, N_u),
+        dimension_numbers=(((1,), (1,)), ((0,), (0,))),
+    ).reshape(N_ge, N_n, N_u)
 
 
 def transform_element_node_to_global_unraveled_nosum(

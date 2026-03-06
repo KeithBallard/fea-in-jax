@@ -1203,7 +1203,7 @@ def solve_bvp(
     else:
         assert u_0_g.shape == (V * ebc.U[0],)
 
-    # Structures for mapping between cell-level arrays and global arrays
+    # Structures for mapping between cell-level arrays and global arrays (why is this in here twice?)
     assembly_map_b = [
         mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
         for b in element_batches
@@ -1307,3 +1307,130 @@ def solve_bvp(
             plot_solver_info(opts=solver_options, info=info)
 
     return (u, residual, element_batches)
+
+
+def _buildJacobianByBatch(
+    element_residual_func: jax.tree_util.Partial,
+    constitutive_model: jax.tree_util.Partial,
+    material_params_eqm: jnp.ndarray,
+    x_end: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
+    assembly_map: jsparse.BCSR,
+    u_g: jnp.ndarray):
+
+    E = x_end.shape[0]
+    N = x_end.shape[1]
+    D = x_end.shape[2]
+
+
+    u_end = transform_global_unraveled_to_element_node_jacobian(
+        assembly_map, u_g, N_ge=E, N_n=N, N_u=D
+    )
+    u_et = u_end.reshape(E, N*D)
+
+    def residual_kernel(u_t, x_nd, material_params_qm):
+        u_nd = u_t.reshape(N, D)
+        R_nd = element_residual_func(
+            constitutive_model=constitutive_model,
+            u_nd=u_nd,
+            x_nd=x_nd,
+            dphi_dxi_qnp=dphi_dxi_qnp,
+            W_q=W_q,
+            material_params_qm=material_params_qm,
+            internal_state_qi=None
+        )
+        return R_nd[0].reshape(N*D)
+    
+    J_tmp = jax.jacfwd(residual_kernel, argnums=0)(u_et[0], x_end[0], material_params_eqm[0])
+    #print(f'J_tmp = {J_tmp}')
+    v = jax.random.normal(jax.random.key(0), shape=(N * D,))
+    #print(f'J_tmp * v = {jnp.dot(J_tmp, v)}')
+    #print(f'jvp(v) = {jax.jvp(residual_kernel_tmp, (u_et[0],), (v,))}')
+
+    @jax.vmap
+    def buildfwd(u_t, x_nd, material_params_qm):
+        return jax.jacfwd(residual_kernel, argnums=0)(u_t, x_nd, material_params_qm)
+    
+    jac = buildfwd(u_et, x_end, material_params_eqm)
+    #print(f'J_vmap = {jac[0]}')
+
+    return jac
+
+def collectIndecies(assembly_map,jacShape):
+    b = assembly_map.to_bcoo()
+
+    c = b.indices[0,b.indices[:,:,1].argsort()][0,:,0]
+
+    fullshape = jacShape[0]*jacShape[1]
+
+        #try to figure out whether this will always hold true or only mostly hold true
+    d = jnp.vstack((2*c,2*c+1)).transpose().reshape((fullshape,))
+
+    djac = d.reshape(jacShape[0:2])
+
+    return djac
+
+
+def buildJacobian(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: Callable,
+    u_0_g: jnp.ndarray | None,
+    dirichlet_bcs: np.ndarray[Any, np.dtype[np.uint64]],
+    dirichlet_values: np.ndarray[Any, np.dtype[np.floating[Any]]]
+    
+):
+    B = len(element_batches)
+    V = vertices_vd.shape[0]
+    D = vertices_vd.shape[1]
+
+    element_residual_func = jax.tree_util.Partial(element_residual_func) #needed for jacobian, since the other build jacobian takes a partial this is the version we pass
+
+    assembly_map_b = [
+        mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
+        for b in element_batches
+    ] #needed for jacobian creation 
+
+    ebc = batch_to_collection(vertices_vd=vertices_vd, element_batches=element_batches)
+
+
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(V * ebc.U[0],))
+    else:
+        assert u_0_g.shape == (V * ebc.U[0],)
+
+
+    j_bett = [
+        _buildJacobianByBatch(
+            element_residual_func=element_residual_func,
+            constitutive_model=ebc.constitutive_models[i],
+            material_params_eqm=ebc.get_material_params(i),
+            x_end=ebc.get_x(i),
+            dphi_dxi_qnp=ebc.get_dphi_dxi(i),
+            W_q=ebc.get_weights(i)  ,
+            assembly_map=assembly_map_b[i],
+            u_g=u_0_g,
+        )
+        for i in range(ebc.B)
+    ]
+
+
+    j_indecs = [
+        collectIndecies(assembly_map_b[i],j_bett[i].shape
+                        
+        )
+        for i in range(ebc.B)
+    ]
+
+
+    print(j_bett[0].shape)
+    print(j_bett[1].shape)
+    print(j_indecs[0].shape)
+    print(j_indecs[1].shape)
+
+    def getIndecies(x,y):
+            return jnp.array([x,y])
+    getIndecies = jax.vmap(jax.vmap(getIndecies,(0,None)),(None,0))
+
+    
