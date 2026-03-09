@@ -87,6 +87,97 @@ class QuadratureArrayType(Enum):
 
 
 @struct.dataclass
+class DofEnumeration:
+    """
+    Stores key information describing a degree of freedom (DoF) enumeration.
+    """
+
+    # The number of elements owned by this rank
+    n_owned_elements: int = struct.field(pytree_node=False)
+
+    # The number of DoF's owned by this rank (excludes ghosts).
+    # Due to the global number scheme, this is equivalent to:
+    # owned_global_dof_end - owned_global_dof_begin
+    # Note: during the enrichment phase, this will be incorrect as new DoF's do not have global
+    #       numbers until the renumbering phase.
+    n_owned_dofs: int = struct.field(pytree_node=False)
+
+    # The number of DoF's appearing in owned element DoF maps but are owned by other ranks.
+    # In other words, this rank will probably write to containers for these DoF entries even
+    # though this rank does not own them.
+    n_local_ghost_dofs: int = struct.field(pytree_node=False)
+
+    # The number of DoF's that ONLY appear in ghost elements and are owned by other ranks.
+    # In other words, this rank will only read from containers for these DoF entries.
+    n_exclusive_ghost_dofs: int = struct.field(pytree_node=False)
+
+    # Specifies the number of DoFs that are not tied to any element / basis function.
+    # Note: These DoFs will be owned by the last rank. Consequently, it will be included in the
+    #       count of n_owned_dofs for the last rank, but will appear in the count of
+    #       n_local_ghost_dofs for all other ranks (since they may write to entries corresponding
+    #       to these DoFs).
+    n_free_global_dofs: int = struct.field(pytree_node=False)
+
+    # The rank index that marks the beginning of the free global DoFs.
+    free_global_dof_rank_begin: int = struct.field(pytree_node=False)
+
+    # Since global numbering scheme will maintain that the DoF's owned by this rank
+    # lie within a continuous interval (with each rank's interval sorted by rank),
+    # this is the beginning of the range (inclusive).
+    # Note: during the enrichment phase, this will be incorrect as new DoF's
+    #       do not have global numbers until the renumbering phase.
+    owned_global_dof_begin: int = struct.field(pytree_node=False)
+
+    # The end of the global owned range (inclusive).
+    # Note: during the enrichment phase, this will be incorrect as new DoF's
+    #       do not have global numbers until the renumbering phase.
+    owned_global_dof_end: int = struct.field(pytree_node=False)
+
+    # The map that permutes the rank-based DoF number to global number.
+    rank_to_global_map: jnp.ndarray
+
+    class DofType(Enum):
+        OWNED = 0
+        LOCAL_GHOST = 1
+        EXCLUSIVE_GHOST = 2
+
+    def node_dof(self, index: int, component: int) -> jnp.ndarray:
+        # NOTE centralized computing assumption
+        pass
+
+    def n_dofs_on_rank(self) -> int:
+        """
+        The number of DoF's appearing in the DoF maps of all elements on this rank
+        (owned and ghost).
+        """
+        return self.rank_to_global_map.shape[0]
+
+    def n_local_dofs(self) -> int:
+        """
+        The number of DoF's appearing in the DoF maps of owned elements.
+        This excludes DoF's that only appear in ghost elements.
+        """
+        return self.n_owned_dofs + self.n_local_ghost_dofs
+
+    def get_dof_type(self, rank_dof: int) -> DofType:
+        """
+        Returns the type of DoF, which depends on which interval the DoF falls in.
+        """
+        if rank_dof < self.n_owned_dofs:
+            return DofType.OWNED
+        elif (
+            self.n_owned_dofs <= rank_dof < self.n_owned_dofs + self.n_local_ghost_dofs
+        ):
+            return DofType.LOCAL_GHOST
+        elif self.n_local_dofs() <= rank_dof < self.n_dofs_on_rank():
+            return DofType.EXCLUSIVE_GHOST
+        else:
+            # Those outside of the ranges are assumed to be new DoF's during an enrichment phase,
+            # which are owned.
+            return DofType.OWNED
+
+
+@struct.dataclass
 class ElementBatchCollection:
     """
     Holds information about a collection of batches of elements in a form that is ameniable to JIT.
@@ -144,6 +235,20 @@ class ElementBatchCollection:
     # Unravelled derivative of basis functions (w.r.t. parametric coordinates) evaluated at quad
     # points for all batches, shape depends on types
     dphi_dxi: jnp.ndarray
+
+    # --- Degree of freedom enumeration ---
+
+    # Key information for degree-of-freedom numbering (enumeration)
+    dof_enumeration: DofEnumeration
+    # Unravelled rank DoF map for each element for all batches, length depends on the element types
+    # for each batch.
+    # NOTE: not needed at this time since DoF enumeration is simply tied to node numbers (until
+    # XFEM is implemented).
+    # element_to_rank_maps: jnp.ndarray
+    # Offset for each batch into `element_to_rank_maps`, shape=(B+1,)
+    # NOTE: not needed at this time since DoF enumeration is simply tied to node numbers (until
+    # XFEM is implemented).
+    # element_to_rank_offsets: jnp.ndarray
 
     # --- Callable functions ---
 
@@ -376,6 +481,7 @@ class ElementBatchCollection:
 def batch_to_collection(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
+    dof_enumeration: DofEnumeration,
 ) -> ElementBatchCollection:
     """
     Converts a list of ElementBatch's to a BatchCollection, which is ameniable to JIT operations.
@@ -439,6 +545,8 @@ def batch_to_collection(
         weights=jnp.hstack([W_q.ravel() for W_q in W_bq]),
         phi=jnp.hstack([phi_qn.ravel() for phi_qn in phi_bqn]),
         dphi_dxi=jnp.hstack([dphi_dxi_qnp.ravel() for dphi_dxi_qnp in dphi_dxi_bqnp]),
+        # --- Degree of freedom enumeration ---
+        dof_enumeration=dof_enumeration,
         # --- Callable functions ---
         constitutive_models=tuple(
             [jax.tree_util.Partial(b.constitutive_model) for b in element_batches]
@@ -1221,6 +1329,7 @@ def preprocess_bvp(
     element_residual_func: Callable,
     dirichlet_bcs: List[DirichletConstraint],
     multipoint_constraints: List[MultiPointConstraint] = [],
+    global_values: List[int] = [],
 ):
     """
     Converts information from a user-facing format to a JAX-ameniable format.
@@ -1239,6 +1348,10 @@ def preprocess_bvp(
     assert len(dirichlet_bcs) <= D * V
     for b in element_batches:
         assert b.connectivity_en.shape[1] <= V
+    for b in element_batches:
+        assert (
+            b.n_dofs_per_basis == element_batches[0].n_dofs_per_basis
+        ), "The current DoF enumeration algorithm requires that the number of DoFs per a basis support point be constant across batches."
 
     # Wrap the provided callable to be compatible with jit
     element_residual_func = jax.tree_util.Partial(element_residual_func)
@@ -1249,8 +1362,31 @@ def preprocess_bvp(
         for b in element_batches
     ]
 
+    # Enumerate degrees of freedom
+    # NOTE: this currently assumes that the element_batches contains ALL elements
+    # that will exist on this rank for the respective solve. If this is not the case,
+    # we will need to construct the enumeration at a point where all element information
+    # is known and pass it into this function.
+    # NOTE assertion above ensures U is constant across batches
+    U = element_batches[0].n_dofs_per_basis
+    dof_enumeration = DofEnumeration(
+        n_owned_elements=sum([b.connectivity_en.shape[0] for b in element_batches]),
+        n_owned_dofs=V * U + sum(global_values),
+        n_local_ghost_dofs=0,
+        n_exclusive_ghost_dofs=0,
+        n_free_global_dofs=sum(global_values),
+        free_global_dof_rank_begin=V * U,
+        owned_global_dof_begin=0,
+        owned_global_dof_end=V * U + sum(global_values),
+        rank_to_global_map=jnp.arange(V * U + sum(global_values)),
+    )
+
     # Convert element batch information into something ameniable to JAX transforms like JIT
-    ebc = batch_to_collection(vertices_vd=vertices_vd, element_batches=element_batches)
+    ebc = batch_to_collection(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        dof_enumeration=dof_enumeration,
+    )
     # print(ebc)
 
     assert (
@@ -1270,6 +1406,10 @@ def preprocess_bvp(
     # is only needed for solvers that actually form the Jacobian in memory.
     # NOTE: we need a concrete value to specialize for JIT of other functions
     jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
+
+    fixed_point_constraints, multipoint_constraints = (
+        convert_boundary_conditions_to_constraints(dirichlet_bcs)
+    )
 
     constraint_system = convert_constraints_to_system(
         dcs=dirichlet_bcs,
@@ -1292,6 +1432,7 @@ def solve_bvp(
     element_residual_func: Callable,
     dirichlet_bcs: List[DirichletConstraint],
     multipoint_constraints: List[MultiPointConstraint] = [],
+    global_values: List[int] = [],
     u_0_g: jnp.ndarray | None = None,
     solver_options: SolverOptions = SolverOptions(),
     plot_convergence: bool = False,
@@ -1307,6 +1448,9 @@ def solve_bvp(
     element_residual_func: residual function emerging from weak form of governing equations
     dirichlet_bcs        : Dirichlet boundary conditions, list[DirichletConstraint]
     multipoint_constraints : Linear constraints between degrees of freedom, list[MultiPointConstraint]
+    global_values        : Length of list indicates number of global solution vector-values that will
+                           added to the global system (e.g. for periodic BCs). Each entry in the list
+                           indicates the number of components for each vector-value.
     u_0_g                : initial guess for the solution, ndarray[float, (V * D)] or None (default, zeros will be used)
     solver_options       : options for the linear/nonlinear solvers
     plot_convergence     : indicates if the convergence history for the linear solver should be

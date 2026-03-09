@@ -8,20 +8,16 @@ import math
 
 from enum import Enum, auto
 
+from .boundary_conditions import *
+
 # Using a simplified tolerance for float comparisons
 TOLERANCE = 1e-16
 
 
-class CheckResult(Enum):
-    BAD = auto()
-    GOOD = auto()
-    TRIVIAL = auto()
-
-
 @dataclass
-class DirichletConstraint:
+class FixedPointConstraint:
     """
-    Represents a Dirichlet constraint (fixed value for a DoF).
+    Represents a fixed value for a DoF.
     """
 
     dep_dof: int
@@ -47,6 +43,12 @@ class MultiPointConstraint:
     )
     # The constant part of the RHS (including resolved Dirichlet terms)
     rhs_constant: float = 0.0
+
+    # Used during consolidation of constratints
+    class CheckResult(Enum):
+        BAD = auto()
+        GOOD = auto()
+        TRIVIAL = auto()
 
     def __init__(
         self,
@@ -454,3 +456,59 @@ def consolidate_multipoint_constraints(
 
     # Return only active constraints
     return list(dep_dof_map.values())
+
+
+def convert_boundary_conditions_to_constraints(
+    bcs: List[DirichletBC | PeriodicBC],
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    dof_enumeration: DofEnumeration,
+    n_solution_components: int,
+    global_values: List[int] = [],
+) -> Tuple[List[FixedPointConstraint], List[MultiPointConstraint]]:
+    """
+    Converts a list of DirichletBC and PeriodicBC to a list of constraints.
+    """
+    fixed_point_constraints = []
+    multi_point_constraints = []
+
+    global_dof_offsets = (
+        np.cumsum(global_values) + dof_enumeration.free_global_dof_rank_begin
+    )
+
+    for bc in bcs:
+        if isinstance(bc, DirichletBC):
+            if bc.bc_type == BCType.NODE:
+                fixed_point_constraints.append(
+                    FixedPointConstraint(
+                        dep_dof=n_solution_components * bc.index + bc.component,
+                        value=bc.value,
+                    )
+                )
+            elif bc.bc_type == BCType.GLOBAL_VALUE:
+                fixed_point_constraints.append(
+                    FixedPointConstraint(
+                        dep_dof=n_solution_components * n_total_nodes
+                        + bc.index
+                        + bc.component,
+                        value=bc.value,
+                    )
+                )
+        elif isinstance(bc, PeriodicBC):
+            d = vertices_vd[bc.secondary_index] - vertices_vd[bc.primary_index]
+            for i in range(n_solution_components):
+                {
+                    global_dof_offsets[bc.global_gradient_index]: 
+                    for j in range(n_solution_components)
+                }
+                multi_point_constraints.append(
+                    MultiPointConstraint(
+                        dep_dof=n_solution_components * bc.secondary_index + i,
+                        indep_dof_terms={
+                            n_solution_components * bc.primary_index + i: 1.0,
+                            global_dof_offsets[bc.global_gradient_index] + i: d[i],
+                        },
+                        global_gradient_index=bc.global_gradient_index,
+                    )
+                )
+
+    return fixed_point_constraints, multi_point_constraints

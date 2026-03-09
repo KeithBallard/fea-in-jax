@@ -13,7 +13,7 @@ import numpy as np
 from typing import List
 from flax import struct
 
-from .constraints import DirichletConstraint, MultiPointConstraint
+from .constraints import FixedPointConstraint, MultiPointConstraint
 from .utils import debug_print
 
 
@@ -110,15 +110,17 @@ class ConstraintSystem:
 
 
 def convert_constraints_to_system(
-    dcs: List[DirichletConstraint], mpcs: List[MultiPointConstraint], n_total_dofs: int
+    fpcs: List[FixedPointConstraint],
+    mpcs: List[MultiPointConstraint],
+    n_total_dofs: int,
 ) -> ConstraintSystem:
     """
-    Converts a list of MultiPointConstraint (used for consolidation of constraints) to a
-    ConstraintSystem (used for enforcement of constraints).
+    Converts lists of constraints (used for the consolidation step) to a ConstraintSystem (used
+    for enforcement of constraints).
     """
     n_mpcs = len(mpcs)
-    n_dcs = len(dcs)
-    n_constraints = n_mpcs + n_dcs
+    n_fpcs = len(fpcs)
+    n_constraints = n_mpcs + n_fpcs
 
     if n_constraints == 0:
         return ConstraintSystem(
@@ -131,7 +133,7 @@ def convert_constraints_to_system(
         )
 
     # First pass: count total non-zeros to pre-allocate arrays
-    # Only MPCs contribute to P non-zeros (Dirichlet BCs are P[row, :] = 0)
+    # Only MPCs contribute to P non-zeros (fixed point are P[row, :] = 0)
     nnz = sum(len(mpc.indep_dof_terms) for mpc in mpcs)
 
     # Allocate numpy arrays
@@ -156,12 +158,12 @@ def convert_constraints_to_system(
             data[current_nnz_idx] = factor
             current_nnz_idx += 1
 
-    # Process Dirichlet BCs
-    for j, dbc in enumerate(dcs):
+    # Process fixed point constraints
+    for j, fpc in enumerate(fpcs):
         idx = n_mpcs + j
-        dep_dofs[idx] = dbc.dep_dof
-        g[idx] = dbc.value
-        # No P entries for Dirichlet BCs
+        dep_dofs[idx] = fpc.dep_dof
+        g[idx] = fpc.value
+        # No P entries for fixed point constraints
 
     # Create JAX arrays from numpy arrays
     P_indices = (
