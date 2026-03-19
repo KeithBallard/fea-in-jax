@@ -209,101 +209,129 @@ def get_n_cells_per_vert(
     return jnp.array(get_n_cells_per_vert_helper(vertices, cells))
 
 
-@njit
-def build_row_ind(
-    n_vertices: int, cells: np.ndarray[Any, np.dtype[np.uint64]]
-) -> np.ndarray[Any, np.dtype[np.uint64]]:
-    """
-    Creates row offset map for the compressed sparse row (CSR) format.
-    """
-    csr_row_ind = np.zeros((n_vertices + 1,), dtype=np.uint64)
-    one = np.uint64(1)
-    for i in range(cells.shape[0]):
-        for j in range(cells.shape[1]):
-            csr_row_ind[np.uint64(cells[i, j]) + one] += 1
-    return np.cumsum(csr_row_ind)
+# @njit
+# def build_row_ind(
+#     n_vertices: int, cells: np.ndarray[Any, np.dtype[np.uint64]]
+# ) -> np.ndarray[Any, np.dtype[np.uint64]]:
+#     """
+#     Creates row offset map for the compressed sparse row (CSR) format.
+#     """
+#     csr_row_ind = np.zeros((n_vertices + 1,), dtype=np.uint64)
+#     one = np.uint64(1)
+#     for i in range(cells.shape[0]):
+#         for j in range(cells.shape[1]):
+#             csr_row_ind[np.uint64(cells[i, j]) + one] += 1
+#     return np.cumsum(csr_row_ind)
 
 
-@njit
-def build_col_ind_and_data(
-    csr_row_ind: np.ndarray[Any, np.dtype[np.uint64]],
-    cells: np.ndarray[Any, np.dtype[np.uint64]],
-) -> tuple[np.ndarray[Any, np.dtype[np.uint64]], np.ndarray[Any, np.dtype[np.float32|np.float64]]]:
-    """
-    Create column offset map and data for the compressed sparse row (CSR) format.
-    """
-    n_verts_per_cell = cells.shape[1]
-    curr_col_offset = np.zeros((csr_row_ind.shape[0],), dtype=np.uint64)
-    csr_col_ind = np.zeros((csr_row_ind[-1],), dtype=np.uint64)
-    csr_data = np.zeros((csr_row_ind[-1],))
-    for cell_index, cell in enumerate(cells):
-        for i, vert_index in enumerate(cell):
-            index = csr_row_ind[vert_index] + curr_col_offset[vert_index]
-            col = cell_index * n_verts_per_cell + i
-            csr_col_ind[index] = col
-            csr_data[index] = 1.0
-            curr_col_offset[vert_index] += 1
-    return (csr_col_ind, csr_data)
+# @njit
+# def build_col_ind_and_data(
+#     csr_row_ind: np.ndarray[Any, np.dtype[np.uint64]],
+#     cells: np.ndarray[Any, np.dtype[np.uint64]],
+# ) -> tuple[np.ndarray[Any, np.dtype[np.uint64]], np.ndarray[Any, np.dtype[np.float32|np.float64]]]:
+#     """
+#     Create column offset map and data for the compressed sparse row (CSR) format.
+#     """
+#     n_verts_per_cell = cells.shape[1]
+#     curr_col_offset = np.zeros((csr_row_ind.shape[0],), dtype=np.uint64)
+#     csr_col_ind = np.zeros((csr_row_ind[-1],), dtype=np.uint64)
+#     csr_data = np.zeros((csr_row_ind[-1],))
+#     for cell_index, cell in enumerate(cells):
+#         for i, vert_index in enumerate(cell):
+#             index = csr_row_ind[vert_index] + curr_col_offset[vert_index]
+#             col = cell_index * n_verts_per_cell + i
+#             csr_col_ind[index] = col
+#             csr_data[index] = 1.0
+#             curr_col_offset[vert_index] += 1
+#     return (csr_col_ind, csr_data)
 
 
-# @timer()
+# # @timer()
+# def mesh_to_sparse_assembly_map(
+#     n_vertices: int,
+#     cells: np.ndarray[Any, np.dtype[np.uint64]],
+# ) -> jsparse.BCSR:
+#     """
+#     Builds a compressed sparse row (CSR) matrix that serves as a map between two representations
+#     for vectors: 1) globally assembled format and 2) batched element-node format.
+
+#     NOTE: A map can only be created for a single type of cell, so different cell types need
+#     to be organized into separate batches.
+
+#     Parameters
+#     ----------
+#     n_vertices  : total number of vertices
+#     cells       : dense 2d-array with shape (# elements, V)
+
+#     Returns
+#     -------
+#     assembly_map : sparse 3d-array with shape (# batches, # verts, # elements * V)
+#     """
+
+#     # Create row offset map for the compressed sparse row (CSR) format
+#     csr_row_ind = build_row_ind(n_vertices, cells)
+#     csr_col_ind, csr_data = build_col_ind_and_data(csr_row_ind, cells)
+
+#     # Make a batch of 1
+#     csr_row_ind = csr_row_ind.reshape(1, csr_row_ind.shape[0])
+#     csr_col_ind = csr_col_ind.reshape(1, csr_col_ind.shape[0])
+#     csr_data = csr_data.reshape(1, csr_data.shape[0])
+
+#     return jsparse.BCSR(
+#         (jnp.array(csr_data), jnp.array(csr_col_ind), jnp.array(csr_row_ind)),
+#         shape=(1, n_vertices, cells.shape[0] * cells.shape[1]),
+#         indices_sorted=True,
+#         unique_indices=True,
+#     )
+@partial(jax.jit,static_argnames = "n_vertices")
 def mesh_to_sparse_assembly_map(
     n_vertices: int,
-    cells: np.ndarray[Any, np.dtype[np.uint64]],
-) -> jsparse.BCSR:
+    cells: jnp.ndarray,
+):
     """
     Builds a compressed sparse row (CSR) matrix that serves as a map between two representations
-    for vectors: 1) globally assembled format and 2) batched element-node format.
+    for vectors on a patch: 1) assembled format and 2) element-node format.
 
-    NOTE: A map can only be created for a single type of cell, so different cell types need
-    to be organized into separate batches.
+    Takes advantage of the fact that the assembly map has exactly one entry in each column, so the COO representation has a convenient structure.
+    """      
+    nse = np.prod(cells.shape)
+    coo_data = jnp.ones(nse)
+    # Search breaks if the padding is over 50%, so ensure the padding is maxed now.
+    coo_rowindices = jnp.searchsorted(
+        jnp.arange(n_vertices),
+        cells.flatten(),
+        method="scan_unrolled",
+    )
+    coo_colindices = jnp.arange(nse)
 
-    Parameters
-    ----------
-    n_vertices  : total number of vertices
-    cells       : dense 2d-array with shape (# elements, V)
-
-    Returns
-    -------
-    assembly_map : sparse 3d-array with shape (# batches, # verts, # elements * V)
-    """
-
-    # Create row offset map for the compressed sparse row (CSR) format
-    csr_row_ind = build_row_ind(n_vertices, cells)
-    csr_col_ind, csr_data = build_col_ind_and_data(csr_row_ind, cells)
-
-    # Make a batch of 1
-    csr_row_ind = csr_row_ind.reshape(1, csr_row_ind.shape[0])
-    csr_col_ind = csr_col_ind.reshape(1, csr_col_ind.shape[0])
-    csr_data = csr_data.reshape(1, csr_data.shape[0])
-
-    return jsparse.BCSR(
-        (jnp.array(csr_data), jnp.array(csr_col_ind), jnp.array(csr_row_ind)),
-        shape=(1, n_vertices, cells.shape[0] * cells.shape[1]),
-        indices_sorted=True,
-        unique_indices=True,
+    return jsparse.BCOO(
+        (
+            coo_data,
+            jnp.stack((coo_rowindices, coo_colindices)).T,
+        ),
+        shape=(n_vertices, nse),
     )
 
 
 @partial(jax.jit,static_argnames = ["E","V","U"])
 def transform_global_to_element_node(
-    assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int, V: int, U: int
+    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int, V: int, U: int
 ):
     """
     Transforms a vector that represents a global assembled vector into the element-node representation.
 
     TODO: change this to transform into batches (keep batch info in Dimensions)
     """
-    return jsparse.bcsr_dot_general(
+    return jsparse.bcoo_dot_general(
         assembly_map,
-        v_g.reshape(1, v_g.shape[0], v_g.shape[1]),
-        dimension_numbers=(((1,), (1,)), ((0,), (0,))),
+        v_g.reshape(v_g.shape[0], v_g.shape[1]),
+        dimension_numbers=(((0,), (0,)), ((), ())),
     ).reshape(E, V, U)
 
 
 @partial(jax.jit, static_argnames=["E"])
 def transform_global_unraveled_to_element_node(
-    assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int
+    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int
 ):
     """
     Transforms a vector that represents a global assembled vector that is unraveled into the
@@ -311,77 +339,80 @@ def transform_global_unraveled_to_element_node(
 
     TODO: change this to transform into batches (keep batch info in Dimensions)
     """
-    assert assembly_map.shape[0] == 1
-    V = assembly_map.shape[1]
+    V = assembly_map.shape[0]
     U = v_g.shape[0] // V
-    N = assembly_map.shape[2] // E
-    return jsparse.bcsr_dot_general(
+    N = assembly_map.shape[1] // E
+    return jsparse.bcoo_dot_general(
         assembly_map,
-        v_g.reshape(1, V, U),
-        dimension_numbers=(((1,), (1,)), ((0,), (0,))),
+        v_g.reshape(V, U),
+        dimension_numbers=(((0,), (0,)), ((), ())),
     ).reshape(E, N, U)
 
 
 def transform_element_node_to_global_unraveled_nosum(
-    assembly_map: jsparse.BCSR, v_en: jnp.ndarray
+    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    n_cell_per_vert = (
-        assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
-    )
-    v_g = jsparse.bcsr_dot_general(
+    n_cell_per_vert = jsparse.bcoo_dot_general(
         assembly_map,
-        v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        jnp.ones(v_en.shape[0] * v_en.shape[1]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
     )
-    return (v_g / n_cell_per_vert[jnp.newaxis, :, jnp.newaxis]).reshape(
+    v_g = jsparse.bcoo_dot_general(
+        assembly_map,
+        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
+    )
+    return (v_g / n_cell_per_vert[:, jnp.newaxis]).reshape(
         np.prod(v_g.shape)
     )
 
 
 @jax.jit
 def transform_element_node_to_global_unraveled_sum(
-    assembly_map: jsparse.BCSR, v_en: jnp.ndarray
+    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    v_g = jsparse.bcsr_dot_general(
+    v_g = jsparse.bcoo_dot_general(
         assembly_map,
-        v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
     )
     return v_g.reshape(np.prod(v_g.shape))
 
 @jax.jit
 def transform_element_node_to_global_sum(
-    assembly_map: jsparse.BCSR, v_en: jnp.ndarray
+    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    v_g = jsparse.bcsr_dot_general(
+    v_g = jsparse.bcoo_dot_general(
         assembly_map,
-        v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
     )
     return v_g.reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
 
 @jax.jit
 def transform_element_node_to_global_nosum(
-    assembly_map: jsparse.BCSR, v_en: jnp.ndarray
+    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    n_cell_per_vert = (
-        assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
-    )
-    v_g = jsparse.bcsr_dot_general(
+    n_cell_per_vert = jsparse.bcoo_dot_general(
         assembly_map,
-        v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        jnp.ones(v_en.shape[0] * v_en.shape[1]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
     )
-    return (v_g / n_cell_per_vert[jnp.newaxis, :, jnp.newaxis]).reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
+    v_g = jsparse.bcoo_dot_general(
+        assembly_map,
+        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
+        dimension_numbers=(((1,), (0,)), ((), ())),
+    )
+    return (v_g / n_cell_per_vert[:, jnp.newaxis]).reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
