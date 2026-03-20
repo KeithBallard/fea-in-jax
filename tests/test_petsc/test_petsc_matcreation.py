@@ -233,7 +233,7 @@ plt.show()
 """
 
 lapMatCOO = lapMatCSR.tocoo()
-data = jnp.asarray(lapMatCOO.data,dtype=jnp.float32)
+data = jnp.asarray(lapMatCOO.data,dtype=jnp.float64)
 row = jnp.asarray(lapMatCOO.row,dtype=jnp.int32)
 col = jnp.asarray(lapMatCOO.col,dtype=jnp.int32)
 

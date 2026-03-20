@@ -1,5 +1,9 @@
 from helper import *
 
+
+from mpi4py import MPI
+import ctypes as ct
+
 jax.config.update("jax_enable_x64", True)
 
 import jax.extend
@@ -94,7 +98,7 @@ element_batches = [
     ),
 ]
 
-jacMat = buildJacobian(
+jacMat = assembleJacobian(
     element_residual_func=linear_elasticity_residual,
     vertices_vd=points,
     element_batches=element_batches,
@@ -105,30 +109,38 @@ jacMat = buildJacobian(
 
 
 
+jacMatShape = jacMat.shape
+jacMatRows = jacMat.row
+jacMatCols = jacMat.col
+jacMatVals = jnp.asarray(jacMat.data)
+jacMatZero = jacMat.nse
 
-exit(1)
+print("assembled in JAX")
 
-# Solve the boundary value problem
-u, residual, element_batches = solve_bvp(
-    element_residual_func=linear_elasticity_residual,
-    vertices_vd=points,
-    element_batches=element_batches,
-    u_0_g=jnp.zeros(shape=(V * U)),
-    dirichlet_bcs=dirichlet_bcs,
-    dirichlet_values=dirichlet_values,
-    solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-        linear_precond_type=PreconditionerType.JACOBI,
-    ),
-    plot_convergence=True
-)
-print("|R| = ", jnp.linalg.norm(residual))
-# print(residual)
+comm = PETSc.COMM_SELF
+mat = PETSc.Mat().create(comm=comm)
+mat.setSizes(jacMatShape)
 
-# Make sure the solution matches at the Dirichlet BCs
-dirichlet_dofs = U * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1]
-assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
+mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
+mat.setPreallocationCOO(jacMatRows,jacMatCols)
 
-# Write output
-mesh.point_data["u"] = u.reshape((points.shape[0], U))
-mesh.write(get_output("test_microscale_bvp_out.vtk"))
+print("preallocated in PETSc")
+
+GPUPointerArray = cp.from_dlpack(jacMatVals,copy=False)
+
+lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+
+
+MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+
+print("values set")
+
+
+rhsVec = assembleRHS()
+
+

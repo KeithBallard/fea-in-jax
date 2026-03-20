@@ -134,6 +134,18 @@ class JacobianDiagonl:
     # Indicates whether Dirichlet boundary conditions are built into the Jacobian.
     dirichlet_bcs_builtin: bool = struct.field(pytree_node=False)
 
+@jax.jit
+def buildJacobianMatrix(
+    jacobian: Jacobian,
+    dirichlet_dofs:jnp.ndarray,
+    x_0:jnp.ndarray,
+    *args,
+    **kwargs,
+):
+    J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(jacobian.function(x, *args, **kwargs), dirichlet_dofs)
+    return J_w_dirichlet(x_0)
+    
+
 
 @partial(jax.jit, static_argnames=["solver_options", "check_consistency"])
 def linear_solve(
