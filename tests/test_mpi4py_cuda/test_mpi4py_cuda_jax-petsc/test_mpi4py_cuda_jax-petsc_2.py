@@ -5,10 +5,17 @@ import jax
 import jax.numpy as jnp
 
 import cupy as cp
+import ctypes as ct
 
-comm = MPI.COMM_WORLD
+jax.config.update("jax_enable_x64", True)
+
+
+comm = MPI.COMM_WORLD  #there are two comm object sources. The MPI4py one and the PETSc4py one and unfortunatly they're not the same thing. If we're not careful this can and will cause hanging 
 rank = comm.Get_rank()
 size = comm.Get_size()
+
+matSize = 10
+
 
 if size != 2:
     raise RuntimeError("This example requires exactly 2 MPI ranks")
@@ -22,43 +29,46 @@ if rank == 0:
     if not jax.devices("gpu"):
         raise RuntimeError("No GPU available for JAX")
     
-    data_gpu = jnp.arange(10, dtype=jnp.float64)
+    data_gpu = jnp.arange(matSize, dtype=jnp.float64)
     print(f"[Rank {rank}] JAX GPU array: {data_gpu}")
 
-    comm.send(cp.from_dlpack(data_gpu,copy=False), dest=1, tag=11)
+    data_cp = cp.from_dlpack(data_gpu,copy=False)
+
+    comm.send(data_cp, dest=1, tag=11)
     print(f"[Rank {rank}] sent data to PETSc process")
 
 elif rank == 1:
 
     print(f"[Rank {rank}] waiting for data from JAX process")
-    data_gpu = comm.recv(source=0, tag=11)
-    print(f"[Rank {rank}] received data: {type(data_gpu)}")
-
-    vec = PETSc.Vec().create(comm=PETSc.COMM_SELF)  # single-rank CPU vector
-    vec.setSizes(len(data_gpu))
-    vec.setFromOptions()
-
-
-    start, end = vec.getOwnershipRange()
-    vec[start:end] = data_gpu.get()
-    vec.assemble()
-    print(f"[Rank {rank}] PETSc vector assembled:")
-    vec.view()
-
-    vec *= 2.0
-    vec.assemble()
-    print(f"[Rank {rank}] PETSc vector after scaling by 2:")
-    vec.view()
+    data_gpu_1 = comm.recv(source=0, tag=11)
+    print(f"[Rank {rank}] received data: {type(data_gpu_1)}")
+    
+    mat = PETSc.Mat().create(comm=PETSc.COMM_SELF)
+    mat.setSizes([matSize, matSize])
+    
+    rows = np.arange(matSize,dtype=jnp.int32)
+    cols = np.arange(matSize,dtype=jnp.int32)
 
 
-    result_cpu = vec.getArray()
-    comm.send(result_cpu, dest=0, tag=22)
+    mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
+    mat.setPreallocationCOO(rows, cols)
+    
+    lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+    MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(data_gpu_1.data.ptr)  # the pointer to GPU memory
+
+    
+
+    MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+    
+    
+    
+    mat.view()
     print(f"[Rank {rank}] sent processed data back to JAX process")
 
-if rank == 0:
-    result_cpu = comm.recv(source=1, tag=22)
-    result_gpu = jnp.array(result_cpu)  # copy back to GPU
-    print(f"[Rank {rank}] received processed data on GPU: {result_gpu}")
 
 comm.Barrier()
 if rank == 0:
