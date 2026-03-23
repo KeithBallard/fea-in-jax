@@ -988,6 +988,32 @@ def _constructJacobianComponents(
     jac = buildJacobianMatrix(jacobian=jacobian_func,dirichlet_dofs=dirichlet_dofs,x_0=u_0_g)
     return jac
 
+def _constructRHSComponents(
+    element_residual_func,
+    ebc,
+    assembly_map_b,
+    u_0_g,
+    dirichlet_values_g,
+    dirichlet_mask_g,
+
+):
+    # Function that produces (R(u), ISVs)
+    residual_isv_func_w_dirichlet = lambda u_f: calculate_residual_w_dirichlet(
+        element_residual_func=element_residual_func,
+        ebc=ebc,
+        assembly_map_b=assembly_map_b,
+        u_f=u_f,
+        dirichlet_values_g=dirichlet_values_g,
+        dirichlet_mask_g=dirichlet_mask_g,
+    )
+
+    # Function that produces R(u)
+    residual_func_w_dirichlet = lambda u_f: residual_isv_func_w_dirichlet(u_f=u_f)[0]
+    return residual_func_w_dirichlet(u_0_g)
+    
+    
+    
+
 def solve_nonlinear_step(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
@@ -1124,6 +1150,9 @@ def solve_nonlinear_step(
         )
 
         u_f = u_f + delta_u
+        
+        jax.debug.print("u_f[0] {bar}", bar=u_f[0]) #doesn't seem to change for this example
+        
         R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
 
         return (
@@ -1152,6 +1181,81 @@ def solve_nonlinear_step(
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
 
+
+def assembleRHS(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: Callable,
+    u_0_g: jnp.ndarray | None,
+    dirichlet_bcs: np.ndarray[Any, np.dtype[np.uint64]],
+    dirichlet_values: np.ndarray[Any, np.dtype[np.floating[Any]]],
+):
+    B = len(element_batches)
+    V = vertices_vd.shape[0]
+    D = vertices_vd.shape[1]
+
+    # Validate input
+    assert D <= 3
+    assert dirichlet_bcs.shape[0] <= D * V
+    assert dirichlet_bcs.shape[1] == 2
+    assert dirichlet_values.shape[0] == dirichlet_bcs.shape[0]
+    for b in element_batches:
+        assert b.connectivity_en.shape[1] <= V
+
+    # Wrap the provided callable to be compatible with jit
+    element_residual_func = jax.tree_util.Partial(element_residual_func)
+
+    # Structures for mapping between cell-level arrays and global arrays
+    assembly_map_b = [
+        mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
+        for b in element_batches
+    ]
+
+    # Convert element batch information into something ameniable to JAX transforms like JIT
+    ebc = batch_to_collection(vertices_vd=vertices_vd, element_batches=element_batches)
+    # print(ebc)
+
+    assert (
+        np.array(ebc.U) == ebc.U[0]
+    ).all(), """The number of DoFs per a point (U) must be the same across all batches.
+    To relax this constrain much of the infrastructure code in fea.py would have to be adapted to
+    support varying number of DoFs per a batch.
+    """
+
+    # If an initial guess was not provided, then use zeros
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(V * ebc.U[0],))
+    else:
+        assert u_0_g.shape == (V * ebc.U[0],)
+
+    # Structures for mapping between cell-level arrays and global arrays (why is this in here twice?)
+    assembly_map_b = [
+        mesh_to_sparse_assembly_map(n_vertices=V, cells=b.connectivity_en)
+        for b in element_batches
+    ]
+
+    # Compute the anticipated number of non-zeros for the assembled Jacobian, which
+    # is only needed for solvers that actually form the Jacobian in memory.
+    # NOTE: we need a concrete value to specialize for JIT of other functions
+    jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
+
+        # TODO consider JIT'ing this group of lines pending profiling
+    # A list of degrees of freedom for the Dirichlet boundary conditions
+    dirichlet_dofs = jnp.array(D * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1])
+    # print('dirichlet_dofs: ', dirichlet_dofs)
+    # Global unraveled
+    dirichlet_values_g = jnp.zeros_like(u_0_g).at[dirichlet_dofs].set(dirichlet_values)
+    # A global vector with 0's where values are not boundary conditions,
+    # and 1's corresponding to Dirichlet BCs.
+    dirichlet_mask_g = jnp.zeros_like(u_0_g).at[dirichlet_dofs].set(1.0)
+
+
+    # TODO move this to ElementBatchCollection as a method if needed
+    
+    return _constructRHSComponents(element_residual_func,ebc,assembly_map_b,u_0_g,jacobian_nnz,dirichlet_dofs)
+    
+
+
 def assembleJacobian(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
@@ -1159,7 +1263,6 @@ def assembleJacobian(
     u_0_g: jnp.ndarray | None,
     dirichlet_bcs: np.ndarray[Any, np.dtype[np.uint64]],
     dirichlet_values: np.ndarray[Any, np.dtype[np.floating[Any]]],
-
 ):
     B = len(element_batches)
     V = vertices_vd.shape[0]

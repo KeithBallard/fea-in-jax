@@ -43,7 +43,7 @@ elif rank == 1:
 
     data_gpu_1 = cp.empty(matSize, dtype=cp.float64)
     comm.Recv([data_gpu_1, MPI.DOUBLE], source=0, tag=11) #This is where things break if you're not careful about memory assignment. If CUDA falls back to shared memory you'll get an error. See the file environmentSettings for what I'm using to get it working *on my machine*
-
+                                                          #sm,smcuda and extremely brittle right now
     coo_ptr = ct.c_void_p(data_gpu_1.data.ptr)
     
     mat = PETSc.Mat().create(comm=PETSc.COMM_SELF)

@@ -31,6 +31,8 @@ from .sparse_matrix import *
 from .solve_cg import cg as cg_w_info
 
 
+import ctypes as ct
+
 class PreconditionerType(Enum):
     NONE = 0
     JACOBI = 1
@@ -166,6 +168,9 @@ def linear_solve(
 
     TODO finish documentation
     """
+    
+    jacObject = buildJacobianMatrix(jacobian,dirichlet_dofs,x_0,*args,**kwargs)
+    #jax.debug.print("nse {bar}", bar=jacObject.nse) #checking info about Jacobian
 
     if residual.dirichlet_bcs_builtin:
         R_w_dirichlet = lambda x: residual.function(x, *args, **kwargs)
@@ -181,7 +186,8 @@ def linear_solve(
             )
     else:
         J_w_dirichlet = None
-
+        
+ 
     if jacobian_diagonal is not None:
         if jacobian_diagonal.dirichlet_bcs_builtin:
             diag_J_w_dirichlet = lambda x: jacobian_diagonal.function(
@@ -337,12 +343,13 @@ def linear_solve(
             )
 
         case LinearSolverType.CG_JAX_SCIPY_W_INFO:
+            
             delta_x, cg_info = cg_w_info(
                 A=J_vp,
                 b=-R_0,
                 M=preconditioner,
-                tol=solver_options.linear_relative_tol,
-                atol=solver_options.linear_absolute_tol,
+                tol=1e-9,
+                atol=1e-9,
                 maxiter=solver_options.linear_max_iter,
             )
             info = SolverResultInfo(
@@ -640,7 +647,7 @@ def __petsc_init_impl(A: jsparse.CSR):
 
     ksp = PETSc.KSP().create()
     ksp.setOperators(A_petsc)
-    ksp.setType("bcgs")
+    ksp.setType("cg")
     ksp.setConvergenceHistory()
     ksp.getPC().setType("none")
 
@@ -648,8 +655,40 @@ def __petsc_init_impl(A: jsparse.CSR):
 
 
     return __store_object(ksp)
+    
+def __petsc_init_impl_v2(jacMat):
+    jacMatShape = jacMat.shape
+    jacMatRows = jacMat.row
+    jacMatCols = jacMat.col
+    jacMatVals = jacMat.data
+    jacMatZero = jacMat.nse
+
+    print("the values are of type",type(jacMatVals))
 
 
+    mat = PETSc.Mat().create(PETSc.COMM_SELF)
+    mat.setSizes(jnp.asarray(jacMatShape,dtype=jnp.int32))
+
+    mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
+    mat.setPreallocationCOO(jnp.asarray(jacMatRows,jnp.int32),jnp.asarray(jacMatCols,dtype=jnp.int32))
+    
+    GPUPointerArray = cp.from_dlpack(jacMatVals,copy=False)
+
+    lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+    MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+
+
+    MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+    
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(mat)
+    ksp.setType("cg")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("none")
 
 
 @jax.jit
@@ -667,6 +706,9 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     print("fetched ksp")
 
     barray = cp.asarray(b)
+    
+    #lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    #VecCreateSeqCUDAWithArrays = lib.VecCreateSeqCUDAWithArrays
 
     b_petsc = PETSc.Vec()
 
@@ -694,12 +736,63 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
     
     
+def __petsc_solve_impl_v2(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ksp = __retrieve_object(cp.asarray(handle))
 
+    print("fetched ksp v2")
+
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
     
+    b_petsc = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
+    
+    x_petsc = b_petsc.duplicate()
+    x_petsc.set(0.0)
+
+    n = 3
+
+    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+    
+    ksp.setConvergenceHistory(n)
+    ksp.solve(b_petsc,x_petsc)
+
+    convergenceHist = ksp.getConvergenceHistory()
+
+    #print(convergenceHist)
+    print("solution",cp.asarray((x_petsc.getArray())))
+
+    __store_solution(cp.asarray((x_petsc.getArray())))
+
+    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
+
+def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
+    b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
+    
+
+    ksp = __retrieve_object(cp.asarray(handle))
+    
+    x_petsc = b_petsc_1.duplicate()
+    x_petsc.set(0.0)
+
+    n = 3
+
+    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+    
+    ksp.setConvergenceHistory(n)
+    ksp.solve(b_petsc_1,x_petsc)
+
+    convergenceHist = ksp.getConvergenceHistory()
+
+    #print(convergenceHist)
+
+    __store_solution(cp.asarray((x_petsc.getArray())))
+
+    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
 
 
 @jax.jit
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(__petsc_solve_impl, result_info)(ctx.handle, b)
-
+    return buffer_callback(__petsc_solve_impl_debug, result_info)(ctx.handle, b)

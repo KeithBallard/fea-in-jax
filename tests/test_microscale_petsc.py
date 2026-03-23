@@ -1,7 +1,7 @@
 from helper import *
 
 
-from mpi4py import MPI
+#from mpi4py import MPI
 import ctypes as ct
 
 jax.config.update("jax_enable_x64", True)
@@ -135,12 +135,22 @@ MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscSca
 mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
 coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
 
-
 MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
 
 print("values set")
 
 
-rhsVec = assembleRHS()
+
+
+exit(1)
+
+rhsVec = assembleRHS(
+    element_residual_func=linear_elasticity_residual,
+    vertices_vd=points,
+    element_batches=element_batches,
+    u_0_g=jnp.zeros(shape=(V * U)),
+    dirichlet_bcs=dirichlet_bcs,
+    dirichlet_values=dirichlet_values
+)
 
 

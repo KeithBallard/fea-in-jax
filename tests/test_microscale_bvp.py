@@ -9,7 +9,7 @@ print(jax.extend.backend.get_backend().platform)
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"microscale_2D_r0.vtk"))
+mesh = meshio.read(get_mesh(f"microscale_2D_r1.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[0].data, dtype=np.uint64)
 mesh.cell_data["DomainIDs"][0] = np.array(
@@ -94,6 +94,10 @@ element_batches = [
     ),
 ]
 
+import time
+
+start = time.time()
+
 # Solve the boundary value problem
 u, residual, element_batches = solve_bvp(
     element_residual_func=linear_elasticity_residual,
@@ -103,12 +107,17 @@ u, residual, element_batches = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+        linear_solve_type=LinearSolverType.PETSC,
         linear_precond_type=PreconditionerType.JACOBI,
     ),
-    plot_convergence=True
+    plot_convergence=False
 )
+
+print("took", time.time()-start)
+
 print("|R| = ", jnp.linalg.norm(residual))
+
+exit(1)
 # print(residual)
 
 # Make sure the solution matches at the Dirichlet BCs
