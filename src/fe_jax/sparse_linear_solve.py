@@ -642,7 +642,7 @@ def __petsc_init_impl(A: jsparse.CSR):
     )
     # NOTE this appears to be moved to CPU for these calls.
     # TODO figure out how to populate A with GPU arrays.
-    A_petsc.setType("aij")
+    A_petsc.setType("aijcusparse")
 
 
     ksp = PETSc.KSP().create()
@@ -788,6 +788,8 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     #print(convergenceHist)
 
     __store_solution(cp.asarray((x_petsc.getArray())))
+
+    ksp.destroy() #quick and dirty memory management
 
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
 
