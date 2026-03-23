@@ -1149,9 +1149,9 @@ def solve_nonlinear_step(
             x_0=u_f,
         )
 
+
+        jax.debug.print("x First 10 elements right before u_update:{bar}", bar=delta_u[0:10])
         u_f = u_f + delta_u
-        
-        jax.debug.print("u_f[0] {bar}", bar=u_f[0]) #doesn't seem to change for this example
         
         R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
 

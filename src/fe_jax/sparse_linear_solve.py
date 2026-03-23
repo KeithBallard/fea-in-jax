@@ -436,7 +436,23 @@ def linear_solve(
     # problem but even the jaxopt solvers will only get close for large problems.
     # Consequently, overwrite the values directly to ensure the BCs are right, even though the
     # residual may increase.
-    delta_x = delta_x.at[dirichlet_dofs].set(dirichlet_values - x_0[dirichlet_dofs])
+    
+    jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
+    
+    jax.debug.print("x shape:{bar}", bar=delta_x.shape)
+    jax.debug.print("max dof:{bar}", bar=jnp.max(dirichlet_dofs))
+    jax.debug.print("min dof:{bar}", bar=jnp.min(dirichlet_dofs))
+    jax.debug.print("dof dtype:{bar}", bar= dirichlet_dofs.dtype)
+    jax.debug.print("num dofs:{bar}", bar=dirichlet_dofs.shape)
+
+    jax.debug.print("any oob?:{bar}", bar=jnp.any(dirichlet_dofs >= delta_x.shape[0]))
+    jax.debug.print("any negative?:{bar}", bar=jnp.any(dirichlet_dofs < 0))
+    
+    
+    dirichlet_dofs_safe = dirichlet_dofs.astype(jnp.int64)
+    delta_x = delta_x.at[dirichlet_dofs_safe].set(dirichlet_values - x_0[dirichlet_dofs_safe]) #this fails on large cases and I can't figure out why. 
+    
+    jax.debug.print("x First 10 elements output moved to DOF locations:{bar}", bar=delta_x[0:10])
 
     return delta_x, info
 
@@ -773,7 +789,10 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     ksp = __retrieve_object(cp.asarray(handle))
     
-    x_petsc = b_petsc_1.duplicate()
+    x_petsc = PETSc.Vec().create(PETSc.COMM_SELF)
+    x_petsc.setType('cuda')         # true GPU vector
+    x_petsc.setSizes(b.shape[0])
+    x_petsc.setUp()
     x_petsc.set(0.0)
 
     n = 3
@@ -782,7 +801,17 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     
     ksp.setConvergenceHistory(n)
     ksp.solve(b_petsc_1,x_petsc)
+    
 
+    cudahandle = x_petsc.getCUDAHandle()
+    ptr = cudahandle         # raw CUDA pointer from PETSc
+    length = x_petsc.getSize()
+     
+    x_gpu = cp.ndarray((length,), dtype=cp.float64    , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+
+    print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
+
+        
     convergenceHist = ksp.getConvergenceHistory()
 
     #print(convergenceHist)
@@ -792,6 +821,12 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     ksp.destroy() #quick and dirty memory management
 
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
+
+
+def __petsc_solve_impl_pure():
+    #instead of doing this, we can try and perform the operation and then place it into the dictionary like we are with the matrix? Ir we can try and do an inplace edit by returning a jax array and setting it that way?
+    
+
 
 
 @jax.jit
