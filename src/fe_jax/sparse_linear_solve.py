@@ -821,6 +821,7 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     ksp.destroy() #quick and dirty memory management
     x_petsc.destroy()
     b_petsc_1.destroy()
+    
 
     cp.asarray(out)[...] = x_gpu
 
