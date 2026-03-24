@@ -48,13 +48,13 @@ top_points = np.isclose(points[:, 1], max_xy[1], atol=1e-16).nonzero()[0]
 # - Fix top nodes along y-direction
 right_u_val = (max_xy[0] - min_xy[0]) / 100.0
 bcs = (
-    [DirichletBC(BCType.NODE, index=i, component=0, value=0.0) for i in left_points]
+    [DirichletBC(bc_type=BCType.NODE, index=i, component=0, value=0.0) for i in left_points]
     + [
-        DirichletBC(BCType.NODE, index=i, component=0, value=right_u_val)
+        DirichletBC(bc_type=BCType.NODE, index=i, component=0, value=right_u_val)
         for i in right_points
     ]
-    + [DirichletBC(BCType.NODE, index=i, component=1, value=0.0) for i in bottom_points]
-    + [DirichletBC(BCType.NODE, index=i, component=1, value=0.0) for i in top_points]
+    + [DirichletBC(bc_type=BCType.NODE, index=i, component=1, value=0.0) for i in bottom_points]
+    + [DirichletBC(bc_type=BCType.NODE, index=i, component=1, value=0.0) for i in top_points]
 )
 
 # Extract cells for each subdomain
