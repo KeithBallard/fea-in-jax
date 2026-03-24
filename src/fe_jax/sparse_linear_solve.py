@@ -823,11 +823,6 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
 
 
-def __petsc_solve_impl_pure():
-    #instead of doing this, we can try and perform the operation and then place it into the dictionary like we are with the matrix? Ir we can try and do an inplace edit by returning a jax array and setting it that way?
-    
-
-
 
 @jax.jit
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
