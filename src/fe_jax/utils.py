@@ -203,3 +203,19 @@ def rank2_voigt_to_tensor(voigt: jnp.ndarray) -> jnp.ndarray:
         )
     else:
         raise RuntimeError("Invalid Voigt notation size.")
+
+
+def tensor_to_voigt_indices(tensor_shape: tuple[int, ...]) -> tuple[int, ...]:
+    """
+    Returns the indices for converting a tensor to Voigt notation.
+    """
+    if tensor_shape[-1] == 1:  # 1D
+        return ((0,),)
+    elif tensor_shape[-1] == 2:  # 2D
+        return ((0, 2), (2, 1))
+    elif tensor_shape[-1] == 3:  # 3D
+        return ((0, 5, 4), (5, 1, 3), (4, 3, 2))
+    else:
+        raise RuntimeError(
+            "The tensor must be 1D, 2D or 3D to convert to Voigt notation."
+        )

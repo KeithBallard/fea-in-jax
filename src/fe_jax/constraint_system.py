@@ -110,16 +110,16 @@ class ConstraintSystem:
 
 
 def convert_constraints_to_system(
-    fpcs: List[FixedPointConstraint],
-    mpcs: List[MultiPointConstraint],
+    fixed_point_constraints: List[FixedPointConstraint],
+    multipoint_constraints: List[MultiPointConstraint],
     n_total_dofs: int,
 ) -> ConstraintSystem:
     """
     Converts lists of constraints (used for the consolidation step) to a ConstraintSystem (used
     for enforcement of constraints).
     """
-    n_mpcs = len(mpcs)
-    n_fpcs = len(fpcs)
+    n_mpcs = len(multipoint_constraints)
+    n_fpcs = len(fixed_point_constraints)
     n_constraints = n_mpcs + n_fpcs
 
     if n_constraints == 0:
@@ -134,7 +134,7 @@ def convert_constraints_to_system(
 
     # First pass: count total non-zeros to pre-allocate arrays
     # Only MPCs contribute to P non-zeros (fixed point are P[row, :] = 0)
-    nnz = sum(len(mpc.indep_dof_terms) for mpc in mpcs)
+    nnz = sum(len(mpc.indep_dof_terms) for mpc in multipoint_constraints)
 
     # Allocate numpy arrays
     dep_dofs = np.empty(n_constraints, dtype=np.int32)
@@ -148,7 +148,7 @@ def convert_constraints_to_system(
     current_nnz_idx = 0
 
     # Process MPCs
-    for i, mpc in enumerate(mpcs):
+    for i, mpc in enumerate(multipoint_constraints):
         dep_dofs[i] = mpc.dep_dof
         g[i] = mpc.get_total_constant()
 
@@ -159,7 +159,7 @@ def convert_constraints_to_system(
             current_nnz_idx += 1
 
     # Process fixed point constraints
-    for j, fpc in enumerate(fpcs):
+    for j, fpc in enumerate(fixed_point_constraints):
         idx = n_mpcs + j
         dep_dofs[idx] = fpc.dep_dof
         g[idx] = fpc.value

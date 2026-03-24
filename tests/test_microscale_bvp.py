@@ -47,11 +47,14 @@ top_points = np.isclose(points[:, 1], max_xy[1], atol=1e-16).nonzero()[0]
 # - Fix bottom nodes along y-direction
 # - Fix top nodes along y-direction
 right_u_val = (max_xy[0] - min_xy[0]) / 100.0
-dirichlet_constraints = (
-    [DirichletConstraint(dep_dof=U * i, value=0.0) for i in left_points]
-    + [DirichletConstraint(dep_dof=U * i, value=right_u_val) for i in right_points]
-    + [DirichletConstraint(dep_dof=U * i + 1, value=0.0) for i in bottom_points]
-    + [DirichletConstraint(dep_dof=U * i + 1, value=0.0) for i in top_points]
+bcs = (
+    [DirichletBC(BCType.NODE, index=i, component=0, value=0.0) for i in left_points]
+    + [
+        DirichletBC(BCType.NODE, index=i, component=0, value=right_u_val)
+        for i in right_points
+    ]
+    + [DirichletBC(BCType.NODE, index=i, component=1, value=0.0) for i in bottom_points]
+    + [DirichletBC(BCType.NODE, index=i, component=1, value=0.0) for i in top_points]
 )
 
 # Extract cells for each subdomain
@@ -110,7 +113,7 @@ result = timeit(
     vertices_vd=points,
     element_batches=element_batches,
     u_0_g=u_0,
-    dirichlet_bcs=dirichlet_constraints,
+    boundary_conditions=bcs,
     solver_options=SolverOptions(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         linear_precond_type=PreconditionerType.JACOBI,

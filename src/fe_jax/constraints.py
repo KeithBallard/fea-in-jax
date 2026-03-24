@@ -3,12 +3,14 @@ User facing constraint definitions.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple, Any
 import math
 
 from enum import Enum, auto
+import numpy as np
 
 from .boundary_conditions import *
+from .dof_enumeration import DofEnumeration
 
 # Using a simplified tolerance for float comparisons
 TOLERANCE = 1e-16
@@ -24,6 +26,13 @@ class FixedPointConstraint:
     value: float
 
 
+# Used during consolidation of constratints
+class CheckResult(Enum):
+    BAD = auto()
+    GOOD = auto()
+    TRIVIAL = auto()
+
+
 @dataclass
 class MultiPointConstraint:
     """
@@ -36,19 +45,13 @@ class MultiPointConstraint:
     # Terms that are independent degrees of freedom
     # Stored as a dictionary mapping indep_dof -> factor for easier access
     indep_dof_terms: Dict[int, float] = field(default_factory=dict)
-    # Terms that get moved to the constant due to Dirichlet constraints
-    # Stored as list of (DirichletConstraint, factor)
-    dirichlet_terms: List[Tuple[DirichletConstraint, float]] = field(
+    # Terms that get moved to the constant due to fixed point constraints
+    # Stored as list of (FixedPointConstraint, factor)
+    fixed_point_terms: List[Tuple[FixedPointConstraint, float]] = field(
         default_factory=list
     )
-    # The constant part of the RHS (including resolved Dirichlet terms)
+    # The constant part of the RHS (including resolved fixed_point terms)
     rhs_constant: float = 0.0
-
-    # Used during consolidation of constratints
-    class CheckResult(Enum):
-        BAD = auto()
-        GOOD = auto()
-        TRIVIAL = auto()
 
     def __init__(
         self,
@@ -68,9 +71,9 @@ class MultiPointConstraint:
         for dof, factor in zip(indep_dofs, factors):
             self.add_new_term(dof, factor)
 
-        # Terms that get moved to the constant due to Dirichlet constraints
-        # Stored as list of (DirichletConstraint, factor)
-        self.dirichlet_terms: List[Tuple[DirichletConstraint, float]] = []
+        # Terms that get moved to the constant due to fixed_point constraints
+        # Stored as list of (FixedPointConstraint, factor)
+        self.fixed_point_terms: List[Tuple[FixedPointConstraint, float]] = []
 
     def evaluate(self, independent_dof_values: Dict[int, float]) -> float:
         """
@@ -85,10 +88,10 @@ class MultiPointConstraint:
 
     def get_total_constant(self) -> float:
         """
-        Returns the total constant part of the RHS (including resolved Dirichlet terms).
+        Returns the total constant part of the RHS (including resolved fixed_point terms).
         """
         total = self.rhs_constant
-        for dc, factor in self.dirichlet_terms:
+        for dc, factor in self.fixed_point_terms:
             total += factor * dc.value
         return total
 
@@ -186,9 +189,9 @@ class MultiPointConstraint:
         self.add_new_term(old_dep_dof, scale)
 
         self.rhs_constant *= -scale  # move to other side and scale
-        for i in range(len(self.dirichlet_terms)):
-            dc, f = self.dirichlet_terms[i]
-            self.dirichlet_terms[i] = (dc, f * -scale)
+        for i in range(len(self.fixed_point_terms)):
+            dc, f = self.fixed_point_terms[i]
+            self.fixed_point_terms[i] = (dc, f * -scale)
 
         self.dep_dof = new_dep_dof
 
@@ -234,10 +237,10 @@ class MultiPointConstraint:
                     for k in self.indep_dof_terms:
                         self.indep_dof_terms[k] *= scale
                     self.rhs_constant *= scale
-                    # Update dirichlet terms too? Yes if they contribute to constant
-                    for i in range(len(self.dirichlet_terms)):
-                        dc, f = self.dirichlet_terms[i]
-                        self.dirichlet_terms[i] = (dc, f * scale)
+                    # Update fixed_point terms too? Yes if they contribute to constant
+                    for i in range(len(self.fixed_point_terms)):
+                        dc, f = self.fixed_point_terms[i]
+                        self.fixed_point_terms[i] = (dc, f * scale)
 
                     self.dep_dof = new_dep
                     return CheckResult.GOOD
@@ -247,9 +250,9 @@ class MultiPointConstraint:
             for k in self.indep_dof_terms:
                 self.indep_dof_terms[k] *= scale
             self.rhs_constant *= scale
-            for i in range(len(self.dirichlet_terms)):
-                dc, f = self.dirichlet_terms[i]
-                self.dirichlet_terms[i] = (dc, f * scale)
+            for i in range(len(self.fixed_point_terms)):
+                dc, f = self.fixed_point_terms[i]
+                self.fixed_point_terms[i] = (dc, f * scale)
 
         return CheckResult.GOOD
 
@@ -265,7 +268,7 @@ class MultiPointConstraint:
 
 
 def consolidate_multipoint_constraints(
-    dirichlet_constraints: List[DirichletConstraint],
+    fixed_point_constraints: List[FixedPointConstraint],
     multipoint_constraints: List[MultiPointConstraint],
 ) -> List[MultiPointConstraint]:
     """
@@ -401,8 +404,8 @@ def consolidate_multipoint_constraints(
         # We will work on the objects provided or copies. Let's assume we can modify them.
         add_constraint(mpc_orig)
 
-    # Process Dirichlet constraints
-    for dc in dirichlet_constraints:
+    # Process fixed_point constraints
+    for dc in fixed_point_constraints:
         # Check if it conflicts with existing MPC dependent variable
         if dc.dep_dof in dep_dof_map:
             mpc = dep_dof_map[dc.dep_dof]
@@ -410,7 +413,9 @@ def consolidate_multipoint_constraints(
             if len(mpc.indep_dof_terms) == 0:
                 # Conflict of constants
                 if abs(mpc.get_total_constant() - dc.value) > 1e-8:
-                    raise RuntimeError("Conflict between MPC and Dirichlet")
+                    raise RuntimeError(
+                        "Conflict between MPC and Fixed Point constraint"
+                    )
             else:
                 # Resolve conflict by swapping
                 # We need to force mpc.dep_dof to be something else
@@ -427,19 +432,19 @@ def consolidate_multipoint_constraints(
 
                 # Now mpc.dep_dof is different.
                 # The old dep_dof (which is now dc.dep_dof) is on the RHS.
-                # We must substitute the Dirichlet value into the RHS term.
+                # We must substitute the Fixed Point value into the RHS term.
                 # Actually swap_dof logic puts old dep_dof into RHS.
-                # So substitute Dirichlet value for it.
+                # So substitute Fixed Point value for it.
 
                 # mpc has term for dc.dep_dof.
                 factor = mpc.indep_dof_terms[dc.dep_dof]
                 del mpc.indep_dof_terms[dc.dep_dof]
-                mpc.dirichlet_terms.append((dc, factor))
+                mpc.fixed_point_terms.append((dc, factor))
 
                 # Now re-integrate this MPC
                 add_constraint(mpc)
 
-        # Check if Dirichlet dof is used as independent in any MPC
+        # Check if fixed_point dof is used as independent in any MPC
         if dc.dep_dof in indep_dof_map:
             # We need to copy the set because we might modify it
             mpcs = list(indep_dof_map[dc.dep_dof])
@@ -447,7 +452,7 @@ def consolidate_multipoint_constraints(
                 if dc.dep_dof in mpc.indep_dof_terms:
                     factor = mpc.indep_dof_terms[dc.dep_dof]
                     del mpc.indep_dof_terms[dc.dep_dof]
-                    mpc.dirichlet_terms.append((dc, factor))
+                    mpc.fixed_point_terms.append((dc, factor))
 
                     # Also remove from indep map
                     # indep_dof_map[dc.dep_dof].remove(mpc) # Done implicitly by clearing entry later or loop logic
@@ -459,7 +464,7 @@ def consolidate_multipoint_constraints(
 
 
 def convert_boundary_conditions_to_constraints(
-    bcs: List[DirichletBC | PeriodicBC],
+    boundary_conditions: List[DirichletBC | PeriodicBC],
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     dof_enumeration: DofEnumeration,
     n_solution_components: int,
@@ -475,7 +480,7 @@ def convert_boundary_conditions_to_constraints(
         np.cumsum(global_values) + dof_enumeration.free_global_dof_rank_begin
     )
 
-    for bc in bcs:
+    for bc in boundary_conditions:
         if isinstance(bc, DirichletBC):
             if bc.bc_type == BCType.NODE:
                 fixed_point_constraints.append(
@@ -496,16 +501,16 @@ def convert_boundary_conditions_to_constraints(
         elif isinstance(bc, PeriodicBC):
             d = vertices_vd[bc.secondary_index] - vertices_vd[bc.primary_index]
             for i in range(n_solution_components):
-                {
-                    global_dof_offsets[bc.global_gradient_index]: 
-                    for j in range(n_solution_components)
-                }
                 multi_point_constraints.append(
                     MultiPointConstraint(
                         dep_dof=n_solution_components * bc.secondary_index + i,
                         indep_dof_terms={
                             n_solution_components * bc.primary_index + i: 1.0,
-                            global_dof_offsets[bc.global_gradient_index] + i: d[i],
+                        }
+                        | {
+                            global_dof_offsets[bc.global_gradient_index]
+                            + tensor_to_voigt_indices(vertices_vd.shape)[i, j]: d[j]
+                            for j in range(n_solution_components)
                         },
                         global_gradient_index=bc.global_gradient_index,
                     )

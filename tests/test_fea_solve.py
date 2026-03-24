@@ -36,13 +36,15 @@ boundary_edges = np.array(mesh.cells[0].data, dtype=np.uint64)
 boundary_points = np.unique(boundary_edges)
 # An array that is (# of constrainted DoFs, 2) with structure [point index][component of solution]
 # Constrain every boundary point to have a random displacement
-dirichlet_bcs = np.zeros((U * boundary_points.shape[0], 2), dtype=np.uint64)
-for i in range(boundary_points.shape[0]):
-    for j in range(U):
-        dirichlet_bcs[U * i + j, 0] = i
-        dirichlet_bcs[U * i + j, 1] = j
+dirichlet_bcs = [
+    DirichletBC(index=i, component=j, value=1.0)
+    for j in range(U)
+    for i in range(boundary_points.shape[0])
+]
 # Values of the Dirichlet boundary conditions matching 'dirichlet_bcs'
-dirichlet_values = 0.001 * np.random.rand(dirichlet_bcs.shape[0])
+dirichlet_values = 0.001 * np.random.rand(len(dirichlet_bcs))
+for i in range(len(dirichlet_bcs)):
+    dirichlet_bcs[i].value = dirichlet_values[i]
 
 # Set material properties at the quadrature point level randomly seeded such that
 # E = [90e9, 100e9] and nu = 0.25
@@ -74,10 +76,9 @@ u, residual, element_batches = solve_bvp(
     vertices_vd=points,
     element_batches=element_batches,
     u_0_g=jnp.zeros(shape=(V * U)),
-    dirichlet_bcs=dirichlet_bcs,
-    dirichlet_values=dirichlet_values,
+    boundary_conditions=dirichlet_bcs,
     solver_options=SolverOptions(
-        #linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
         linear_precond_type=PreconditionerType.JACOBI,
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
     ),

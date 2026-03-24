@@ -16,6 +16,9 @@ one, so the index should be `0`. However, in theory, there can be multiple globa
 periodic boundary conditions discretely on different subdomains of a problem.
 """
 
+from enum import Enum, auto
+from dataclasses import dataclass
+
 
 class BCType(Enum):
     NODE = auto()
@@ -28,12 +31,15 @@ class DirichletBC:
     Represents a Dirichlet boundary condition (i.e. fixed value for a DoF).
     """
 
-    bc_type: BCType  # Type of boundary condition (e.g. fixing the solution at a node)
     index: int  # Index of node, element, etc. to constrain (if bc_type is GLOBAL_DOF, then this is ignored)
     component: int  # Component of the solution to constrain (e.g. 0=u, 1=v, 2=w for linear elasticity)
     value: float  # Specified value for the boundary condition
+    bc_type: BCType = (
+        BCType.NODE
+    )  # Type of boundary condition (e.g. fixing the solution at a node)
 
 
+@dataclass
 class PeriodicBC:
     """
     Represents a periodic boundary condition (i.e. the solution at one node is a function of
