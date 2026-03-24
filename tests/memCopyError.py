@@ -73,7 +73,7 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     ksp.destroy() #quick and dirty memory management
 
-    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
+    cp.asarray(out)[...] = x_gpu
     
 @jax.jit
 def __petsc_init(A: sparse.COO) -> __CupyCtx:

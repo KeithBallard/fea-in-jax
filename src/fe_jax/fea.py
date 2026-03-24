@@ -1149,12 +1149,15 @@ def solve_nonlinear_step(
             x_0=u_f,
         )
 
+        jax.debug.print("delta u {bar}", bar=delta_u[0:10])
 
-        jax.debug.print("x First 10 elements right before u_update:{bar}", bar=delta_u[0:10])
-        u_f = u_f + delta_u
+        u_fnew = u_f + jnp.asarray(delta_u)
         
-        R_f = residual_isv_func_w_dirichlet(u_f=u_f)[0]
+        jax.debug.print("difference {bar}", bar=u_fnew[0:10]-u_f[0:10])
+        
+        R_f = residual_isv_func_w_dirichlet(u_f=u_fnew)[0]
 
+        u_f = u_fnew
         return (
             nl_iteration + 1,
             u_f,

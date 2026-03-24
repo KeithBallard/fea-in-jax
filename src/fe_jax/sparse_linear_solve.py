@@ -793,7 +793,7 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     x_petsc.setType('cuda')         # true GPU vector
     x_petsc.setSizes(b.shape[0])
     x_petsc.setUp()
-    x_petsc.set(0.0)
+    x_petsc.set(1.0)
 
     n = 3
 
@@ -807,7 +807,7 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     ptr = cudahandle         # raw CUDA pointer from PETSc
     length = x_petsc.getSize()
      
-    x_gpu = cp.ndarray((length,), dtype=cp.float64    , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+    x_gpu = cp.ndarray((length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
 
     print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
 
@@ -819,9 +819,10 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     __store_solution(cp.asarray((x_petsc.getArray())))
 
     ksp.destroy() #quick and dirty memory management
+    x_petsc.destroy()
+    b_petsc_1.destroy()
 
-    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
-
+    cp.asarray(out)[...] = x_gpu
 
 
 @jax.jit
