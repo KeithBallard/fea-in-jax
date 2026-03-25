@@ -437,6 +437,7 @@ def linear_solve(
     # Consequently, overwrite the values directly to ensure the BCs are right, even though the
     # residual may increase.
     
+    """
     jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
     
     jax.debug.print("x shape:{bar}", bar=delta_x.shape)
@@ -447,10 +448,9 @@ def linear_solve(
 
     jax.debug.print("any oob?:{bar}", bar=jnp.any(dirichlet_dofs >= delta_x.shape[0]))
     jax.debug.print("any negative?:{bar}", bar=jnp.any(dirichlet_dofs < 0))
+    """
     
-    
-    dirichlet_dofs_safe = dirichlet_dofs.astype(jnp.int64)
-    delta_x = delta_x.at[dirichlet_dofs_safe].set(dirichlet_values - x_0[dirichlet_dofs_safe]) #this fails on large cases and I can't figure out why. 
+    delta_x = delta_x.at[dirichlet_dofs].set(dirichlet_values - x_0[dirichlet_dofs]) #this fails on large cases and I can't figure out why. 
     
     jax.debug.print("x First 10 elements output moved to DOF locations:{bar}", bar=delta_x[0:10])
 
@@ -672,15 +672,14 @@ def __petsc_init_impl(A: jsparse.CSR):
 
     return __store_object(ksp)
     
-def __petsc_init_impl_v2(jacMat):
+def __petsc_init_impl_v2(jacMat: jsparse.COO):
     jacMatShape = jacMat.shape
     jacMatRows = jacMat.row
     jacMatCols = jacMat.col
     jacMatVals = jacMat.data
     jacMatZero = jacMat.nse
 
-    print("the values are of type",type(jacMatVals))
-
+    print("the values are of type",jacMatVals.device)
 
     mat = PETSc.Mat().create(PETSc.COMM_SELF)
     mat.setSizes(jnp.asarray(jacMatShape,dtype=jnp.int32))
@@ -706,6 +705,7 @@ def __petsc_init_impl_v2(jacMat):
     ksp.setConvergenceHistory()
     ksp.getPC().setType("none")
 
+    return __store_object(ksp)
 
 @jax.jit
 def __petsc_init(A: jsparse.COO) -> __CupyCtx:
@@ -758,6 +758,8 @@ def __petsc_solve_impl_v2(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     print("fetched ksp v2")
 
+
+
     GPUPointerArray = cp.from_dlpack(b,copy=False)
     
     b_petsc = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
@@ -782,10 +784,16 @@ def __petsc_solve_impl_v2(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
 
 def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
-    
+
     GPUPointerArray = cp.from_dlpack(b,copy=False)
+    
+    print(b.__dlpack_device__())
+    print(GPUPointerArray.__dlpack_device__())
+    
     b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
     
+
+
 
     ksp = __retrieve_object(cp.asarray(handle))
     
@@ -811,13 +819,9 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
 
-        
-    convergenceHist = ksp.getConvergenceHistory()
-
-    #print(convergenceHist)
-
-    __store_solution(cp.asarray((x_petsc.getArray())))
-
+    A,P = ksp.getOperators()
+    A.destroy()
+    P.destroy()
     ksp.destroy() #quick and dirty memory management
     x_petsc.destroy()
     b_petsc_1.destroy()
