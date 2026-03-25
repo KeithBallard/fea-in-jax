@@ -662,10 +662,10 @@ def __petsc_init_impl(A: jsparse.CSR):
 
 
     ksp = PETSc.KSP().create()
-    ksp.setOperators(A_petsc)
+    ksp.setOperators(A_petsc,A_petsc)
     ksp.setType("cg")
     ksp.setConvergenceHistory()
-    ksp.getPC().setType("none")
+    ksp.getPC().setType("jacobi")
 
 
 
@@ -703,7 +703,7 @@ def __petsc_init_impl_v2(jacMat: jsparse.COO):
     ksp.setOperators(mat)
     ksp.setType("cg")
     ksp.setConvergenceHistory()
-    ksp.getPC().setType("none")
+    ksp.getPC().setType("None")
 
     return __store_object(ksp)
 
@@ -804,12 +804,17 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     x_petsc.set(1.0)
 
     n = 3
+    
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
 
     ksp.setTolerances(rtol=1e-9,atol=1e-9)
     
     ksp.setConvergenceHistory(n)
     ksp.solve(b_petsc_1,x_petsc)
     
+    print("elements actually inside of the petscObj",x_petsc.getArray())
+    print("residual norm:", ksp.getResidualNorm())
+    print("b norm:", b_petsc_1.norm())
 
     cudahandle = x_petsc.getCUDAHandle()
     ptr = cudahandle         # raw CUDA pointer from PETSc
@@ -822,6 +827,7 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     A,P = ksp.getOperators()
     A.destroy()
     P.destroy()
+    ksp.getPC().destroy()
     ksp.destroy() #quick and dirty memory management
     x_petsc.destroy()
     b_petsc_1.destroy()

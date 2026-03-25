@@ -5,11 +5,13 @@ jax.config.update("jax_enable_x64", True)
 import jax.extend
 print(jax.extend.backend.get_backend().platform)
 
+
+
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"microscale_2D_r1.vtk"))
+mesh = meshio.read(get_mesh(f"microscale_2D_r2.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[0].data, dtype=np.uint64)
 mesh.cell_data["DomainIDs"][0] = np.array(
@@ -98,6 +100,7 @@ import time
 
 start = time.time()
 
+
 # Solve the boundary value problem
 u, residual, element_batches = solve_bvp(
     element_residual_func=linear_elasticity_residual,
@@ -107,7 +110,7 @@ u, residual, element_batches = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.CG_JAX_SCIPY,
+        linear_solve_type=LinearSolverType.PETSC,
         linear_precond_type=PreconditionerType.JACOBI,
     ),
     plot_convergence=False
