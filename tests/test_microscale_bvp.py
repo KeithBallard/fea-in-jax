@@ -124,7 +124,9 @@ print("|R| = ", jnp.linalg.norm(residual))
 # print(residual)
 
 # Make sure the solution matches at the Dirichlet BCs
-dirichlet_dofs = U * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1]
+# dirichlet_dofs = U * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1]
+dirichlet_dofs = np.array([bc.index for bc in bcs])
+dirichlet_values = np.array([bc.value for bc in bcs])
 assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
 
 # Write output
