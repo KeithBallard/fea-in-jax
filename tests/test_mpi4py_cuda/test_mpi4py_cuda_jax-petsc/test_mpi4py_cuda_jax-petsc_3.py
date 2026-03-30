@@ -1,11 +1,15 @@
 from mpi4py import MPI
-from petsc4py import PETSc
+
 import numpy as np
 import jax
 import jax.numpy as jnp
 
 import cupy as cp
 import ctypes as ct
+
+import petsc4py
+petsc4py.init(comm=comm)
+from petsc4py import PETSc
 
 
 jax.config.update("jax_enable_x64", True)
@@ -14,6 +18,9 @@ jax.config.update("jax_enable_x64", True)
 comm = MPI.COMM_WORLD  #there are two comm object sources. The MPI4py one and the PETSc4py one and unfortunatly they're not the same thing. If we're not careful this can and will cause hanging 
 rank = comm.Get_rank()
 size = comm.Get_size()
+
+
+
 
 matSize = 10
 

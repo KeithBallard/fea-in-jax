@@ -11,7 +11,7 @@ print(jax.extend.backend.get_backend().platform)
 # initialise_tracking()
 
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"microscale_2D_r2.vtk"))
+mesh = meshio.read(get_mesh(f"microscale_2D_r1.vtk"))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[0].data, dtype=np.uint64)
 mesh.cell_data["DomainIDs"][0] = np.array(
@@ -110,18 +110,18 @@ u, residual, element_batches = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.PETSC,
+        linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY,   #CG_JAX_SCIPY_W_INFO
         linear_precond_type=PreconditionerType.JACOBI,
     ),
     plot_convergence=False
 )
 
-print("took", time.time()-start)
+jax.block_until_ready(residual)
+
+print("full took", time.time()-start)
 
 print("|R| = ", jnp.linalg.norm(residual))
 
-exit(1)
-# print(residual)
 
 # Make sure the solution matches at the Dirichlet BCs
 dirichlet_dofs = U * dirichlet_bcs[:, 0] + dirichlet_bcs[:, 1]
@@ -129,4 +129,29 @@ assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
 
 # Write output
 mesh.point_data["u"] = u.reshape((points.shape[0], U))
-mesh.write(get_output("test_microscale_bvp_out.vtk"))
+
+
+#mesh.write(get_output("test_microscale_bvp_out_jax.vtk"))
+
+
+mesh_1 = meshio.read(get_output(f"test_microscale_bvp_out_petsc.vtk"))
+mesh_2 = meshio.read(get_output(f"test_microscale_bvp_out_jax.vtk"))
+
+points_1 = mesh_1.points
+points_2 = mesh_2.points
+
+points_1_u = jnp.asarray(mesh_1.point_data['u'],dtype=jnp.float64)
+
+points_1_u = (points_1_u - jnp.min(points_1_u)) / (jnp.max(points_1_u) - jnp.min(points_1_u))
+
+points_2_u = jnp.asarray(mesh_2.point_data['u'],dtype=jnp.float64)
+
+points_2_u = (points_2_u - jnp.min(points_2_u)) / (jnp.max(points_2_u) - jnp.min(points_2_u))
+
+
+
+print(jnp.linalg.norm(points_1_u-points_2_u))
+
+"""plt.scatter(points_1[:,0],points_1[:,1],c=points_1_u)
+plt.savefig('my_plot_1.png') # Saves the plot as a PNG file
+plt.close() # Closes the plot to free up memory"""

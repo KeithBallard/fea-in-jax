@@ -33,6 +33,10 @@ from .solve_cg import cg as cg_w_info
 
 import ctypes as ct
 
+
+import time
+from jax.experimental import io_callback
+
 class PreconditionerType(Enum):
     NONE = 0
     JACOBI = 1
@@ -65,12 +69,12 @@ class LinearSolverType(Enum):
 class SolverOptions:
     linear_precond_type: PreconditionerType = PreconditionerType.NONE
     linear_solve_type: LinearSolverType = LinearSolverType.LU_CUPY
-    linear_max_iter: int = 1000
+    linear_max_iter: int = 100000
     linear_relative_tol: float = 1e-14
     linear_absolute_tol: float = 1e-10
-    nonlinear_max_iter: int = 10
-    nonlinear_relative_tol: float = 1e-10
-    nonlinear_absolute_tol: float = 1e-8
+    nonlinear_max_iter: int = 1
+    nonlinear_relative_tol: float = 1e-2
+    nonlinear_absolute_tol: float = 1e-2
 
 
 @struct.dataclass
@@ -110,6 +114,15 @@ def init_solver_info(opts: SolverOptions):
     )
 
 
+def pure_time(_):
+    return time.time()
+
+def print_duration(x):
+    print("took",x)
+
+time_struct = jax.ShapeDtypeStruct((),jnp.float64)
+    
+
 @struct.dataclass
 class Residual:
     # Function that produces the residual vector (jnp.ndarray).
@@ -148,6 +161,8 @@ def buildJacobianMatrix(
     return J_w_dirichlet(x_0)
     
 
+
+    
 
 @partial(jax.jit, static_argnames=["solver_options", "check_consistency"])
 def linear_solve(
@@ -344,14 +359,22 @@ def linear_solve(
 
         case LinearSolverType.CG_JAX_SCIPY_W_INFO:
             
+            
+            startTime = io_callback(pure_time,time_struct,None,ordered=True)
             delta_x, cg_info = cg_w_info(
                 A=J_vp,
                 b=-R_0,
                 M=preconditioner,
-                tol=1e-9,
-                atol=1e-9,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
                 maxiter=solver_options.linear_max_iter,
             )
+            endTime = io_callback(pure_time,time_struct,None,ordered=True)
+            
+            timed = endTime-startTime
+            io_callback(print_duration,None,timed,ordered=True)
+            
+            
             info = SolverResultInfo(
                 nonlinear_iterations=solver_info_0.nonlinear_iterations,
                 cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
@@ -381,15 +404,17 @@ def linear_solve(
                 b=-R_0,
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
+                
             )
 
         case LinearSolverType.GMRES_JAX_SCIPY:
             delta_x, _ = jax.scipy.sparse.linalg.gmres(
-                A=J_vp,
+                A=J_w_dirichlet(x_0),
                 b=-R_0,
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
+                restart = 50, #lets see what this does
             )
 
         case LinearSolverType.BICGSTAB_JAXOPT:
@@ -449,6 +474,8 @@ def linear_solve(
     jax.debug.print("any oob?:{bar}", bar=jnp.any(dirichlet_dofs >= delta_x.shape[0]))
     jax.debug.print("any negative?:{bar}", bar=jnp.any(dirichlet_dofs < 0))
     """
+    
+    jax.block_until_ready(delta_x)
     
     delta_x = delta_x.at[dirichlet_dofs].set(dirichlet_values - x_0[dirichlet_dofs]) #this fails on large cases and I can't figure out why. 
     
@@ -701,7 +728,7 @@ def __petsc_init_impl_v2(jacMat: jsparse.COO):
     
     ksp = PETSc.KSP().create()
     ksp.setOperators(mat)
-    ksp.setType("cg")
+    ksp.setType("gmres")
     ksp.setConvergenceHistory()
     ksp.getPC().setType("None")
 
@@ -736,8 +763,8 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     x_petsc.set(0.0)
 
     n = 3
-
-    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+    
+    ksp.setTolerances(rtol=1e-14,atol=1e-10)
     
     ksp.setConvergenceHistory(n)
     ksp.solve(b_petsc,x_petsc)
@@ -807,14 +834,22 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     
     ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
 
-    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+                      #rtol, atol, dtol, max_it
+    ksp.setTolerances(1e-14,1e-10, 100, 1000000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+
     
     ksp.setConvergenceHistory(n)
+    
+    start = time.time()
+    
     ksp.solve(b_petsc_1,x_petsc)
     
-    print("elements actually inside of the petscObj",x_petsc.getArray())
-    print("residual norm:", ksp.getResidualNorm())
-    print("b norm:", b_petsc_1.norm())
+    print("inner solve time:",time.time()-start)
+    
+    
+    print("exit code",ksp.getConvergedReason())
+    print("iterations",ksp.getIterationNumber())
+    print("res norm",ksp.getResidualNorm())
 
     cudahandle = x_petsc.getCUDAHandle()
     ptr = cudahandle         # raw CUDA pointer from PETSc
