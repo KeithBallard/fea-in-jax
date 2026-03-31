@@ -40,7 +40,29 @@ def parallel_jaxOneRankChange(arr):
 
     return sendout
 
+def parallelBuildVec(arr):
+    
+    GPUPointerArray = cp.from_dlpack(arr)
+    GPUPointerArray = GPUPointerArray.astype(cp.float64) #careful that nothing gets garbage disposed
+    
+    arrsize = arr.shape[0]
+    nprocs = size
 
+    local_n = arrsize // nprocs
+    start = rank * local_n
+    end = start + local_n
+
+    local_arr = GPUPointerArray[start:end]
+    #createWithDLPack assumes the input array is already the local portion of the distributed vector. It does zero redistribution.
+    arr_petsc = PETSc.Vec().createWithDLPack( #
+        local_arr,
+        size=arrsize,
+        comm=comm
+    )
+    arr_petsc.assemblyBegin()
+    arr_petsc.assemblyEnd()
+
+    return arr_petsc
 
 def parallelBuildMat(data,rows,cols):
     
@@ -72,14 +94,33 @@ def parallelBuildMat(data,rows,cols):
 
     return mat
 
-vec = parallel_jaxCreation()
-vec = parallel_jaxOneRankChange(vec)
+def parallelMatVec(mat,vec):
+
+    outputVec = vec.duplicate()
+    
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(mat)
+    ksp.setType("cg")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("none")
+
+    ksp.solve(vec,outputVec)
+    outputVec.view()
+
+vals = parallel_jaxCreation()
+vals = parallel_jaxOneRankChange(vals)
 
 rowcols = jnp.arange(arraySize,dtype=jnp.int64)
 
-mat = parallelBuildMat(vec,rowcols,rowcols)
+mat = parallelBuildMat(vals,rowcols,rowcols)
 
     
-mat.view()
+vec = parallel_jaxCreation()
+vec = parallelBuildVec(vec)
+
+parallelMatVec(mat,vec)
+
+
+
 
 
