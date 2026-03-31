@@ -38,6 +38,7 @@ from mpi4py import MPI
 import time
 from jax.experimental import io_callback
 
+import mpi4jax
 
 comm = MPI.COMM_WORLD
 
@@ -453,7 +454,9 @@ def linear_solve(
             J_sparse = J_w_dirichlet(x_0)
 
             ctx = __petsc_init(J_sparse)
+            
             delta_x = __petsc_solve(ctx, -R_0)
+            jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
 
         case _:
             raise Exception(
@@ -466,7 +469,7 @@ def linear_solve(
     # residual may increase.
     
     
-    jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
+    
     
     """
     jax.debug.print("x shape:{bar}", bar=delta_x.shape)
@@ -966,6 +969,11 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     start = time.time()
     
     ksp.solve(vec,x_petsc)
+
+
+
+    print("ownership",x_petsc.getOwnershipRange())
+
     
     #print("inner solve time:",time.time()-start)
     
@@ -974,13 +982,30 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     #print("iterations",ksp.getIterationNumber())
     #print("res norm",ksp.getResidualNorm())
 
+
     cudahandle = x_petsc.getCUDAHandle()
     ptr = cudahandle         # raw CUDA pointer from PETSc
-    length = x_petsc.getSize()
-     
-    x_gpu = cp.ndarray((length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+    global_length = x_petsc.getSize()
+    local_length = x_petsc.getLocalSize()
+    x_local = cp.ndarray(
+        (local_length,),
+        dtype=cp.float64,
+        memptr=cp.cuda.MemoryPointer(
+            cp.cuda.UnownedMemory(ptr, local_length * 8, x_petsc),
+            0
+        )
+    )
 
-    #print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
+    x_full = cp.empty(global_length, dtype=cp.float64)
+
+    # MPI Allgather into GPU memory
+    comm.Allgather(x_local, x_full)  #comm.Allgatherv(...)
+    
+    #x_gpu = cp.ndarray((global_length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, global_length*8, x_full), 0))
+
+    print("x First 10 elements inside buffer_callback:", x_full[0:10]) #each is listing it's specific local section as 0 so it's probably building god knows what thwn trying to convert to x_gpu
+    print("x_gpu shape",x_full.shape)
+    
 
     A,P = ksp.getOperators()
     A.destroy()
@@ -989,14 +1014,14 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     ksp.destroy() #quick and dirty memory management
     x_petsc.destroy()
     vec.destroy()
-    
-    print(x_gpu[0:10])
-    
 
-    cp.asarray(out)[...] = x_gpu
+
+    cp.asarray(out)[...] = x_full #I have no idea is this uses a copy to CPU somewhere
 
 
 @jax.jit
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(__petsc_solve_MPI_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    x= buffer_callback(__petsc_solve_MPI_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    jax.debug.print("finished buffer callback")
+    return x
