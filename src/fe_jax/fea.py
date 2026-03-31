@@ -1498,12 +1498,12 @@ def solve_bvp(
         u.block_until_ready()
         stop_memory_profile("solve_linear_step")
 
-    if info.cumulative_linear_iterations > 0:
+    """if info.cumulative_linear_iterations > 0:
         print(
             f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}"
         )
         if plot_convergence:
-            plot_solver_info(opts=solver_options, info=info)
+            plot_solver_info(opts=solver_options, info=info)"""
 
     return (u, residual, element_batches)
 

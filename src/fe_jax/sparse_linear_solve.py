@@ -32,10 +32,18 @@ from .solve_cg import cg as cg_w_info
 
 
 import ctypes as ct
+from mpi4py import MPI
 
 
 import time
 from jax.experimental import io_callback
+
+
+comm = MPI.COMM_WORLD
+
+rank = comm.Get_rank()
+
+nproc = comm.Get_size()
 
 class PreconditionerType(Enum):
     NONE = 0
@@ -359,8 +367,7 @@ def linear_solve(
 
         case LinearSolverType.CG_JAX_SCIPY_W_INFO:
             
-            
-            startTime = io_callback(pure_time,time_struct,None,ordered=True)
+
             delta_x, cg_info = cg_w_info(
                 A=J_vp,
                 b=-R_0,
@@ -369,10 +376,6 @@ def linear_solve(
                 atol=solver_options.linear_absolute_tol,
                 maxiter=solver_options.linear_max_iter,
             )
-            endTime = io_callback(pure_time,time_struct,None,ordered=True)
-            
-            timed = endTime-startTime
-            io_callback(print_duration,None,timed,ordered=True)
             
             
             info = SolverResultInfo(
@@ -462,9 +465,10 @@ def linear_solve(
     # Consequently, overwrite the values directly to ensure the BCs are right, even though the
     # residual may increase.
     
-    """
+    
     jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
     
+    """
     jax.debug.print("x shape:{bar}", bar=delta_x.shape)
     jax.debug.print("max dof:{bar}", bar=jnp.max(dirichlet_dofs))
     jax.debug.print("min dof:{bar}", bar=jnp.min(dirichlet_dofs))
@@ -667,8 +671,11 @@ def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
 ##################################################################################################
 # PETSc wrappers
 
-from petsc4py import PETSc
+import petsc4py
 
+
+petsc4py.init(comm=comm)
+from petsc4py import PETSc
 
 def __petsc_init_impl(A: jsparse.CSR):
     A_petsc = PETSc.Mat()
@@ -698,13 +705,60 @@ def __petsc_init_impl(A: jsparse.CSR):
 
 
     return __store_object(ksp)
+
+def __petsc_init_MPI_impl(A):
+
+    shape = jnp.array(A.shape,dtype=jnp.int32)
+    rows = jnp.array(A.row,dtype=jnp.int32)
+    cols = jnp.array(A.col,dtype=jnp.int32)
+    vals = cp.array(jnp.array(A.data))
+    
+    GPUPointerArray = cp.from_dlpack(vals,copy=False)
+    
+    if rank != 0:
+        nullAdd = vals*0
+        
+        GPUPointerArray = cp.from_dlpack(nullAdd,copy=False) #this needs to be here as it adds despite my telling it to insert. There's probably a fix somewhere involving a similar breakdown to vec creation
+    
+    print(shape)
+    
+    mat = PETSc.Mat().create(comm=comm)
+    mat.setSizes(shape)
+
+    mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
+    mat.setPreallocationCOO(rows, cols)
+    
+    lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+    MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+    
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+
+   
+    MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+
+    mat.assemblyBegin()
+    mat.assemblyEnd()
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(mat,mat)
+    ksp.setType("cg")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("jacobi")
+
+
+    return __store_object(ksp)
     
 def __petsc_init_impl_v2(jacMat: jsparse.COO):
-    jacMatShape = jacMat.shape
-    jacMatRows = jacMat.row
-    jacMatCols = jacMat.col
-    jacMatVals = jacMat.data
-    jacMatZero = jacMat.nse
+    jacMatShape = cp.array(np.from_dlpack(jacMat.shape))
+    jacMatRows = cp.array(np.from_dlpack(jacMat.row))
+    jacMatCols = cp.array(np.from_dlpack(jacMat.col))
+    jacMatVals = cp.array(np.from_dlpack(jacMat.data))
+    jacMatZero = cp.array(np.from_dlpack(jacMat.nse))
 
     print("the values are of type",jacMatVals.device)
 
@@ -738,7 +792,8 @@ def __petsc_init_impl_v2(jacMat: jsparse.COO):
 def __petsc_init(A: jsparse.COO) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     print("got result shape")
-    handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
+    #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
+    handle = jax.pure_callback(__petsc_init_MPI_impl, result_info, A)
     return __CupyCtx(handle=handle)
 
 
@@ -869,9 +924,79 @@ def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     
 
     cp.asarray(out)[...] = x_gpu
+    
+def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    nprocs = comm.Get_size()
+
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
+    
+    arrsize = b.shape[0]
+
+    local_n = arrsize // nprocs
+    start = rank * local_n
+    end = start + local_n
+
+    local_arr = GPUPointerArray[start:end]
+    #createWithDLPack assumes the input array is already the local portion of the distributed vector. It does zero redistribution.
+    vec = PETSc.Vec().createWithDLPack( 
+        local_arr,
+        size=arrsize,
+        comm=comm
+    )
+    vec.assemblyBegin()
+    vec.assemblyEnd()
+
+    ksp = __retrieve_object(cp.asarray(handle))
+    
+    x_petsc = vec.duplicate()
+
+    n = 3
+    
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
+
+                      #rtol, atol, dtol, max_it
+    ksp.setTolerances(1e-14,1e-10, 100, 1000000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+
+    
+    ksp.setConvergenceHistory(n)
+    
+    start = time.time()
+    
+    ksp.solve(vec,x_petsc)
+    
+    #print("inner solve time:",time.time()-start)
+    
+    
+    #print("exit code",ksp.getConvergedReason())
+    #print("iterations",ksp.getIterationNumber())
+    #print("res norm",ksp.getResidualNorm())
+
+    cudahandle = x_petsc.getCUDAHandle()
+    ptr = cudahandle         # raw CUDA pointer from PETSc
+    length = x_petsc.getSize()
+     
+    x_gpu = cp.ndarray((length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+
+    #print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
+
+    A,P = ksp.getOperators()
+    A.destroy()
+    P.destroy()
+    ksp.getPC().destroy()
+    ksp.destroy() #quick and dirty memory management
+    x_petsc.destroy()
+    vec.destroy()
+    
+    print(x_gpu[0:10])
+    
+
+    cp.asarray(out)[...] = x_gpu
 
 
 @jax.jit
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    return buffer_callback(__petsc_solve_impl_debug, result_info)(ctx.handle, b)
+    return buffer_callback(__petsc_solve_MPI_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc

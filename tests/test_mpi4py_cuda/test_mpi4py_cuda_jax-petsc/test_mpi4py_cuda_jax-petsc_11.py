@@ -141,4 +141,5 @@ except Exception as e:
 
 
 
-
+comm.Abort(1)
+os.kill(os.getpid(),signal.SIGKILL)
