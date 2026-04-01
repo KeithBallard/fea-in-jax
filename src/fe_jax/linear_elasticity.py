@@ -42,10 +42,9 @@ def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
         #C_ss = jnp.linalg.inv(S_ss)
         C_ss = E/((1.0-2.0*nu)*(1.0+nu))*jnp.array(
             [
-                [1.0-nu, nu    , 0.0            , 0.0             ],
-                [nu    , 1.0-nu, 0.0            , 0.0             ],
-                [0.0   , 0.0   , (1.0-2.0*nu)/nu, 0.0             ],
-                [0.0   , 0.0   , 0.0            , (1.0-2.0*nu)/2.0]
+                [1.0-nu, nu    , 0.0            ],
+                [nu    , 1.0-nu, 0.0            ],
+                [0.0   , 0.0   , (1.0-2.0*nu)/nu]
             ]
         )
     elif eps_dd.shape[1] == 3:  # 3D
@@ -110,14 +109,25 @@ def elastic_orthotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
         nu_xy = material_params_m[2]
         G_xy = material_params_m[3]
 
-        C_ss = jnp.linalg.inv(
-            jnp.array(
-                [
-                    [1.0 / E_xx, -nu_xy / E_xx, 0.0],
-                    [-nu_xy / E_xx, 1.0 / E_yy, 0.0],
-                    [0.0, 0.0, 1.0 / G_xy],
-                ]
-            )
+        S_ss = jnp.array(
+            [
+                [1.0 / E_xx, -nu_xy / E_xx, 0.0],
+                [-nu_xy / E_xx, 1.0 / E_yy, 0.0],
+                [0.0, 0.0, 1.0 / G_xy],
+            ]
+        )
+        #C_ss = jnp.linalg.inv(S_ss)
+        # For the direct def'n of C_ss we also need nu_yx, nu_zy, and nu_zx.
+        # These can be determined from the above parameters along with symmetry. 
+        nu_yx = E_yy/E_xx*nu_xy
+
+        Delta =  (1 - nu_xy*nu_yx)/(E_xx*E_yy)
+        C_ss = (1/Delta)*jnp.array(
+            [
+                [1.0/E_yy  , nu_yx/E_yy, 0.0       ],
+                [nu_xy/E_xx, 1.0/E_xx  , 0.0       ],
+                [0.0       , 0.0       , Delta*G_xy]
+            ]
         )
 
     elif eps_dd.shape[1] == 3:  # 3D
@@ -133,21 +143,36 @@ def elastic_orthotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
         nu_xz = material_params_m[5]
         G_xy = material_params_m[6]
         G_yz = material_params_m[7]
-        G_xz = material_params_m[8]
-
+        G_xz = material_params_m[9]
         # Note: inv could be avoided if it is a bottleneck, see:
         # https://www.efunda.com/formulae/solid_mechanics/mat_mechanics/hooke_orthotropic.cfm
-        C_ss = jnp.linalg.inv(
-            jnp.array(
-                [
-                    [1.0 / E_xx, -nu_xy / E_xx, -nu_xz / E_xx, 0.0, 0.0, 0.0],
-                    [-nu_xy / E_xx, 1.0 / E_yy, -nu_yz / E_yy, 0.0, 0.0, 0.0],
-                    [-nu_xz / E_xx, -nu_yz / E_yy, 1.0 / E_zz, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0 / G_yz, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 1.0 / G_xz, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G_xy],
-                ]
-            )
+        S_ss = jnp.array(
+            [
+                [1.0 / E_xx, -nu_xy / E_xx, -nu_xz / E_xx, 0.0, 0.0, 0.0],
+                [-nu_xy / E_xx, 1.0 / E_yy, -nu_yz / E_yy, 0.0, 0.0, 0.0],
+                [-nu_xz / E_xx, -nu_yz / E_yy, 1.0 / E_zz, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0 / G_yz, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 1.0 / G_xz, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G_xy],
+            ]
+        )
+        # For the direct def'n of C_ss we also need nu_yx, nu_zy, and nu_zx.
+        # These can be determined from the above parameters along with symmetry. 
+        nu_yx = E_yy/E_xx*nu_xy
+        nu_zy = E_zz/E_yy*nu_yz
+        nu_zx = E_zz/E_xx*nu_xz
+
+        Delta =  (1 - nu_xy*nu_yx - nu_yz*nu_zy - nu_xz*nu_zx - 2*nu_xy*nu_yz*nu_zx)/(E_xx*E_yy*E_zz)
+        #C_ss = jnp.linalg.inv(S_ss)
+        C_ss = (1/Delta)*jnp.array(
+            [
+                [(1.0-nu_yz*nu_zy)/(E_yy*E_zz)  , (nu_yx+nu_zx*nu_yz)/(E_yy*E_zz), (nu_zx+nu_yx*nu_zy)/(E_yy*E_zz), 0.0, 0.0, 0.0],
+                [(nu_xy+nu_xz*nu_zy)/(E_xx*E_zz), (1.0-nu_zx*nu_xz)/(E_xx*E_zz)  , (nu_zy+nu_zx*nu_xy)/(E_xx*E_zz), 0.0, 0.0, 0.0],
+                [(nu_xz+nu_xy*nu_yz)/(E_xx*E_yy), (nu_yz+nu_xz*nu_yx)/(E_xx*E_yy), (1.0-nu_xy*nu_yx)/(E_xx*E_yy)  , 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0 , Delta*G_yz ,0.0       , 0.0],
+                [0.0, 0.0, 0.0 , 0.0        ,Delta*G_xz, 0.0],
+                [0.0, 0.0, 0.0 , 0.0        ,0.0       , Delta*G_xy],
+            ]
         )
     else:
         raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
