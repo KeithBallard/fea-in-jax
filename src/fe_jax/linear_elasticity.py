@@ -214,3 +214,138 @@ def linear_elasticity_residual(
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
 
     return R_nd, new_internal_state_qi
+
+@jax.jit
+def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
+    """
+    A constitive relation for a an elastic truss.
+
+    Parameters
+    ----------
+    eps_dd       : infinitesimal strain tensor, ndarray[float, (D, D)]
+    material_params_m : material parameters, ndarray[float, (M,)]
+    x_nd          : coordinates, ndarray[float, (N, D)]
+
+    Returns
+    -------
+    stress_dd  : stress tensor, ndarray[float, (D, D)]
+    """
+
+    E = material_params_m[..., 0]
+    # Assumes the node number puts the endpoints as first and last entries. 
+    dx_d = x_nd[-1,:]-x_nd[0,:]
+    l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
+
+    P_dd = jnp.outer(l_d,l_d)
+    eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
+    stress_dd = E*eps_a*P_dd
+    # if eps_dd.shape[1] == 1:  # 1D
+    #     C_ss = jnp.array([[E*A/L]])
+    # elif eps_dd.shape[1] == 2:  # 2D
+    #     C_ss =  jnp.array(
+    #         # THIS IS WRONG!, should be 3x3, not sure where I went wrong.
+    #         [
+    #             [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1]],
+    #             [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1]],
+    #             [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1]],
+    #             [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1]],
+    #         ]
+    #     )
+    # elif eps_dd.shape[1] == 3:  # 3D
+    #     C_ss = (E*A/L**3)*jnp.array(
+    #         [
+    #             [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2]],
+    #             [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2]],
+    #             [ dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2],-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2]],
+    #             [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2]],
+    #             [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2]],
+    #             [-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2], dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2]],
+    #         ]
+    #     )
+    # else:
+    #     raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
+
+    # stress_dd = rank2_voigt_to_tensor(
+    #     jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
+    # )
+    return stress_dd, jnp.array([])  # no internal state
+
+
+
+@jax.jit
+def linear_truss_residual(
+    u_nd: jnp.ndarray,
+    x_nd: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state_qi: jnp.ndarray,
+    constitutive_model: Callable,
+):
+    """
+    Residual function that computes the residual for the weak form corresponding to linear
+    elasticity.
+
+    Parameters
+    ----------
+    u_nd          : solution vector, ndarray[float, (N, D)]
+    x_nd          : coordinates, ndarray[float, (N, D)]
+    dphi_dxi_qnp  : derivative of basis functions in parametric coordinate system at
+                    quadrature points, ndarray[float, (Q, N, P)]
+    W_q           : quadrature weights, ndarray[float, (Q,)]
+    material_params : material parameters, ndarray[float, (Q, M)] or ndarray[float, (M,)]
+    constitutive_relation : constitutive stress-strain relation, function with arguments
+                  (eps_dd: jnp.ndarray, material_params: jnp.ndarray)
+
+    Returns
+    -------
+    R_nd  : residual vector, ndarray[float, (N, D)]
+    """
+
+    D = u_nd.shape[1]
+    P = dphi_dxi_qnp.shape[2]
+    assert (
+        P == D
+    ), f"Number of dimensions in the parametric coordinate system of the element must match the dimension of the problem, {P} != {D}"
+    # Formulation assumes solid elements otherwise a different approach is needed (i.e. shells)
+
+    J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
+
+    G_qpd = jnp.linalg.inv(J_qpd).transpose(0, 2, 1)
+    det_J_q = jnp.linalg.det(J_qpd)
+    dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
+
+    du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
+    eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
+
+    constitutive_args = []
+    in_axes = []
+
+    if is_required(constitutive_model, "eps_dd"):
+        constitutive_args.append(eps_qdd)
+        in_axes.append(0)
+
+    if is_required(constitutive_model, "material_params_m"):
+        constitutive_args.append(material_params)
+        if material_params.ndim == 1:
+            in_axes.append(None)
+        else:
+            in_axes.append(0)
+
+    if is_required(constitutive_model, "internal_state_i"):
+        constitutive_args.append(internal_state_qi)
+        in_axes.append(0)
+
+    if is_required(constitutive_model, "x_nd"):
+        constitutive_args.append(x_nd)
+        in_axes.append(None)
+
+    constitutive_model_vmap = jax.vmap(constitutive_model, in_axes=tuple(in_axes))
+    stress_qdd, new_internal_state_qi = constitutive_model_vmap(*constitutive_args)
+
+    grad_dphi_dx_stress_qnd = jnp.einsum("qni,qid->qnd", dphi_dx_qnd, stress_qdd)
+    det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
+    R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
+
+    return R_nd, new_internal_state_qi
+
