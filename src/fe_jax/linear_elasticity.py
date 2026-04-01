@@ -32,27 +32,43 @@ def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     if eps_dd.shape[1] == 1:  # 1D
         C_ss = jnp.array([[E]])
     elif eps_dd.shape[1] == 2:  # 2D
-        C_ss = jnp.linalg.inv(
-            jnp.array(
-                [
-                    [1.0 / E, -nu / E, 0.0],
-                    [-nu / E, 1.0 / E, 0.0],
-                    [0.0, 0.0, 1.0 / G],
-                ]
-            )
+        S_ss = jnp.array(
+            [
+                [1.0 / E, -nu / E, 0.0],
+                [-nu / E, 1.0 / E, 0.0],
+                [0.0, 0.0, 1.0 / G],
+            ]
+        )
+        #C_ss = jnp.linalg.inv(S_ss)
+        C_ss = E/((1.0-2.0*nu)*(1.0+nu))*jnp.array(
+            [
+                [1.0-nu, nu    , 0.0            , 0.0             ],
+                [nu    , 1.0-nu, 0.0            , 0.0             ],
+                [0.0   , 0.0   , (1.0-2.0*nu)/nu, 0.0             ],
+                [0.0   , 0.0   , 0.0            , (1.0-2.0*nu)/2.0]
+            ]
         )
     elif eps_dd.shape[1] == 3:  # 3D
-        C_ss = jnp.linalg.inv(
-            jnp.array(
-                [
-                    [1.0 / E, -nu / E, -nu / E, 0.0, 0.0, 0.0],
-                    [-nu / E, 1.0 / E, -nu / E, 0.0, 0.0, 0.0],
-                    [-nu / E, -nu / E, 1.0 / E, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0 / G, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 1.0 / G, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G],
-                ]
-            )
+        S_ss = jnp.array(
+            [
+                [1.0 / E, -nu / E, -nu / E, 0.0, 0.0, 0.0],
+                [-nu / E, 1.0 / E, -nu / E, 0.0, 0.0, 0.0],
+                [-nu / E, -nu / E, 1.0 / E, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0 / G, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 1.0 / G, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / G],
+            ]
+        )
+        #C_ss = jnp.linalg.inv(S_ss)
+        C_ss = E/((1.0-2.0*nu)*(1.0+nu))*jnp.array(
+            [
+                [1.0-nu, nu    , nu    , 0.0            , 0.0             , 0.0             ],
+                [nu    , 1.0-nu, nu    , 0.0            , 0.0             , 0.0             ],
+                [nu    , nu    , 1.0-nu, 0.0            , 0.0             , 0.0             ],
+                [0.0   , 0.0   , 0.0   , (1.0-2.0*nu)/nu, 0.0             , 0.0             ],
+                [0.0   , 0.0   , 0.0   , 0.0            , (1.0-2.0*nu)/2.0, 0.0             ],
+                [0.0   , 0.0   , 0.0   , 0.0            , 0.0             , (1.0-2.0*nu)/2.0]
+            ]
         )
     else:
         raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
