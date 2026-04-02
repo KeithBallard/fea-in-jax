@@ -182,6 +182,22 @@ def apply_dirichlet_bcs_lhs(A: jsparse.COO, dirichlet_dofs: jnp.ndarray) -> jspa
         cols_sorted=A._cols_sorted,
     )
 
+def apply_dirichlet_bcs_lhs_tuple(A: jsparse.COO, dirichlet_dofs: jnp.ndarray):
+    row_constrained_mask = jnp.isin(A.row, dirichlet_dofs)
+    col_constrained_mask = jnp.isin(A.col, dirichlet_dofs)
+    # debug_print(row_constrained_mask)
+    # debug_print(col_constrained_mask)
+    # Set all values on constrained rows / columns to 0, then set those diagonal terms to 1.
+    modified_data = jnp.where(
+        ~(row_constrained_mask | col_constrained_mask), A.data, 0.0
+    )
+    # debug_print(modified_data)
+    modified_data = jnp.where(
+        (A.row == A.col) & row_constrained_mask, 1.0, modified_data
+    )
+
+    return (modified_data, jnp.array(A.row), jnp.array(A.col), jnp.array(A.shape))
+
 
 def apply_dirichlet_bcs_rhs(
     A: jsparse.COO,

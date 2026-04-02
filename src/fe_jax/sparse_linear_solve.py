@@ -205,9 +205,14 @@ def linear_solve(
         if jacobian.dirichlet_bcs_builtin:
             J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
         else:
-            J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
-                jacobian.function(x, *args, **kwargs), dirichlet_dofs
-            )
+            if solver_options.linear_solve_type == LinearSolverType.PETSC:
+                J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs_tuple(
+                    jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                )
+            else:J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
+                    jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                )
+
     else:
         J_w_dirichlet = None
         
@@ -435,7 +440,7 @@ def linear_solve(
 
         case LinearSolverType.BICGSTAB_JAX_SCIPY:
             delta_x, _ = jax.scipy.sparse.linalg.bicgstab(
-                A=J_vp,
+                A=J_w_dirichlet(x_0),
                 b=-R_0,
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
@@ -451,10 +456,15 @@ def linear_solve(
                 J_w_dirichlet is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
+
+
             J_sparse = J_w_dirichlet(x_0)
 
-            ctx = __petsc_init(J_sparse)
+
+            ctx = __petsc_init(J_sparse[3],J_sparse[0],J_sparse[1],J_sparse[2])
             
+            jax.debug.print("id of the object is {object}",object=ctx)
+
             delta_x = __petsc_solve(ctx, -R_0)
             jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
 
@@ -756,47 +766,45 @@ def __petsc_init_MPI_impl(A):
 
     return __store_object(ksp)
     
-def __petsc_init_impl_v2(jacMat: jsparse.COO):
-    jacMatShape = cp.array(np.from_dlpack(jacMat.shape))
-    jacMatRows = cp.array(np.from_dlpack(jacMat.row))
-    jacMatCols = cp.array(np.from_dlpack(jacMat.col))
-    jacMatVals = cp.array(np.from_dlpack(jacMat.data))
-    jacMatZero = cp.array(np.from_dlpack(jacMat.nse))
+def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
+    
+    jacMatShape = cp.from_dlpack(jaxMatShape,copy=False)
+    jacMatVals  = cp.from_dlpack(jaxMatVals,copy=False)
+    jacMatRows  = jnp.asarray(jaxMatRows,dtype=jnp.int32)
+    jacMatCols  = jnp.asarray(jaxMatCols,dtype=jnp.int32)
 
-    print("the values are of type",jacMatVals.device)
 
-    mat = PETSc.Mat().create(PETSc.COMM_SELF)
-    mat.setSizes(jnp.asarray(jacMatShape,dtype=jnp.int32))
+    mat = PETSc.Mat().create(PETSc.COMM_WORLD)
+    mat.setSizes(jacMatShape)
 
     mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
-    mat.setPreallocationCOO(jnp.asarray(jacMatRows,jnp.int32),jnp.asarray(jacMatCols,dtype=jnp.int32))
-    
-    GPUPointerArray = cp.from_dlpack(jacMatVals,copy=False)
+    mat.setPreallocationCOO(jacMatRows,jacMatCols)
 
     lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
     MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
     MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
     MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
     mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
-    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+    coo_ptr = ct.c_void_p(jacMatVals.data.ptr)  # the pointer to GPU memory
 
 
     MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
     
+    #matdupe = mat.duplicate(copy=True)
+
     ksp = PETSc.KSP().create()
     ksp.setOperators(mat)
-    ksp.setType("gmres")
+    ksp.setType("preonly")
     ksp.setConvergenceHistory()
-    ksp.getPC().setType("None")
+    ksp.getPC().setType("cholesky")
 
-    return __store_object(ksp)
+    cp.asarray(out)[...] = __store_object(ksp)
 
 @jax.jit
-def __petsc_init(A: jsparse.COO) -> __CupyCtx:
+def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    print("got result shape")
     #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
-    handle = jax.pure_callback(__petsc_init_MPI_impl, result_info, A)
+    handle = buffer_callback(__petsc_init_impl_v2, result_info)(jacMatShape,jacMatVals,jacMatRows,jacMatCols)
     return __CupyCtx(handle=handle)
 
 
@@ -1022,6 +1030,5 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 @jax.jit
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    x= buffer_callback(__petsc_solve_MPI_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
-    jax.debug.print("finished buffer callback")
+    x= buffer_callback(__petsc_solve_impl_debug, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
     return x
