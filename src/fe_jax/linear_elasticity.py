@@ -224,7 +224,9 @@ def linear_elasticity_residual(
 
     G_qpd = jnp.linalg.inv(J_qpd).transpose(0, 2, 1)
     det_J_q = jnp.linalg.det(J_qpd)
+    jax.debug.print('linear ELASTIC residual: det_J_q = {}',det_J_q)
     dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
+    jax.debug.print('linear ELASTIC residual: dphi_dx_qnd = {}',dphi_dx_qnd)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
@@ -345,16 +347,23 @@ def linear_truss_residual(
 
     D = u_nd.shape[1]
     P = dphi_dxi_qnp.shape[2]
-    assert (
-        P == D
-    ), f"Number of dimensions in the parametric coordinate system of the element must match the dimension of the problem, {P} != {D}"
+    # assert (
+    #     P == D
+    # ), f"Number of dimensions in the parametric coordinate system of the element must match the dimension of the problem, {P} != {D}"
     # Formulation assumes solid elements otherwise a different approach is needed (i.e. shells)
 
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
 
-    G_qpd = jnp.linalg.inv(J_qpd).transpose(0, 2, 1)
-    det_J_q = jnp.linalg.det(J_qpd)
-    dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
+    # G_qpd = jnp.linalg.inv(J_qpd).transpose(0, 2, 1)
+    det_J_q = jnp.sqrt(jnp.linalg.det(jnp.einsum("qpd,qrd->qpr",J_qpd,J_qpd)))
+    jax.debug.print('linear TRUSS residual: det_J_q = {}',det_J_q)
+    # det_J_q = jnp.linalg.norm(J_qpd, axis=-1)
+    def lstsq_one(J_pd,dphi_dxi_np):
+        dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
+        return dphi_dx_nd.T
+    dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
+    # jax.debug.print('linear TRUSS residual: dphi_dx_qnd = {}',dphi_dx_qnd)
+    # dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
