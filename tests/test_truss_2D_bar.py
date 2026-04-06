@@ -10,14 +10,14 @@ print(jax.extend.backend.get_backend().platform)
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
-x_of_t = lambda t:1*t
-y_of_t = lambda t:0*t
+x_of_t = lambda t:2*t
+y_of_t = lambda t:1*t
 n_elements = 4
 t_soln = np.linspace(0,1.2,n_elements+1)
 x_soln = x_of_t(t_soln)
-y_soln = y_of_t(t_soln)
-
 t = np.linspace(0,1,n_elements+1,dtype=np.float32)
+y_soln = y_of_t(t)
+
 x = x_of_t(t)
 y = y_of_t(t)
 points=np.vstack((x,y)).T
@@ -33,7 +33,7 @@ F = V * U  # number of DoFs
 fe_type = FiniteElementType(
     cell_type=CellType.interval,
     family=ElementFamily.P,
-    basis_degree=2,
+    basis_degree=1,
     lagrange_variant=LagrangeVariant.equispaced,
     quadrature_type=QuadratureType.default,
     quadrature_degree=2,
@@ -83,7 +83,7 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
 )
 
 u_truss = u_truss.reshape((-1,2))
-print("\n*** Truss Eleemnts! ***")
+print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
 print('-'*45)
 print(f"{'initial':^19}|{'final':^24}")
