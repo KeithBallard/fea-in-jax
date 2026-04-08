@@ -343,25 +343,15 @@ def linear_truss_residual(
     R_nd  : residual vector, ndarray[float, (N, D)]
     """
 
-    D = u_nd.shape[1]
-    P = dphi_dxi_qnp.shape[2]
-    # assert (
-    #     P == D
-    # ), f"Number of dimensions in the parametric coordinate system of the element must match the dimension of the problem, {P} != {D}"
-    # Formulation assumes solid elements otherwise a different approach is needed (i.e. shells)
-
+    # jax.debug.print('dphi_dxi_qnp = {}', dphi_dxi_qnp)
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
 
-    # G_qpd = jnp.linalg.inv(J_qpd).transpose(0, 2, 1)
     det_J_q = jnp.sqrt(jnp.linalg.det(jnp.einsum("qpd,qrd->qpr",J_qpd,J_qpd)))
-    # det_J_q = jnp.linalg.norm(J_qpd, axis=-1)
     def lstsq_one(J_pd,dphi_dxi_np):
         dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
         return dphi_dx_nd.T
     
     dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
-    # jax.debug.print('linear TRUSS residual: dphi_dx_qnd = {}',dphi_dx_qnd)
-    # dphi_dx_qnd = jnp.einsum("qpd,qnp->qnd", G_qpd, dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
@@ -395,5 +385,91 @@ def linear_truss_residual(
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
 
+    return R_nd, new_internal_state_qi
+
+def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
+    """
+    Compute the stiffness matrix directly from John Whitcomb's notes.
+
+    Parameters
+    ----------
+    material_params_m : material parameters, ndarray[float, (M,)]
+    x_nd          : coordinates, ndarray[float, (N, D)]
+
+    Returns
+    -------
+    K_global  : stiffness matrix, ndarray[float, (D, D)]
+    """
+
+    E = material_params_m[..., 0]
+    A = material_params_m[..., 1]
+    # Assumes the node number puts the endpoints as first and last entries. 
+    dx_d = x_nd[-1,:]-x_nd[0,:]
+    L = jnp.linalg.norm(dx_d)
+
+    if x_nd.shape[1] == 1:  # 1D
+        K_global = E*A/L*jnp.array([[1,-1],[-1,1]])
+    elif x_nd.shape[1] == 2:  # 2D
+        K_global =  (E*A/L**3)*jnp.array(
+            [
+                [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1]],
+                [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1]],
+                [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1]],
+                [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1]],
+            ]
+        )
+    elif x_nd.shape[1] == 3:  # 3D
+        K_global = (E*A/L**3)*jnp.array(
+            [
+                [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2]],
+                [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2]],
+                [ dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2],-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2]],
+                [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2]],
+                [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2]],
+                [-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2], dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2]],
+            ]
+        )
+    else:
+        raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
+
+    return K_global
+
+
+@jax.jit
+def stiffness_residual(
+    u_nd: jnp.ndarray,
+    x_nd: jnp.ndarray,
+    material_params: jnp.ndarray,
+    internal_state_qi: jnp.ndarray,
+):
+    """
+    Residual function that computes the residual for the weak form corresponding to linear
+    elasticity using the stiffness matrix.
+
+    Parameters
+    ----------
+    u_nd          : solution vector, ndarray[float, (N, D)]
+    x_nd          : coordinates, ndarray[float, (N, D)]
+    material_params : material parameters, ndarray[float, (Q, M)] or ndarray[float, (M,)]
+                  (eps_dd: jnp.ndarray, material_params: jnp.ndarray)
+
+    Returns
+    -------
+    R_nd  : residual vector, ndarray[float, (N, D)]
+    """
+    E = material_params[..., 0]
+    A = material_params[..., 1]
+    dx = x_nd[1,:]-x_nd[0,:]
+    L = jnp.linalg.norm(dx) 
+
+    T= jnp.vstack((jnp.hstack((dx/L,0*dx)),jnp.hstack((0*dx,dx/L))))
+    K = E*A/L*jnp.array([[1,-1],[-1,1]])
+    K_global = jnp.einsum("ni,ij,jm->nm",T.T,K,T)
+    K_direct = stiff_matrix(material_params_m=material_params,x_nd=x_nd)
+
+    assert jnp.isclose(K_direct,K_global).all(), "Computing stiffness matrix from T^T K T and direct element-by-element implementation do not match."
+    R_nd = jnp.einsum("dk,k->d",K_global,u_nd.reshape((-1))).reshape((-1,x_nd.shape[1]))
+
+    new_internal_state_qi = internal_state_qi
     return R_nd, new_internal_state_qi
 
