@@ -90,14 +90,14 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
 u_truss = u_truss.reshape((-1,3))
 print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
-print('-'*45)
-print(f"{'initial':^19}|{'final':^24}")
-print('-'*45)
+print('-'*64)
+print(f"{'initial':^27}|{'final':^35}")
+print('-'*64)
 for x, v in zip(points, u_truss):
     # Format each coordinate and value to 6 decimal places
     coord_str = "[" + " ".join(f"{xi:7.3f}" for xi in x) + "]"
     val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
-    print(f"{coord_str:>18} | {val_str:>24}")
+    print(f"{coord_str:>26} | {val_str:>35}")
 print("\n"*2)
 
 # Check solution against Dirichlet boundary conditions
