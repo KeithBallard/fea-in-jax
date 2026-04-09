@@ -72,6 +72,8 @@ class LinearSolverType(Enum):
     BICGSTAB_JAXOPT = 40
     BICGSTAB_JAX_SCIPY = 41
     PETSC = 50
+    PETSC_MPI = 51
+    PETSC_MATFREE = 52 #not great
 
 
 @dataclass(eq=True, frozen=True)
@@ -193,7 +195,7 @@ def linear_solve(
     TODO finish documentation
     """
     
-    jacObject = buildJacobianMatrix(jacobian,dirichlet_dofs,x_0,*args,**kwargs)
+    #jacObject = buildJacobianMatrix(jacobian,dirichlet_dofs,x_0,*args,**kwargs)
     #jax.debug.print("nse {bar}", bar=jacObject.nse) #checking info about Jacobian
 
     if residual.dirichlet_bcs_builtin:
@@ -314,6 +316,8 @@ def linear_solve(
                 )
             delta_x = jaxopt_linear_solve.solve_inv(matvec=J_vp, b=-R_0)
 
+            
+
         case LinearSolverType.SPSOLVE_CUPY:
             if preconditioner is not None:
                 print(
@@ -362,9 +366,9 @@ def linear_solve(
                 atol=solver_options.linear_absolute_tol,
             )
 
-        case LinearSolverType.CG_JAX_SCIPY:
+        case LinearSolverType.GMRES_JAX_SCIPY:
             delta_x, _ = jax.scipy.sparse.linalg.cg(
-                A=J_vp,
+                A=J_w_dirichlet(x_0),
                 b=-R_0,
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
@@ -375,7 +379,7 @@ def linear_solve(
             
 
             delta_x, cg_info = cg_w_info(
-                A=J_vp,
+                A=J_w_dirichlet(x_0),
                 b=-R_0,
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
@@ -418,7 +422,7 @@ def linear_solve(
 
         case LinearSolverType.GMRES_JAX_SCIPY:
             delta_x, _ = jax.scipy.sparse.linalg.gmres(
-                A=J_w_dirichlet(x_0),
+                A=J_vp,
                 b=-R_0,
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
@@ -447,6 +451,14 @@ def linear_solve(
                 atol=solver_options.linear_absolute_tol,
             )
 
+        case LinearSolverType.PETSC_MPI:
+            exit(1)
+            return None
+
+        case LinearSolverType.PETSC_MATFREE:
+           ctx = __petsc_matfree_init(J_vp,x_0.shape[0])
+           delta_x = __petsc_solve_matfree(ctx, -R_0)
+
         case LinearSolverType.PETSC:
             if preconditioner is not None:
                 print(
@@ -462,7 +474,8 @@ def linear_solve(
 
 
             ctx = __petsc_init(J_sparse[3],J_sparse[0],J_sparse[1],J_sparse[2])
-            
+            #ctx = __petsc_init(J_sparse)
+
             jax.debug.print("id of the object is {object}",object=ctx)
 
             delta_x = __petsc_solve(ctx, -R_0)
@@ -741,6 +754,8 @@ def __petsc_init_MPI_impl(A):
     mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
     mat.setPreallocationCOO(rows, cols)
     
+    comm.barrier()
+
     lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
     MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
     MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
@@ -751,11 +766,16 @@ def __petsc_init_MPI_impl(A):
     mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
     coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
 
+    comm.barrier()
    
     MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
 
+    comm.barrier()
+
     mat.assemblyBegin()
     mat.assemblyEnd()
+
+    comm.barrier()
 
     ksp = PETSc.KSP().create()
     ksp.setOperators(mat,mat)
@@ -763,22 +783,35 @@ def __petsc_init_MPI_impl(A):
     ksp.setConvergenceHistory()
     ksp.getPC().setType("jacobi")
 
+    comm.barrier()
 
     return __store_object(ksp)
     
 def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
     
+    print("inside init")
+
     jacMatShape = cp.from_dlpack(jaxMatShape,copy=False)
     jacMatVals  = cp.from_dlpack(jaxMatVals,copy=False)
     jacMatRows  = jnp.asarray(jaxMatRows,dtype=jnp.int32)
     jacMatCols  = jnp.asarray(jaxMatCols,dtype=jnp.int32)
 
+    print("converted vectors")
 
     mat = PETSc.Mat().create(PETSc.COMM_WORLD)
+
+    print("created mat object")
+
+    print(jacMatShape)
+
     mat.setSizes(jacMatShape)
+
+    print("set mat size")
 
     mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
     mat.setPreallocationCOO(jacMatRows,jacMatCols)
+
+    print("allocated mat")
 
     lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
     MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
@@ -788,15 +821,21 @@ def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
     coo_ptr = ct.c_void_p(jacMatVals.data.ptr)  # the pointer to GPU memory
 
 
+    print("set pointers")
+
     MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+
+    print("populated mat")
     
     #matdupe = mat.duplicate(copy=True)
 
     ksp = PETSc.KSP().create()
     ksp.setOperators(mat)
-    ksp.setType("preonly")
+    ksp.setType("bcgs")
     ksp.setConvergenceHistory()
-    ksp.getPC().setType("cholesky")
+    ksp.getPC().setType("jacobi")
+
+    print("assembled ksp")
 
     cp.asarray(out)[...] = __store_object(ksp)
 
@@ -806,6 +845,13 @@ def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols) -> __CupyCtx:
     #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
     handle = buffer_callback(__petsc_init_impl_v2, result_info)(jacMatShape,jacMatVals,jacMatRows,jacMatCols)
     return __CupyCtx(handle=handle)
+
+
+"""@jax.jit
+def __petsc_init(A) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__petsc_init_impl_v2, result_info, A)
+    return __CupyCtx(handle=handle)"""
 
 
 def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
@@ -969,7 +1015,7 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
 
                       #rtol, atol, dtol, max_it
-    ksp.setTolerances(1e-14,1e-10, 100, 1000000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+    ksp.setTolerances(1e-14,1e-16, 100, 1000000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
 
     
     ksp.setConvergenceHistory(n)
@@ -978,9 +1024,8 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     
     ksp.solve(vec,x_petsc)
 
-
-
-    print("ownership",x_petsc.getOwnershipRange())
+    print("exit code",ksp.getConvergedReason())
+    print("iterations",ksp.getIterationNumber())
 
     
     #print("inner solve time:",time.time()-start)
@@ -990,6 +1035,7 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     #print("iterations",ksp.getIterationNumber())
     #print("res norm",ksp.getResidualNorm())
 
+    comm.barrier()
 
     cudahandle = x_petsc.getCUDAHandle()
     ptr = cudahandle         # raw CUDA pointer from PETSc
@@ -1007,8 +1053,9 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     x_full = cp.empty(global_length, dtype=cp.float64)
 
     # MPI Allgather into GPU memory
+    comm.barrier()
     comm.Allgather(x_local, x_full)  #comm.Allgatherv(...)
-    
+    comm.barrier()
     #x_gpu = cp.ndarray((global_length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, global_length*8, x_full), 0))
 
     print("x First 10 elements inside buffer_callback:", x_full[0:10]) #each is listing it's specific local section as 0 so it's probably building god knows what thwn trying to convert to x_gpu
@@ -1023,6 +1070,7 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     x_petsc.destroy()
     vec.destroy()
 
+    comm.barrier()
 
     cp.asarray(out)[...] = x_full #I have no idea is this uses a copy to CPU somewhere
 
@@ -1031,4 +1079,127 @@ def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
     x= buffer_callback(__petsc_solve_impl_debug, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    return x
+
+
+#MATFREE PETSC REDUX----------------------------------------------------
+
+class Jax_MAT:
+        def __init__(self, J_vp,da):
+            print("built matrix")
+            self.da = da
+            self.localX = da.createLocalVec()
+            self.J_vp = J_vp
+        def mult(self, mat, X, Y):
+            print("called mult")
+            
+            x = self.da.getVecArray(self.localX)
+            y = self.da.getVecArray(Y)
+
+            print(x)
+
+            exit(1)
+
+
+        def multAdd(self, A, x, y, z) -> None:
+            print("multAdd")
+
+        def multTranspose(self, A, x, y) -> None:
+            print("multTranspose")
+
+        def multTransposeAdd(self, A, x, y, z) -> None:
+            print("multTransposeAdd")
+
+def __petsc_init_matfree_impl(J_vp,size):
+        
+    da = PETSc.DMDA().create([size, size])
+
+    shell = Jax_MAT(J_vp,da)
+    A = PETSc.Mat().create(comm=da.comm)
+    A.setSizes([size, size])
+    A.setType(PETSc.Mat.Type.PYTHON)
+    A.setPythonContext(shell)
+    A.setUp()
+
+    ksp = PETSc.KSP().create()
+
+    ksp.setType(PETSc.KSP.Type.CG)
+
+    ksp.setFromOptions()
+
+    ksp.setOperators(A)
+
+
+    return __store_object(ksp)
+
+
+def __petsc_solve_matfree_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
+    
+    print(b.__dlpack_device__())
+    print(GPUPointerArray.__dlpack_device__())
+    
+    b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
+    
+
+
+
+    ksp = __retrieve_object(cp.asarray(handle))
+    
+    x_petsc = PETSc.Vec().create(PETSc.COMM_SELF)
+    x_petsc.setType('cuda')         # true GPU vector
+    x_petsc.setSizes(b.shape[0])
+    x_petsc.setUp()
+    x_petsc.set(1.0)
+
+    n = 3
+    
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
+
+                      #rtol, atol, dtol, max_it
+    ksp.setTolerances(1e-14,1e-10, 100, 1000000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+
+    
+    ksp.setConvergenceHistory(n)
+    
+    start = time.time()
+    
+    ksp.solve(b_petsc_1,x_petsc)
+    
+    print("inner solve time:",time.time()-start)
+    
+    
+    print("exit code",ksp.getConvergedReason())
+    print("iterations",ksp.getIterationNumber())
+    print("res norm",ksp.getResidualNorm())
+
+    cudahandle = x_petsc.getCUDAHandle()
+    ptr = cudahandle         # raw CUDA pointer from PETSc
+    length = x_petsc.getSize()
+     
+    x_gpu = cp.ndarray((length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+
+    print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
+
+    A,P = ksp.getOperators()
+    A.destroy()
+    P.destroy()
+    ksp.getPC().destroy()
+    ksp.destroy() #quick and dirty memory management
+    x_petsc.destroy()
+    b_petsc_1.destroy()
+    
+
+    cp.asarray(out)[...] = x_gpu
+
+@jax.jit
+def __petsc_matfree_init(A,size) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__petsc_init_matfree_impl, result_info, A,size)
+    return __CupyCtx(handle=handle)
+
+@jax.jit
+def __petsc_solve_matfree(ctx: __CupyCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    x= buffer_callback(__petsc_solve_matfree_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
     return x

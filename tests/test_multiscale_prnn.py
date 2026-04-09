@@ -2,6 +2,8 @@ from helper import *
 
 from prnn import *
 
+import time
+
 jax.config.update("jax_enable_x64", True)
 
 # from jax_smi import initialise_tracking
@@ -144,8 +146,8 @@ element_batches = [
         n_dofs_per_basis=U,
         connectivity_en=cells,
         constitutive_model=elastic_prnn,
-        material_params_eqm=mat_params_eqm,
-        internal_state_eqi=jnp.zeros(shape=(cells.shape[0], Q, I)),
+        material_params=mat_params_eqm,
+        internal_state=jnp.zeros(shape=(cells.shape[0], Q, I)),
     ),
 ]
 
@@ -153,6 +155,7 @@ u_prev = jnp.zeros((V * U,))
 
 for i, scale_factor in enumerate(np.linspace(0, 1, 10)):
 
+    startTime = time.time()
     # Solve the boundary value problem
     u, residual, new_internal_state_beqi = solve_bvp(
         element_residual_func=linear_elasticity_residual,
@@ -161,9 +164,13 @@ for i, scale_factor in enumerate(np.linspace(0, 1, 10)):
         u_0_g=u_prev,
         dirichlet_bcs=dirichlet_bcs,
         dirichlet_values=scale_factor * dirichlet_values,
-        solver_options=SolverOptions(linear_solve_type=LinearSolverType.DIRECT_INVERSE_JNP),
+        solver_options=SolverOptions(linear_solve_type=LinearSolverType.PETSC),
     )
+
+
     print("|R| = ", jnp.linalg.norm(residual))
+    jax.block_until_ready(residual)
+    print("Took",time.time()-startTime)
 
     u_prev = u
 
