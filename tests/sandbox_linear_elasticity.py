@@ -40,7 +40,10 @@ def compare_residuals(num_tests,print_test=False):
                 u_nd=u_nd,
                 x_nd=x_nd,
                 material_params=material_params,
-                internal_state_qi=[]
+                internal_state_qi=[],
+                dphi_dxi_qnp=None,
+                W_q=None,
+                constitutive_model=None
             )[0]
             if print_test:
                 print("\n Test %i:"%i)
