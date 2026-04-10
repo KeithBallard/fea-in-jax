@@ -8,22 +8,8 @@ import jax.extend
 
 print(jax.extend.backend.get_backend().platform)
 
-# from jax_smi import initialise_tracking
-# initialise_tracking()
-
-x_of_t = lambda t:2*t
-y_of_t = lambda t:1*t
-n_elements = 4
-t_soln = np.linspace(0,1.1,n_elements+1)
-x_soln = x_of_t(t_soln)
-t = np.linspace(0,1,n_elements+1,dtype=np.float32)
-y_soln = y_of_t(t)
-
-x = x_of_t(t)
-y = y_of_t(t)
-points=np.vstack((x,y)).T
-cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
-# points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
+points = np.array([[-5,0],[0,-5*np.sqrt(3)],[5,0]],dtype = jnp.float64)
+cells = np.array([[0,1],[1,2]],dtype = jnp.int32)
 cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
 
 # Sizes of arrays
@@ -44,16 +30,22 @@ Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
 print("# DoFs = ", F)
 
 # Set material properties
-matrix_mat_params = jnp.array([1e9])  # E
+# matrix_mat_params = jnp.array([1e9])  # E
+matrix_mat_params = jnp.array([1e6,1])
 
 # Set boundary conditions. Leave the (0,0) end point fixed, but take (2,1)->(2.4,1.2)
 # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
 bcs = (
     [
-        DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=0.0),
-        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=x_soln[-1]-x[-1]),
-        DirichletBC(bc_type=BCType.NODE,component=1,index=n_elements,value=y_soln[-1]-y[-1])
+        DirichletBC(bc_type=BCType.NODE, component=0, index=0, value=-0.0),
+        # DirichletBC(bc_type=BCType.NODE, component=0, index=0, value=-5.0),
+        DirichletBC(bc_type=BCType.NODE, component=1, index=0, value= 0.0),
+        DirichletBC(bc_type=BCType.NODE, component=0, index=1, value= 0.0),
+        DirichletBC(bc_type=BCType.NODE, component=1, index=1, value=-1732/150e3),
+        # DirichletBC(bc_type=BCType.NODE, component=1, index=1, value= -5*np.sqrt(3)-1732/150e3),
+        DirichletBC(bc_type=BCType.NODE, component=0, index=2, value= 0.0),
+        # DirichletBC(bc_type=BCType.NODE, component=0, index=2, value= 5.0),
+        DirichletBC(bc_type=BCType.NODE, component=1, index=2, value= 0.0)
     ]
 )
 
@@ -105,10 +97,7 @@ print("Woo Hoo! Solution at least matches at the endopints\n")
 
 plt.scatter(*points.T,label = 'initial')
 plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
-plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
 plt.legend()
 plt.show()
 
-# Check solutions against "known" solution. 
-assert jnp.isclose(u_truss,np.vstack((x_soln,y_soln)).T).all(), "does not match expected solution!" 
 

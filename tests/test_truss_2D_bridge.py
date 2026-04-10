@@ -35,23 +35,23 @@ cells = np.array(
     [[b,t] for b,t in zip(range(2,6),range(11,7,-1))],  # up-leftwards diagonal members
     dtype=np.int64
 )
-displacement_soln = np.array(
+displacement_soln = 2000*np.array(
     [
-        [ 0.000e+00,  0.000e+00],
-        [-4.035e-06, -4.741e-04],
-        [ 1.994e-06, -6.270e-04],
-        [-7.059e-20, -6.674e-04],
-        [-1.994e-06, -6.270e-04],
-        [ 4.035e-06, -4.741e-04],
-        [ 0.000e+00,  0.000e+00],
-        [-1.372e-04, -4.503e-04],
-        [-8.861e-05, -5.905e-04],
-        [-1.033e-20, -6.319e-04],
-        [ 8.861e-05, -5.905e-04],
-        [ 1.372e-04, -4.503e-04]
+        [ 0.0000000000000000e+00,  0.0000000000000000e+00],
+        [-4.0348069928191154e-06, -4.7413240142144382e-04],
+        [ 1.9941712420270919e-06, -6.2699173349650900e-04],
+        [-7.0585158235953546e-20, -6.6738402294532265e-04],
+        [-1.9941712420272130e-06, -6.2699173349650911e-04],
+        [ 4.0348069928190680e-06, -4.7413240142144393e-04],
+        [ 0.0000000000000000e+00,  0.0000000000000000e+00],
+        [-1.3716160425393349e-04, -4.5033755671635155e-04],
+        [-8.8605854596248432e-05, -5.9051646249395884e-04],
+        [-1.0327574913615736e-20, -6.3192317035040680e-04],
+        [ 8.8605854596248378e-05, -5.9051646249395873e-04],
+        [ 1.3716160425393341e-04, -4.5033755671635133e-04],
     ]
 )
-coordinate_soln = points + displacement_soln*2000
+coordinate_soln = points + displacement_soln
 
 # points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
 # cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
@@ -95,22 +95,38 @@ matrix_mat_params = jnp.array([200e3])  # E
 # [ 15.000   6.000   0.000] | [-1.033e-20 -6.319e-04]
 # [ 10.000   5.330   0.000] | [ 8.861e-05 -5.905e-04]
 # [  5.000   3.330   0.000] | [ 1.372e-04 -4.503e-04]
+
+# -----------------------------------------------------------------------------
+#        coordinates        |                 displacements
+# -----------------------------------------------------------------------------
+# [    0.0     0.0     0.0] | [ 0.0000000000000000e+00,  0.0000000000000000e+00],
+# [    5.0     0.0     0.0] | [-4.0348069928191154e-06, -4.7413240142144382e-04],
+# [   10.0     0.0     0.0] | [ 1.9941712420270919e-06, -6.2699173349650900e-04],
+# [   15.0     0.0     0.0] | [-7.0585158235953546e-20, -6.6738402294532265e-04],
+# [   20.0     0.0     0.0] | [-1.9941712420272130e-06, -6.2699173349650911e-04],
+# [   25.0     0.0     0.0] | [ 4.0348069928190680e-06, -4.7413240142144393e-04],
+# [   30.0     0.0     0.0] | [ 0.0000000000000000e+00,  0.0000000000000000e+00],
+# [   25.0     3.3     0.0] | [-1.3716160425393349e-04, -4.5033755671635155e-04],
+# [   20.0     5.3     0.0] | [-8.8605854596248432e-05, -5.9051646249395884e-04],
+# [   15.0     6.0     0.0] | [-1.0327574913615736e-20, -6.3192317035040680e-04],
+# [   10.0     5.3     0.0] | [ 8.8605854596248378e-05, -5.9051646249395873e-04],
+# [    5.0     3.3     0.0] | [ 1.3716160425393341e-04, -4.5033755671635133e-04],
 bcs = (
     [
-        DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=coordinate_soln[0][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=coordinate_soln[0][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=6,value=coordinate_soln[6][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=6,value=coordinate_soln[6][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=1,value=coordinate_soln[1][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=1,value=coordinate_soln[1][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=2,value=coordinate_soln[2][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=2,value=coordinate_soln[2][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=3,value=coordinate_soln[3][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=3,value=coordinate_soln[3][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=4,value=coordinate_soln[4][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=4,value=coordinate_soln[4][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=5,value=coordinate_soln[5][0]),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=5,value=coordinate_soln[5][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=displacement_soln[0][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=displacement_soln[0][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=6,value=displacement_soln[6][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=6,value=displacement_soln[6][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=1,value=displacement_soln[1][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=1,value=displacement_soln[1][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=2,value=displacement_soln[2][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=2,value=displacement_soln[2][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=3,value=displacement_soln[3][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=3,value=displacement_soln[3][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=4,value=displacement_soln[4][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=4,value=displacement_soln[4][1]),
+        DirichletBC(bc_type = BCType.NODE,component=0, index=5,value=displacement_soln[5][0]),
+        DirichletBC(bc_type = BCType.NODE,component=1, index=5,value=displacement_soln[5][1])
     ]
 )
 
@@ -155,8 +171,8 @@ print("\n"*2)
 
 plt.figure(figsize=[12,3])
 plt.scatter(*points.T,label = 'initial')
-plot_truss(u_truss,cells,linecolor='tab:orange',linestyle='dashed',markercolor='tab:orange',marker='d')
-plt.scatter(*u_truss.T,marker='d',label = 'solution')
+plot_truss(points+u_truss,cells,linecolor='tab:orange',linestyle='solid',markercolor='tab:orange',marker='d')
+plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
 plot_truss(coordinate_soln,cells,linecolor='tab:green',linestyle='dashed',markercolor='tab:green',marker='x')
 plt.scatter(*coordinate_soln.T,marker='x',label = 'truth')
 plt.legend()
@@ -168,3 +184,6 @@ dirichlet_values = np.array([bc.value for bc in bcs])
 dirichlet_comp = np.array([bc.component for bc in bcs])
 assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
 print("Solution at least matches at the Dirichlet boundary conditions.\n")
+
+assert jnp.isclose(u_truss,displacement_soln).all(), f"Does not match expected solution"
+print("Solution matches the expected solution (copied form FEniCS)")

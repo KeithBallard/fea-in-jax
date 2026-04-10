@@ -36,7 +36,7 @@ matrix_mat_params = jnp.array([1.0e9])  # E
 
 # Set boundary conditions (first endpoint stays fixed, final endpoint goes from 1.0 -> 1.2
 bcs = ([DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
-        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=1.2)])
+        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=0.2)])
 
 # Example using the isotropic constitutive relation
 element_batches_iso = [

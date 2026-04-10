@@ -55,9 +55,9 @@ bcs = (
         DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
         DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=0.0),
         DirichletBC(bc_type = BCType.NODE,component=2, index=0,value=0.0),
-        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=x_soln[-1]),
-        DirichletBC(bc_type=BCType.NODE,component=1,index=n_elements,value=y_soln[-1]),
-        DirichletBC(bc_type=BCType.NODE,component=2,index=n_elements,value=z_soln[-1])
+        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=x_soln[-1]-x[-1]),
+        DirichletBC(bc_type=BCType.NODE,component=1,index=n_elements,value=y_soln[-1]-y[-1]),
+        DirichletBC(bc_type=BCType.NODE,component=2,index=n_elements,value=z_soln[-1]-z[-1])
     ]
 )
 
@@ -114,5 +114,5 @@ print("Woo Hoo! Solution at least matches at the endopints\n")
 # plt.show()
 
 # Check solutions against "known" solution. 
-assert jnp.isclose(u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!" 
+assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!" 
 print("Solution matches expected results!")
