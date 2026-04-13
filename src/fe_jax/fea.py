@@ -959,7 +959,6 @@ def calculate_residual_wo_constraints(
     R_f                     : residual vector evaluated at the solution, ndarray[float, (V * D)]
     new_internal_state_beqi : updated internal state variables for each element batch
     """
-
     # TODO change the pattern to accept donated arrays to hold R_f and new_internal_state_beqi
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -1044,7 +1043,6 @@ def calculate_residual_w_constraints(
                               ndarray[float, (V * D)]
     new_internal_state_beqi : updated internal state variables for each element batch
     """
-
     # Note: this is neccessary to ensure the Jacobian is symmetric. Without this,
     # the autodiff would result in 0's on rows (except on the diagonal) for entries
     # corresponding to Dirichlet BC's, but the columns would be non-zero.
@@ -1206,6 +1204,7 @@ def solve_nonlinear_step(
         )
 
         u_f = u_f + delta_u
+        u_f = constraints.apply_to_solution(u_f)
         R_f = residual_isv_func_w_constraints(u_f=u_f)[0]
 
         return (
@@ -1215,7 +1214,6 @@ def solve_nonlinear_step(
             new_internal_state_beqi,
             info.increment_nl_iteration(),
         )
-
     _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
         cond_fun=while_cond,
         body_fun=while_body,
@@ -1380,7 +1378,6 @@ def solve_bvp(
     R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
     element_batches : element batches with updated internal state variables
     """
-
     ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func = (
         preprocess_bvp(
             vertices_vd=vertices_vd,

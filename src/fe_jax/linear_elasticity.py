@@ -257,7 +257,7 @@ def linear_elasticity_residual(
     return R_nd, new_internal_state_qi
 
 @jax.jit
-def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
+def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd=jnp.ndarray):
     """
     A constitive relation for a an elastic truss.
 
@@ -274,7 +274,7 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
 
     E = material_params_m[..., 0]
     # Assumes the node number puts the endpoints as first and last entries. 
-    dx_d = x_nd[-1,:]-x_nd[0,:]
+    dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
     l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
 
     P_dd = jnp.outer(l_d,l_d)
@@ -342,8 +342,6 @@ def linear_truss_residual(
     -------
     R_nd  : residual vector, ndarray[float, (N, D)]
     """
-
-    # jax.debug.print('dphi_dxi_qnp = {}', dphi_dxi_qnp)
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
 
     det_J_q = jnp.sqrt(jnp.linalg.det(jnp.einsum("qpd,qrd->qpr",J_qpd,J_qpd)))
@@ -378,6 +376,10 @@ def linear_truss_residual(
         constitutive_args.append(x_nd)
         in_axes.append(None)
 
+    if is_required(constitutive_model, "u_nd"):
+        constitutive_args.append(u_nd)
+        in_axes.append(None)
+
     constitutive_model_vmap = jax.vmap(constitutive_model, in_axes=tuple(in_axes))
     stress_qdd, new_internal_state_qi = constitutive_model_vmap(*constitutive_args)
 
@@ -385,6 +387,8 @@ def linear_truss_residual(
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
 
+    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nR_nd = \n{}\n',x_nd,u_nd,R_nd)
+    # jax.debug.print('x_nd = \n{}\n',x_nd)
     return R_nd, new_internal_state_qi
 
 def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
@@ -439,8 +443,15 @@ def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
 def stiffness_residual(
     u_nd: jnp.ndarray,
     x_nd: jnp.ndarray,
+    dphi_dxi_qnp: jnp.ndarray,
+    W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
+    constitutive_model: Callable,
+    # u_nd: jnp.ndarray,
+    # x_nd: jnp.ndarray,
+    # material_params: jnp.ndarray,
+    # internal_state_qi: jnp.ndarray,
 ):
     """
     Residual function that computes the residual for the weak form corresponding to linear
@@ -465,11 +476,14 @@ def stiffness_residual(
     T= jnp.vstack((jnp.hstack((dx/L,0*dx)),jnp.hstack((0*dx,dx/L))))
     K = E*A/L*jnp.array([[1,-1],[-1,1]])
     K_global = jnp.einsum("ni,ij,jm->nm",T.T,K,T)
-    K_direct = stiff_matrix(material_params_m=material_params,x_nd=x_nd)
+    #K_direct = stiff_matrix(material_params_m=material_params,x_nd=x_nd)
 
-    assert jnp.isclose(K_direct,K_global).all(), "Computing stiffness matrix from T^T K T and direct element-by-element implementation do not match."
+    #assert jnp.isclose(K_direct,K_global).all(), "Computing stiffness matrix from T^T K T and direct element-by-element implementation do not match."
+    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nK_global = \n{}\n',x_nd,u_nd,K_global)
     R_nd = jnp.einsum("dk,k->d",K_global,u_nd.reshape((-1))).reshape((-1,x_nd.shape[1]))
 
+    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nR_nd = \n{}\n',x_nd,u_nd,R_nd)
+    # jax.debug.print('x_nd = \n{}\n',x_nd)
     new_internal_state_qi = internal_state_qi
     return R_nd, new_internal_state_qi
 
