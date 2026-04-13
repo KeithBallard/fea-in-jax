@@ -13,11 +13,11 @@ print(jax.extend.backend.get_backend().platform)
 
 x_of_t = lambda t:2*t
 y_of_t = lambda t:1*t
-n_elements = 4
-t_soln = np.linspace(0,1.1,n_elements+1)
+n_elements = 6
+t_soln = np.linspace(0,0.9,n_elements+1)
 x_soln = x_of_t(t_soln)
 t = np.linspace(0,1,n_elements+1,dtype=np.float32)
-y_soln = y_of_t(t)
+y_soln = y_of_t(t_soln)
 
 x = x_of_t(t)
 y = y_of_t(t)
@@ -77,8 +77,10 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         # linear_precond_type=PreconditionerType.JACOBI,
         # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=1,
+        nonlinear_max_iter=5,
         linear_max_iter=5,
+        # nonlinear_relative_tol=1e-18,
+        # nonlinear_absolute_tol=1e-18,
     ),
     plot_convergence=False,
 )
@@ -87,7 +89,7 @@ u_truss = u_truss.reshape((-1,2))
 print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
 print('-'*45)
-print(f"{'initial':^19}|{'final':^24}")
+print(f"{'initial':^19}|{'displacement':^24}")
 print('-'*45)
 for x, v in zip(points, u_truss):
     # Format each coordinate and value to 6 decimal places
@@ -100,8 +102,6 @@ print("\n"*2)
 dirichlet_dofs = np.array([bc.index for bc in bcs])
 dirichlet_values = np.array([bc.value for bc in bcs])
 dirichlet_comp = np.array([bc.component for bc in bcs])
-assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp].reshape((-1,2)), dirichlet_values.reshape((-1,2))).all(), f"Dirichlet is not satisfied"
-print("Woo Hoo! Solution at least matches at the endopints\n")
 
 plt.scatter(*points.T,label = 'initial')
 plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
@@ -109,6 +109,10 @@ plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
 plt.legend()
 plt.show()
 
+assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp].reshape((-1,2)), dirichlet_values.reshape((-1,2))).all(), f"Dirichlet is not satisfied"
+print("Woo Hoo! Solution at least matches at the endopints\n")
+
 # Check solutions against "known" solution. 
-assert jnp.isclose(u_truss,np.vstack((x_soln,y_soln)).T).all(), "does not match expected solution!" 
+assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln)).T).all(), "does not match expected solution!" 
+print("Solution matches expected solution.")
 

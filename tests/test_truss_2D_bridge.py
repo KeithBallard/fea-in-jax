@@ -117,15 +117,15 @@ bcs = (
         DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=displacement_soln[0][1]),
         DirichletBC(bc_type = BCType.NODE,component=0, index=6,value=displacement_soln[6][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=6,value=displacement_soln[6][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=1,value=displacement_soln[1][0]),
+        # DirichletBC(bc_type = BCType.NODE,component=0, index=1,value=displacement_soln[1][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=1,value=displacement_soln[1][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=2,value=displacement_soln[2][0]),
+        # DirichletBC(bc_type = BCType.NODE,component=0, index=2,value=displacement_soln[2][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=2,value=displacement_soln[2][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=3,value=displacement_soln[3][0]),
+        # DirichletBC(bc_type = BCType.NODE,component=0, index=3,value=displacement_soln[3][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=3,value=displacement_soln[3][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=4,value=displacement_soln[4][0]),
+        # DirichletBC(bc_type = BCType.NODE,component=0, index=4,value=displacement_soln[4][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=4,value=displacement_soln[4][1]),
-        DirichletBC(bc_type = BCType.NODE,component=0, index=5,value=displacement_soln[5][0]),
+        # DirichletBC(bc_type = BCType.NODE,component=0, index=5,value=displacement_soln[5][0]),
         DirichletBC(bc_type = BCType.NODE,component=1, index=5,value=displacement_soln[5][1])
     ]
 )
@@ -150,8 +150,8 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         # linear_precond_type=PreconditionerType.JACOBI,
         # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=10,
-        linear_max_iter=10,
+        nonlinear_max_iter=5,
+        linear_max_iter=5,
     ),
     plot_convergence=True,
 )
@@ -160,7 +160,7 @@ u_truss = u_truss.reshape((-1,2))
 print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
 print('-'*45)
-print(f"{'initial':^19}|{'final':^24}")
+print(f"{'initial':^19}|{'displacement':^24}")
 print('-'*45)
 for x, v in zip(points, u_truss):
     # Format each coordinate and value to 6 decimal places
