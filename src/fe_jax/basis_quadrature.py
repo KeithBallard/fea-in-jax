@@ -10,11 +10,11 @@ from basix import (
     make_quadrature,
 )
 
-from dataclasses import dataclass
+from flax import struct
 from typing import Any
 
 
-@dataclass
+@struct.dataclass
 class FiniteElementType:
     """
     Defines the properties of a finite element formulation used to compute the basis
