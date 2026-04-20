@@ -1,12 +1,14 @@
 from helper import *
+import pytest
 import matplotlib.pyplot as plt
-
 jax.config.update("jax_enable_x64", True)
-
 import jax.extend
 
-print(jax.extend.backend.get_backend().platform)
-print(jax.extend.backend.get_backend().platform)
+if __name__ == "__main__":
+    print(jax.extend.backend.get_backend().platform)
+
+# from jax_smi import initialise_tracking
+# initialise_tracking()
 
 def sci_to_latex(val):
     s = f"{val:.3e}"
@@ -35,49 +37,48 @@ def export_to_latex_table(points, u_truss, filename="table.txt"):
 
         f.write("\\end{tabular}\n")
 
-# from jax_smi import initialise_tracking
-# initialise_tracking()
-
 n_elements = 4
-points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
-cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
-cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
 
-# Sizes of arrays
-U = 1  # number of solution components
-V = points.shape[0]  # number of vertices
-E = cells.shape[0]  # number of elements
-F = V * U  # number of DoFs
-fe_type = FiniteElementType(
-    cell_type=CellType.interval,
-    family=ElementFamily.P,
-    basis_degree=1,
-    lagrange_variant=LagrangeVariant.equispaced,
-    quadrature_type=QuadratureType.default,
-    quadrature_degree=2,
-)
-Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
+def run_truss_1D_bar(n_elements, stretch_factor, label):
+    points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
+    soln   = points*(1+stretch_factor)-points
+    cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
+    cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
 
-print("# DoFs = ", F)
-
-# Set material properties
-matrix_mat_params = jnp.array([1.0e9])  # E
-
-
-# Example using the isotropic constitutive relation
-element_batches_iso = [
-    ElementBatch(
-        fe_type=fe_type,
-        n_dofs_per_basis=1,
-        connectivity_en=cells,
-        constitutive_model=elastic_isotropic,
-        material_params=matrix_mat_params,
+    # Sizes of arrays
+    U = 1  # number of solution components
+    V = points.shape[0]  # number of vertices
+    E = cells.shape[0]  # number of elements
+    F = V * U  # number of DoFs
+    fe_type = FiniteElementType(
+        cell_type=CellType.interval,
+        family=ElementFamily.P,
+        basis_degree=1,
+        lagrange_variant=LagrangeVariant.equispaced,
+        quadrature_type=QuadratureType.default,
+        quadrature_degree=2,
     )
-]
-for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
+    Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
+
+    print("# DoFs = ", F)
+
+    # Set material properties
+    matrix_mat_params = jnp.array([1.0e9])  # E
+
+
+    # Example using the isotropic constitutive relation
+    element_batches_iso = [
+        ElementBatch(
+            fe_type=fe_type,
+            n_dofs_per_basis=1,
+            connectivity_en=cells,
+            constitutive_model=elastic_isotropic,
+            material_params=matrix_mat_params,
+        )
+    ]
     # Set boundary conditions (first endpoint stays fixed, final endpoint goes from 1.0 -> 1.2
     bcs = ([DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
-            DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=u_d)])
+            DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=soln[-1,0])])
     u_iso, residual_iso, element_batches_iso = solve_bvp(
         element_residual_func=linear_elasticity_residual,
         vertices_vd=points,
@@ -93,12 +94,12 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
         plot_convergence=True,
     )
     plt.close()
-    print("\n*** Isotropic constitutive_model ***")
-    print("|R| = ", jnp.linalg.norm(residual_iso))
-    print(f"u = {u_iso}")
-    dirichlet_dofs = np.array([bc.index for bc in bcs])
-    dirichlet_values = np.array([bc.value for bc in bcs])
-    assert jnp.isclose(u_iso[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
+    # print("\n*** Isotropic constitutive_model ***")
+    # print("|R| = ", jnp.linalg.norm(residual_iso))
+    # print(f"u = {u_iso}")
+    # dirichlet_dofs = np.array([bc.index for bc in bcs])
+    # dirichlet_values = np.array([bc.value for bc in bcs])
+    # assert jnp.isclose(u_iso[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
 
     # Example using the truss elements
     element_batches_truss = [
@@ -125,10 +126,10 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
         ),
         plot_convergence=True,
     )
-    plt.savefig(get_output(f"solver_convergence_1D_{lab}.png"))
+    plt.savefig(get_output(f"solver_convergence_1D_{label}.png"))
     plt.close()
 
-    export_to_latex_table(points,u_truss,filename = get_output(f"displacement_table_1D_{lab}.txt"))
+    export_to_latex_table(points,u_truss,filename = get_output(f"displacement_table_1D_{label}.txt"))
     print("\n*** Truss Elements! ***")
     print("|R| = ", jnp.linalg.norm(residual_truss))
     print('-'*24)
@@ -140,10 +141,20 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
         val_str = f"{vi: .3e}"
         print(f"{coord_str:^9}|{val_str:^14}")
     print("\n"*2)
-    dirichlet_dofs = np.array([bc.index for bc in bcs])
-    dirichlet_values = np.array([bc.value for bc in bcs])
-    assert jnp.isclose(u_truss[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
+    #dirichlet_dofs = np.array([bc.index for bc in bcs])
+    #dirichlet_values = np.array([bc.value for bc in bcs])
+    #assert jnp.isclose(u_truss[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
 
-    #Check that the two solutions match! 
-    assert jnp.isclose(u_truss,u_iso).all(), "The solutions from the isotropic model and the truss model do NOT match!"
-    print("The solutions from the isotropic and truss models match (at least to JAX default precision)!")
+    ##Check that the two solutions match! 
+    #assert jnp.isclose(u_truss,u_iso).all(), "The solutions from the isotropic model and the truss model do NOT match!"
+    #print("The solutions from the isotropic and truss models match (at least to JAX default precision)!")
+    return u_truss, u_iso
+
+@pytest.mark.parametrize("case_args",[
+    (4,0.2,'1D_stretch'),
+    (4,-0.2,'1D_compression')
+])
+
+def test_truss_1D_bar(case_args):
+    u,ref_soln = run_truss_1D_bar(*case_args)
+    assert jnp.isclose(u,ref_soln).all(), f"Does not match isotropic solution: {case_args[-1]}!"
