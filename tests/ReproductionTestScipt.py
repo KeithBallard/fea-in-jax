@@ -2,7 +2,7 @@
 import subprocess
 import sys
 
-import scipy as sc
+import scipy.io as sio
 import time
 import re
 
@@ -13,29 +13,22 @@ preconditioner = ["JACOBI","ILU"]
 
 keyword = "full took"
 pattern = rf"{keyword}\s*(\d+\.?\d*)"
+fileName = "f"
+fileNum = 0
+dicts = []
 
-"""
-for i in file:
+
+outputDict = {"solver":solver,"PETScSolver":PETScSolver,"preconditioner":preconditioner}
+for i in file: 
     startTime = time.time()
-    resultString = subprocess.run([sys.executable, "tests/test_microscale_bvp.py",file[2],solver[0],PETScSolver[0],preconditioner[0]],capture_output=True,text=True).stdout
+    resultString = subprocess.run([sys.executable, "tests/test_microscale_bvp.py",i,solver[3],PETScSolver[0],preconditioner[0]],capture_output=True,text=True).stdout
     print("Full process took",time.time()-startTime)
     match = re.search(pattern, resultString)
-    number = match.group(1)
+    solverTime = match.group(1)
+    outputDict[fileName + str(fileNum)] = solverTime
+    fileNum = fileNum + 1
+    dicts.append(outputDict)
 
 
-    
-
-
-"""
-
-"""startTime = time.time()
-resultString = subprocess.run([sys.executable, "tests/test_microscale_bvp.py",file[2],solver[0],PETScSolver[0],preconditioner[0]],capture_output=True,text=True).stdout
-endTime1 = time.time() - startTime
-
-"""
-
-
-startTime = time.time()
-resultString = subprocess.run([sys.executable, "tests/test_microscale_bvp.py",file[0],solver[3],PETScSolver[0],preconditioner[0]],capture_output=True,text=True).stdout
-endTime2 = time.time() - startTime
+sio.savemat("testOutput.mat",{"testData":dicts})
 

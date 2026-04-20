@@ -1,0 +1,1107 @@
+import jax
+import jax.numpy as jnp
+import jax.experimental.sparse as jsparse
+import jax.extend as jextend
+from jax.experimental.buffer_callback import buffer_callback
+from jax.experimental import checkify
+from jax.dlpack import from_dlpack
+import jax.dlpack as jdl
+
+from jaxopt import linear_solve as jaxopt_linear_solve
+
+# For CPU solver
+import numpy as np
+import scipy.sparse
+import scipy.sparse.linalg
+
+# For GPU solvers
+import cupy
+import cupy as cp
+import cupyx.scipy.sparse as cpsparse
+import cupyx.scipy.sparse.linalg as cplinalg
+
+from flax import struct
+from enum import Enum
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
+from functools import partial
+
+from .utils import debug_print
+from .sparse_matrix import *
+from .solve_cg import cg as cg_w_info
+
+
+import ctypes as ct
+from mpi4py import MPI
+import jax.dlpack
+
+
+import time
+from jax.experimental import io_callback
+
+import mpi4jax
+
+comm = MPI.COMM_WORLD
+
+rank = comm.Get_rank()
+
+nproc = comm.Get_size()
+
+# Get available GPUs
+jax_devices = jax.devices("gpu")
+
+# Assign one GPU per rank
+local_device = jax_devices[rank]
+
+# Set default JAX device
+jax.config.update("jax_default_device", local_device)
+
+# Also set CuPy device
+cp.cuda.Device(rank).use()
+
+class PreconditionerType(Enum):
+    NONE = 0
+    JACOBI = 1
+    ILU_CUPY = 2
+    # Note: consider implementing spai preconditioner
+    # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
+
+
+class LinearSolverType(Enum):
+    DENSE_INVERSE_JNP = 0
+    DENSE_INVERSE_JAXOPT = 1
+    SPSOLVE_CUPY = 10
+    LU_JAXOPT = 11
+    LU_CUPY = 12
+    CHOLESKY_JAXOPT = 13
+    CG_JAXOPT = 20
+    CG_JAX_SCIPY = 21
+    CG_JAX_SCIPY_W_INFO = 22
+    GMRES_JAXOPT = 30
+    GMRES_JAX_SCIPY = 31
+    # TODO GMRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.gmres.html
+    # TODO CGS_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.cgs.html
+    # TODO MINRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.minres.html
+    BICGSTAB_JAXOPT = 40
+    BICGSTAB_JAX_SCIPY = 41
+    PETSC = 50
+    PETSC_MPI = 51
+
+
+@dataclass(eq=True, frozen=True)
+class SolverOptions:
+    linear_precond_type: PreconditionerType = PreconditionerType.NONE
+    linear_solve_type: LinearSolverType = LinearSolverType.LU_CUPY
+    linear_max_iter: int = 100000
+    linear_relative_tol: float = 1e-14
+    linear_absolute_tol: float = 1e-10
+    nonlinear_max_iter: int = 1
+    nonlinear_relative_tol: float = 1e-2
+    nonlinear_absolute_tol: float = 1e-2
+
+
+@struct.dataclass
+class SolverResultInfo:
+    nonlinear_iterations: int
+    cumulative_linear_iterations: int
+    linear_iterations_per_nonlinear_iteration: jnp.ndarray
+    # NOTE length will be nonlinear_iterations + cumulative_linear_iterations because the residual
+    # norm history for each nonlinear iteration begins with the starting residual norm before a
+    # linear solve
+    cumulative_residual_norm_history: jnp.ndarray
+
+    def increment_nl_iteration(self):
+        """
+        Call at the end of each nonlinear iteration to create a copy of the struct that carries
+        the solver history forward.
+        """
+        return SolverResultInfo(
+            nonlinear_iterations=self.nonlinear_iterations + 1,
+            cumulative_linear_iterations=self.cumulative_linear_iterations,
+            linear_iterations_per_nonlinear_iteration=self.linear_iterations_per_nonlinear_iteration,
+            cumulative_residual_norm_history=self.cumulative_residual_norm_history,
+        )
+
+
+def init_solver_info(opts: SolverOptions):
+    """
+    Initialize a SolverResultInfo object to begin tracking solves.
+    """
+    return SolverResultInfo(
+        nonlinear_iterations=0,
+        cumulative_linear_iterations=0,
+        linear_iterations_per_nonlinear_iteration=jnp.zeros((opts.nonlinear_max_iter,)),
+        cumulative_residual_norm_history=jnp.zeros(
+            (opts.linear_max_iter * opts.nonlinear_max_iter + 1,)
+        ),
+    )
+
+
+def pure_time(_):
+    return time.time()
+
+def print_duration(x):
+    print("took",x)
+
+time_struct = jax.ShapeDtypeStruct((),jnp.float64)
+    
+
+@struct.dataclass
+class Residual:
+    # Function that produces the residual vector (jnp.ndarray).
+    # NOTE the solution must be the first argument, though additional args can follow.
+    function: Callable[[jax.Array], jax.Array]
+    # Indicates whether Dirichlet boundary conditions are built into the residual.
+    dirichlet_bcs_builtin: bool = struct.field(pytree_node=False)
+
+
+@struct.dataclass
+class Jacobian:
+    # Function that produces the sparse matrix (jsparse.COO).
+    # NOTE the solution must be the first argument, though additional args can follow.
+    function: Callable[[jax.Array], jsparse.COO]
+    # Indicates whether Dirichlet boundary conditions are built into the Jacobian.
+    dirichlet_bcs_builtin: bool = struct.field(pytree_node=False)
+
+
+@struct.dataclass
+class JacobianDiagonl:
+    # Function that produces the diagonal of the Jacobian matrix (jnp.ndarray).
+    # NOTE the solution must be the first argument, though additional args can follow.
+    function: Callable[[jax.Array], jax.Array]
+    # Indicates whether Dirichlet boundary conditions are built into the Jacobian.
+    dirichlet_bcs_builtin: bool = struct.field(pytree_node=False)
+
+@jax.jit
+def buildJacobianMatrix(
+    jacobian: Jacobian,
+    dirichlet_dofs:jnp.ndarray,
+    x_0:jnp.ndarray,
+    *args,
+    **kwargs,
+):
+    J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(jacobian.function(x, *args, **kwargs), dirichlet_dofs)
+    return J_w_dirichlet(x_0)
+    
+
+
+    
+
+@partial(jax.jit, static_argnames=["solver_options", "check_consistency"])
+def linear_solve(
+    residual: Residual,
+    jacobian: Optional[Jacobian],
+    jacobian_diagonal: Optional[JacobianDiagonl],
+    dirichlet_dofs: jnp.ndarray,
+    dirichlet_values: jnp.ndarray,
+    solver_options: SolverOptions,
+    solver_info_0: SolverResultInfo,
+    check_consistency: bool,
+    x_0: jnp.ndarray,
+    *args,
+    **kwargs,
+) -> tuple[jnp.ndarray, SolverResultInfo]:
+    """
+    Solve a linear system of equations emerging from Newton's method: J(x) * x = -R(x)
+
+    TODO finish documentation
+    """
+    
+    #jacObject = buildJacobianMatrix(jacobian,dirichlet_dofs,x_0,*args,**kwargs)
+    #jax.debug.print("nse {bar}", bar=jacObject.nse) #checking info about Jacobian
+
+    if residual.dirichlet_bcs_builtin:
+        R_w_dirichlet = lambda x: residual.function(x, *args, **kwargs)
+    else:
+        raise Exception("TODO (straightforward) implementation needed")
+
+    if jacobian is not None:
+        if jacobian.dirichlet_bcs_builtin:
+            J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
+        else:
+            if solver_options.linear_solve_type == LinearSolverType.PETSC:
+                J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs_tuple(
+                    jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                )
+            else:J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
+                    jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                )
+
+    else:
+        J_w_dirichlet = None
+        
+ 
+    if jacobian_diagonal is not None:
+        if jacobian_diagonal.dirichlet_bcs_builtin:
+            diag_J_w_dirichlet = lambda x: jacobian_diagonal.function(
+                x, *args, **kwargs
+            )
+        else:
+            diag_J_w_dirichlet = (
+                lambda x: jacobian_diagonal.function(x, *args, **kwargs)
+                .at[dirichlet_dofs]
+                .set(1.0)
+            )
+    else:
+        diag_J_w_dirichlet = None
+
+    J_vp = jax.tree_util.Partial(
+        lambda x, z: jax.jvp(
+            R_w_dirichlet,
+            (x,),
+            (z,),
+        )[1],
+        x_0,
+    )
+
+    if check_consistency:
+        v = jax.random.uniform(jax.random.key(0), x_0.shape, x_0.dtype)
+        J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
+
+        jax.debug.print(
+            "Jacobian-vector product via autodiff matches product via dense Jacobian from jacfwd: {}",
+            jnp.isclose(J_vp(v), J_dense @ v).all(),
+        )
+
+        if J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian inferred from residual (via jacfwd) matches given Jacobian function: {}",
+                jnp.isclose(J_dense, J_w_dirichlet(x_0).todense()).all(),
+            )
+
+        if diag_J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian diagonal inferred from residual (via diag(jacfwd)) matches Jacobian diagonal function: {}",
+                jnp.isclose(jnp.diag(J_dense), diag_J_w_dirichlet(x_0)).all(),
+            )
+
+        if J_w_dirichlet is not None:
+            jax.debug.print(
+                "Jacobian-vector product via autodiff matches product via the given Jacobian function: {}",
+                jnp.isclose(J_vp(v), J_w_dirichlet(x_0) @ v).all(),
+            )
+
+    R_0 = R_w_dirichlet(x_0)
+    info = solver_info_0
+
+    match solver_options.linear_precond_type:
+        case PreconditionerType.NONE:
+            preconditioner = None
+
+        case PreconditionerType.JACOBI:
+            assert (
+                diag_J_w_dirichlet is not None
+            ), f"{solver_options.linear_precond_type} requires the `jacobian_diagonal` argument to be provided."
+
+            preconditioner = lambda x: x / diag_J_w_dirichlet(x_0)
+
+        case PreconditionerType.ILU_CUPY:
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+            ilu_ctx = __cupy_spilu_init(J_sparse)
+            preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
+
+        case _:
+            raise Exception(
+                f"Preconditioner type {solver_options.linear_precond_type} is not implemented"
+            )
+
+    match solver_options.linear_solve_type:
+
+        case LinearSolverType.DENSE_INVERSE_JNP:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            # NOTE jacfwd of R_w_dirichlet will automatically include in-place elimination
+            #      of Dirichlet BCs.
+            J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
+            delta_x = jnp.array(jnp.dot(jnp.linalg.inv(J_dense), -R_0))
+
+        case LinearSolverType.DENSE_INVERSE_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_inv(matvec=J_vp, b=-R_0)
+
+        case LinearSolverType.SPSOLVE_CUPY:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+            delta_x = __spsolve(J_sparse, -R_0)
+
+        case LinearSolverType.LU_JAXOPT:
+            delta_x = jaxopt_linear_solve.solve_lu(matvec=J_vp, b=-R_0)
+
+        case LinearSolverType.LU_CUPY:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+            J_sparse = J_w_dirichlet(x_0)
+
+            ilu_ctx = __cupy_splu_init(J_sparse)
+            delta_x = __cupy_solve(ilu_ctx, -R_0)
+
+        case LinearSolverType.CHOLESKY_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_cholesky(matvec=J_vp, b=-R_0)
+
+        case LinearSolverType.CG_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_cg(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.CG_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.cg(
+                A=J_vp,
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.CG_JAX_SCIPY_W_INFO:
+            
+
+            delta_x, cg_info = cg_w_info(
+                A=J_w_dirichlet(x_0),
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+                maxiter=solver_options.linear_max_iter,
+            )
+            
+            
+            info = SolverResultInfo(
+                nonlinear_iterations=solver_info_0.nonlinear_iterations,
+                cumulative_linear_iterations=solver_info_0.cumulative_linear_iterations
+                + cg_info["iterations"],
+                linear_iterations_per_nonlinear_iteration=solver_info_0.linear_iterations_per_nonlinear_iteration.at[
+                    solver_info_0.nonlinear_iterations
+                ].set(
+                    cg_info["iterations"]
+                ),
+                cumulative_residual_norm_history=jax.lax.dynamic_update_slice(
+                    operand=solver_info_0.cumulative_residual_norm_history,
+                    update=cg_info["residual_norm_history"],
+                    start_indices=[
+                        solver_info_0.cumulative_linear_iterations
+                        + solver_info_0.nonlinear_iterations
+                    ],
+                ),
+            )
+
+        case LinearSolverType.GMRES_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_gmres(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+                
+            )
+
+        case LinearSolverType.GMRES_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.gmres(
+                A=J_w_dirichlet(x_0),
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+                restart = 50, #lets see what this does
+            )
+
+        case LinearSolverType.BICGSTAB_JAXOPT:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            delta_x = jaxopt_linear_solve.solve_bicgstab(
+                matvec=J_vp,
+                b=-R_0,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.BICGSTAB_JAX_SCIPY:
+            delta_x, _ = jax.scipy.sparse.linalg.bicgstab(
+                A=J_w_dirichlet(x_0),
+                b=-R_0,
+                M=preconditioner,
+                tol=solver_options.linear_relative_tol,
+                atol=solver_options.linear_absolute_tol,
+            )
+
+        case LinearSolverType.PETSC_MPI:
+            
+            J_sparse = J_w_dirichlet(x_0)
+            ctx = __petsc_init_MPI(J_sparse)
+            
+            #jax.debug.print("id of the object is {object}",object=ctx)
+
+            delta_x = __petsc_solve_MPI(ctx, -R_0)
+            #jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
+            
+
+            jax.effects_barrier()
+
+        case LinearSolverType.PETSC:
+            if preconditioner is not None:
+                print(
+                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
+                )
+            assert (
+                J_w_dirichlet is not None
+            ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
+
+
+
+            J_sparse = J_w_dirichlet(x_0)
+
+
+            ctx = __petsc_init(J_sparse[3],J_sparse[0],J_sparse[1],J_sparse[2])
+            
+            jax.debug.print("id of the object is {object}",object=ctx)
+
+            delta_x = __petsc_solve(ctx, -R_0)
+            #jax.debug.print("x First 10 elements output buffer_callback:{bar}", bar=delta_x[0:10])
+
+        case _:
+            raise Exception(
+                f"Linear solver type {solver_options.linear_solve_type} is not implemented"
+            )
+
+    # jax.scipy solvers will not arrive at the right values for the constraints for any size of
+    # problem but even the jaxopt solvers will only get close for large problems.
+    # Consequently, overwrite the values directly to ensure the BCs are right, even though the
+    # residual may increase.
+    
+    
+    
+    
+    """
+    jax.debug.print("x shape:{bar}", bar=delta_x.shape)
+    jax.debug.print("max dof:{bar}", bar=jnp.max(dirichlet_dofs))
+    jax.debug.print("min dof:{bar}", bar=jnp.min(dirichlet_dofs))
+    jax.debug.print("dof dtype:{bar}", bar= dirichlet_dofs.dtype)
+    jax.debug.print("num dofs:{bar}", bar=dirichlet_dofs.shape)
+
+    jax.debug.print("any oob?:{bar}", bar=jnp.any(dirichlet_dofs >= delta_x.shape[0]))
+    jax.debug.print("any negative?:{bar}", bar=jnp.any(dirichlet_dofs < 0))
+    """
+    
+    jax.block_until_ready(delta_x)
+    
+    delta_x = delta_x.at[dirichlet_dofs].set(dirichlet_values - x_0[dirichlet_dofs]) #this fails on large cases and I can't figure out why. 
+    
+    jax.debug.print("x First 10 elements output moved to DOF locations:{bar}", bar=delta_x[0:10])
+
+    return delta_x, info
+
+
+def plot_solver_info(opts: SolverOptions, info: SolverResultInfo):
+    """
+    TODO document
+    """
+    import matplotlib.pyplot as plt
+
+    x_iter = jnp.linspace(
+        0,
+        info.cumulative_linear_iterations,
+        info.cumulative_linear_iterations + 1,
+        dtype=jnp.int32,
+    )
+    y_r_norm = info.cumulative_residual_norm_history[
+        0 : info.cumulative_linear_iterations + 1
+    ]
+
+    plt.plot(x_iter, y_r_norm)
+    plt.title(f"Residual History During Iteration\nUsing {opts.linear_solve_type}")
+    plt.xlabel("iteration")
+    plt.ylabel("|R|")
+    plt.yscale("log")
+
+    cum_iters = np.concat(
+        [
+            [0],
+            np.cumsum(np.asarray(info.linear_iterations_per_nonlinear_iteration)),
+        ]
+    )
+    for i in range(info.nonlinear_iterations):
+        plt.axvline(
+            x=cum_iters[i],
+            color="r",
+            linestyle="--",
+            label=f"Start of nonlinear iter {i}",
+        )
+    plt.legend()
+
+    plt.show()
+    plt.savefig("solver_convergence.png")
+
+
+def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
+    """
+    Sparse direct solve for system A*x = b for a CPU backend.
+    Returns the solution, x.
+    """
+    A_jax_csr = coo_to_csr(A)
+    A_csr = scipy.sparse.csr_matrix(
+        (
+            np.array(A_jax_csr.data),
+            np.array(A_jax_csr.indices),
+            np.array(A_jax_csr.indptr),
+        ),
+        shape=(A.shape[0], A.shape[1]),
+    )
+    return scipy.sparse.linalg.spsolve(A_csr, b)
+
+
+@jax.jit
+def __cupy_spsolve(A: jsparse.CSR, b: jnp.ndarray):
+
+    def kernel(ctx, out, A: jsparse.CSR, b):
+        A_cp = cpsparse.csr_matrix(
+            (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+            shape=A.shape,
+        )
+        A_cp.has_canonical_format = True
+        # cp.savetxt("A_cp.csv", A_cp.todense())
+        cp.asarray(out)[...] = cplinalg.spsolve(A_cp, cp.asarray(b))
+
+    out_type = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    cupy_callback = buffer_callback(kernel, out_type)
+    return cupy_callback(A, b)
+
+
+@jax.jit
+def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
+    """
+    Sparse direct solve for system A*x = b for a GPU backend.
+    Returns the solution, x.
+    """
+    A_csr = coo_to_csr(A)
+    return __cupy_spsolve(A_csr, b)
+
+
+def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
+    """
+    Sparse direct solve for system A*x = b.
+    Returns the solution, x.
+    """
+    match jextend.backend.get_backend().platform:
+        case "cpu":
+            return jnp.array(__solve_cpu(A, b))
+        case "gpu":
+            return __solve_gpu(A, b)
+    raise Exception(f"Backend {jextend.backend.get_backend().platform} unsupported.")
+
+
+from cupyx.scipy.sparse.linalg._solve import CusparseLU
+
+# Global registry to hold generic Python objects
+_OBJECT_STORE = {}
+_NEXT_ID = 0
+
+_SOLUTION_STORE = {} #THIS IS MEANT TO HOLD A SOLUTION VECTOR FOR PETSC
+
+
+def __store_object(obj):
+    global _NEXT_ID
+    uid = _NEXT_ID
+    _OBJECT_STORE[uid] = obj
+    _NEXT_ID += 1
+    return np.int64(uid)  # Return as a JAX-compatible type
+
+
+def __retrieve_object(uid):
+    return _OBJECT_STORE[int(uid)]
+
+
+def __store_solution(obj):
+    global _NEXT_ID
+    uid = _NEXT_ID
+    _SOLUTION_STORE[uid] = obj
+    return np.int64(uid)
+
+def __retrieve_solution(uid):
+    return _SOLUTION_STORE[int(uid)]   #For now each object gets it's own solution vector. In theory it'd be better to do this some other way, but we'll worry about that later.
+
+
+@struct.dataclass
+class __CupyCtx:
+    handle: jnp.ndarray
+
+
+def __cupy_spilu_init_impl(A: jsparse.CSR):
+    A_cp = cpsparse.csr_matrix(
+        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+        shape=A.shape,
+    )
+    A_cp.has_canonical_format = True
+    ilu_obj = cplinalg.spilu(A_cp, fill_factor=1.0)
+    return __store_object(ilu_obj)
+
+
+@jax.jit
+def __cupy_spilu_init(A: jsparse.COO) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, coo_to_csr(A))
+    return __CupyCtx(handle=handle)
+
+
+def __cupy_splu_init_impl(A: jsparse.CSR):
+    A_cp = cpsparse.csr_matrix(
+        (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+        shape=A.shape,
+    )
+    A_cp.has_canonical_format = True
+    ilu_obj = cplinalg.splu(A_cp)
+    return __store_object(ilu_obj)
+
+
+@jax.jit
+def __cupy_splu_init(A: jsparse.COO) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__cupy_splu_init_impl, result_info, coo_to_csr(A))
+    return __CupyCtx(handle=handle)
+
+
+def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    cupy_obj = __retrieve_object(cp.asarray(handle))
+    cp.asarray(out)[...] = cupy_obj.solve(cp.asarray(b))
+
+
+@jax.jit
+def __cupy_solve(ctx: __CupyCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    return buffer_callback(__cupy_solve_impl, result_info)(ctx.handle, b)
+
+
+##################################################################################################
+# PETSc wrappers
+
+import petsc4py
+from jax._src.lib import xla_client
+
+petsc4py.init(comm=comm)
+from petsc4py import PETSc
+
+def __petsc_init_impl(A: jsparse.CSR):
+    A_petsc = PETSc.Mat()
+    A_petsc.create(PETSc.COMM_WORLD)
+    A_petsc.setSizes([A.shape[0], A.shape[1]])
+    
+    A_petsc.createAIJWithArrays(
+        size=(A.shape[0], A.shape[1]),
+        csr=(
+            cp.asarray(A.indptr).get().astype(np.int32),
+            cp.asarray(A.indices).get().astype(np.int32),
+            cp.asarray(A.data).get(),
+        ),
+    )
+    # NOTE this appears to be moved to CPU for these calls.
+    # TODO figure out how to populate A with GPU arrays.
+    A_petsc.setType("aijcusparse")
+
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(A_petsc,A_petsc)
+    ksp.setType("cg")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("jacobi")
+
+
+
+
+    return __store_object(ksp)
+
+def __petsc_init_MPI_impl(A):
+
+    shape = jnp.array(A.shape,dtype=jnp.int32)
+    rows = jnp.array(A.row,dtype=jnp.int32)
+    cols = jnp.array(A.col,dtype=jnp.int32)
+    vals = cp.array(jnp.array(A.data))
+    
+    GPUPointerArray = cp.from_dlpack(vals,copy=False)
+    
+    if rank != 0:
+        nullAdd = vals*0
+        
+        GPUPointerArray = cp.from_dlpack(nullAdd,copy=False) #this needs to be here as it adds despite my telling it to insert. There's probably a fix somewhere involving a similar breakdown to vec creation
+    
+    #print(shape)
+    
+    mat = PETSc.Mat().create(comm=comm)
+    mat.setSizes(shape)
+
+    mat.setType(PETSc.Mat.Type.MPIAIJCUSPARSE)
+    mat.setPreallocationCOO(rows, cols)
+    
+    lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+    MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+    
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(GPUPointerArray.data.ptr)  # the pointer to GPU memory
+
+   
+    MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+
+    mat.assemblyBegin()
+    mat.assemblyEnd()
+
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(mat,mat)
+    ksp.setType("lgmres")
+    #ksp.setGMRESRestart(40)
+    
+    
+    #def my_monitor(ksp, its, rnorm):
+        #PETSc.Sys.Print(f"Iteration {its:4d}, : Residual Norm = {rnorm:.6e}")
+
+    #ksp.setMonitor(my_monitor)
+    
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("jacobi")
+
+
+    return __store_object(ksp)
+    
+def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
+    
+    jacMatShape = cp.from_dlpack(jaxMatShape,copy=False)
+    jacMatVals  = cp.from_dlpack(jaxMatVals,copy=False)
+    jacMatRows  = jnp.asarray(jaxMatRows,dtype=jnp.int32)
+    jacMatCols  = jnp.asarray(jaxMatCols,dtype=jnp.int32)
+
+
+    mat = PETSc.Mat().create(PETSc.COMM_WORLD)
+    mat.setSizes(jacMatShape)
+
+    mat.setType(PETSc.Mat.Type.AIJCUSPARSE)
+    mat.setPreallocationCOO(jacMatRows,jacMatCols)
+
+    lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    MatSetValuesCOO = lib.MatSetValuesCOO  # This is the symbol you want to call
+    MatSetValuesCOO.restype = ct.c_int  # PetscErrorCode is just a C `int` in terms of ABI.
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int] # [Mat, PetscScalar*, InsertMode], I'm using void* instead of PetscScalar* for simplicy, could use `ct.POINTER(ct.c_{float|double})` instead.
+    mat_ptr = ct.c_void_p(mat.handle)  # the low level pointer of the mat object
+    coo_ptr = ct.c_void_p(jacMatVals.data.ptr)  # the pointer to GPU memory
+
+
+    MatSetValuesCOO(mat_ptr, coo_ptr, PETSc.InsertMode.INSERT_ALL)
+    
+    #matdupe = mat.duplicate(copy=True)
+
+    ksp = PETSc.KSP().create()
+    ksp.setOperators(mat)
+    ksp.setType("lgmres")
+    ksp.setConvergenceHistory()
+    ksp.getPC().setType("jacobi")
+
+    cp.asarray(out)[...] = __store_object(ksp)
+
+@jax.jit
+def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
+    handle = buffer_callback(__petsc_init_impl_v2, result_info)(jacMatShape,jacMatVals,jacMatRows,jacMatCols)
+    return __CupyCtx(handle=handle)
+
+
+@jax.jit
+def __petsc_init_MPI(A) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = jax.pure_callback(__petsc_init_MPI_impl, result_info, A)
+    return __CupyCtx(handle=handle)
+
+
+
+def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ksp = __retrieve_object(cp.asarray(handle))
+
+    print("fetched ksp")
+
+    barray = cp.asarray(b)
+    
+    #lib = ct.CDLL(PETSc.__file__)  # load the PETSc module as a shared library to gain access to the PETSc shared library symbols.
+    #VecCreateSeqCUDAWithArrays = lib.VecCreateSeqCUDAWithArrays
+
+    b_petsc = PETSc.Vec()
+
+    b_petsc.createWithArray(cp.asnumpy(barray))
+    print("converted to array")
+
+
+    x_petsc = b_petsc.duplicate()
+    x_petsc.set(0.0)
+
+    n = 3
+    
+    ksp.setTolerances(rtol=1e-14,atol=1e-10)
+    
+    ksp.setConvergenceHistory(n)
+    ksp.solve(b_petsc,x_petsc)
+
+    convergenceHist = ksp.getConvergenceHistory()
+
+    #print(convergenceHist)
+    print("solution",cp.asarray((x_petsc.getArray())))
+
+    __store_solution(cp.asarray((x_petsc.getArray())))
+
+    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
+    
+    
+def __petsc_solve_impl_v2(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+    # Retrieve the opaque object using the handle
+    ksp = __retrieve_object(cp.asarray(handle))
+
+    print("fetched ksp v2")
+
+
+
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
+    
+    b_petsc = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
+    
+    x_petsc = b_petsc.duplicate()
+    x_petsc.set(0.0)
+
+    n = 3
+
+    ksp.setTolerances(rtol=1e-9,atol=1e-9)
+    
+    ksp.setConvergenceHistory(n)
+    ksp.solve(b_petsc,x_petsc)
+
+    convergenceHist = ksp.getConvergenceHistory()
+
+    #print(convergenceHist)
+    print("solution",cp.asarray((x_petsc.getArray())))
+
+    __store_solution(cp.asarray((x_petsc.getArray())))
+
+    cp.asarray(out)[...] = cp.asarray(x_petsc.getArray())
+
+def __petsc_solve_impl_debug(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+
+    GPUPointerArray = cp.from_dlpack(b,copy=False)
+    
+    print(b.__dlpack_device__())
+    print(GPUPointerArray.__dlpack_device__())
+    
+    b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
+    
+
+
+
+    ksp = __retrieve_object(cp.asarray(handle))
+    
+    x_petsc = PETSc.Vec().create(PETSc.COMM_SELF)
+    x_petsc.setType('cuda')         # true GPU vector
+    x_petsc.setSizes(b.shape[0])
+    x_petsc.setUp()
+    x_petsc.set(1.0)
+
+    n = 3
+    
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
+
+                      #rtol, atol, dtol, max_it
+    ksp.setTolerances(1e-14,1e-10, 100, 100000) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+
+    
+    ksp.setConvergenceHistory(n)
+    
+    start = time.time()
+    
+    ksp.solve(b_petsc_1,x_petsc)
+    
+    print("inner solve time:",time.time()-start)
+    
+    
+    print("exit code",ksp.getConvergedReason())
+    print("iterations",ksp.getIterationNumber())
+    print("res norm",ksp.getResidualNorm())
+
+    cudahandle = x_petsc.getCUDAHandle()
+    ptr = cudahandle         # raw CUDA pointer from PETSc
+    length = x_petsc.getSize()
+     
+    x_gpu = cp.ndarray((length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, length*8, x_petsc), 0))
+
+    print("x First 10 elements inside buffer_callback:", x_gpu[0:10])
+
+    A,P = ksp.getOperators()
+    A.destroy()
+    P.destroy()
+    ksp.getPC().destroy()
+    ksp.destroy() #quick and dirty memory management
+    x_petsc.destroy()
+    b_petsc_1.destroy()
+    
+
+    cp.asarray(out)[...] = x_gpu
+    
+def __petsc_solve_MPI_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    nprocs = comm.Get_size()
+    
+    
+    dl = b.__dlpack__()
+    #print("b's dlpack is on which device?",b.__dlpack_device__())
+
+    GPUPointerArray = cp.from_dlpack(b,copy=False) 
+    arrsize = b.shape[0] 
+    local_n = arrsize // nprocs 
+    start = rank * local_n 
+    end = start + local_n 
+    local_arr = GPUPointerArray[start:end] #createWithDLPack assumes the input array is already the local portion of the distributed vector. It does zero redistribution. 
+    
+    print(f"[rank {rank}] local_arr first 5 entries: {local_arr[:5]}")
+    #print(f"[rank {rank}] start={start}, end={end}, arrsize={arrsize}")
+    #print(f"[rank {rank}] local_arr.flags: {local_arr.flags}")
+    #print(f"[rank {rank}] local_arr.dtype: {local_arr.dtype}")
+    
+    vec = PETSc.Vec().createWithDLPack( local_arr, size=arrsize, comm=comm )
+    vec.assemblyBegin()
+    vec.assemblyEnd()
+    
+    
+
+    ksp = __retrieve_object(cp.asarray(handle))
+    
+    x_petsc = vec.duplicate()
+
+    n = 3
+    
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
+
+                      #rtol, atol, dtol, max_it
+    ksp.setTolerances(1e-14,1e-10, 100, 40893) #careful with these, petsc is quite a bit more rigorusly demanding than scipy 
+
+    
+    ksp.setConvergenceHistory(n)
+    
+    start = time.time()
+    
+    ksp.solve(vec,x_petsc)
+
+
+
+    #print("ownership",x_petsc.getOwnershipRange())
+
+    
+    #print("inner solve time:",time.time()-start)
+    
+    
+    print("exit code",ksp.getConvergedReason())
+    print("iterations",ksp.getIterationNumber())
+
+
+
+    cudahandle = x_petsc.getCUDAHandle()
+    ptr = cudahandle         # raw CUDA pointer from PETSc
+    global_length = x_petsc.getSize()
+    local_length = x_petsc.getLocalSize()
+    x_local = cp.ndarray(
+        (local_length,),
+        dtype=cp.float64,
+        memptr=cp.cuda.MemoryPointer(
+            cp.cuda.UnownedMemory(ptr, local_length * 8, x_petsc),
+            0
+        )
+    )
+
+    #print(f"[rank {rank}] x_local first 5 entries: {x_local[:5]}")
+
+    #print(f"[rank {rank}] x_local ptr: {x_local.data.ptr}, x_petsc ptr: {x_petsc.getCUDAHandle()}")
+
+    x_full = cp.empty(global_length, dtype=cp.float64)
+
+    # MPI Allgather into GPU memory
+    comm.Allgather(x_local, x_full)  #comm.Allgatherv(...)
+    
+    #print(f"[rank {rank}] x_full first 10 entries: {x_full[:10]}")
+    
+    #x_gpu = cp.ndarray((global_length,), dtype=cp.float64 , memptr=cp.cuda.MemoryPointer(cp.cuda.UnownedMemory(ptr, global_length*8, x_full), 0))
+
+    #print("x First 10 elements inside buffer_callback:", x_full[0:10]) #each is listing it's specific local section as 0 so it's probably building god knows what thwn trying to convert to x_gpu
+    #print("x_gpu shape",x_full.shape)
+    
+
+    #print(f"[rank {rank}] x_full_cu first 5:", x_full[:5])
+
+    A,P = ksp.getOperators()
+    A.destroy()
+    P.destroy()
+    ksp.getPC().destroy()
+    ksp.destroy() #quick and dirty memory management
+    x_petsc.destroy()
+    vec.destroy()
+
+    #print(f"[rank {rank}] type(x_full)={type(x_full)}, device={x_full.device}")
+    
+    x_full_contig = cp.ascontiguousarray(x_full)
+    cp.asarray(out)[...] = x_full_contig
+    
+    
+    #print(f"[rank {rank}] out array after:", from_dlpack(out)[:5])
+    #print(out.__dlpack_device__())
+    #print(from_dlpack(out).device)
+
+@jax.jit
+def __petsc_solve(ctx: __CupyCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+    x= buffer_callback(__petsc_solve_impl_debug, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    return x
+    
+@jax.jit
+def __petsc_solve_MPI(ctx: __CupyCtx, b: jnp.ndarray):
+    result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)    
+    
+    jax.debug.print("before buffer_callback{contents}",contents=b[:5])
+    
+    x= buffer_callback(__petsc_solve_MPI_impl, result_info)(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    return x
+    
+    
