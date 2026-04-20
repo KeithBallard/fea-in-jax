@@ -27,10 +27,10 @@ def export_to_latex_table(points, u_truss, filename="table.txt"):
         for xi, vi in zip(points, u_truss):
             x = float(xi[0])
             v = float(vi)
-        
+
             coord = f"${f'{x:.3f}'.rstrip('0').rstrip('.')}$"
             val   = f"${sci_to_latex(v)}$"
-        
+
             f.write(f"{coord} & {val} \\\\\n")
 
         f.write("\\end{tabular}\n")
@@ -99,7 +99,7 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
     dirichlet_dofs = np.array([bc.index for bc in bcs])
     dirichlet_values = np.array([bc.value for bc in bcs])
     assert jnp.isclose(u_iso[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
-    
+
     # Example using the truss elements
     element_batches_truss = [
         ElementBatch(
@@ -110,7 +110,7 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
             material_params=matrix_mat_params,
         )
     ]
-    
+
     u_truss, residual_truss, element_batches_truss = solve_bvp(
         element_residual_func=linear_truss_residual,
         vertices_vd=points,
@@ -125,11 +125,10 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
         ),
         plot_convergence=True,
     )
-    plt.savefig(f"output/solver_convergence_1D_{lab}.png")
+    plt.savefig(get_output(f"solver_convergence_1D_{lab}.png"))
     plt.close()
 
-    
-    export_to_latex_table(points,u_truss,filename = f"output/displacement_table_1D_{lab}.txt")
+    export_to_latex_table(points,u_truss,filename = get_output(f"displacement_table_1D_{lab}.txt"))
     print("\n*** Truss Elements! ***")
     print("|R| = ", jnp.linalg.norm(residual_truss))
     print('-'*24)
@@ -144,7 +143,7 @@ for (u_d,lab) in zip([0.2,-0.2],['stretch','compression']):
     dirichlet_dofs = np.array([bc.index for bc in bcs])
     dirichlet_values = np.array([bc.value for bc in bcs])
     assert jnp.isclose(u_truss[dirichlet_dofs], dirichlet_values).all(), f"Dirichlet is not satisfied"
-    
+
     #Check that the two solutions match! 
     assert jnp.isclose(u_truss,u_iso).all(), "The solutions from the isotropic model and the truss model do NOT match!"
     print("The solutions from the isotropic and truss models match (at least to JAX default precision)!")

@@ -1,7 +1,7 @@
 from helper import *
 import matplotlib.pyplot as plt
 
-jax.config.update("jax_disable_jit", True)
+# jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_enable_x64", True)
 
 import jax.extend
@@ -78,14 +78,14 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         # linear_precond_type=PreconditionerType.JACOBI,
         # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=1,
-        linear_max_iter=100,
+        nonlinear_max_iter=5,
+        linear_max_iter=20,
         # nonlinear_relative_tol=1e-18,
         # nonlinear_absolute_tol=1e-18,
     ),
     plot_convergence=True,
 )
-plt.savefig("output/solver_convergence_bar.png")
+plt.savefig(get_output("solver_convergence_bar.png"))
 plt.close()
 u_truss = u_truss.reshape((-1,2))
 print("\n*** Truss Elements! ***")
@@ -109,7 +109,7 @@ plt.scatter(*points.T,label = 'initial')
 plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
 plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
 plt.legend()
-plt.savefig("output/bar_solution.png")
+plt.savefig(get_output("bar_solution.png"))
 plt.close()
 
 assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp].reshape((-1,2)), dirichlet_values.reshape((-1,2))).all(), f"Dirichlet is not satisfied"

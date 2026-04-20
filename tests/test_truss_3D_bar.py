@@ -95,7 +95,7 @@ for (u_d,lab) in zip([-0.2,0.2,0.2],('compression','stretch','skew_stretch')):
             DirichletBC(bc_type=BCType.NODE,component=2,index=n_elements,value=z_soln[-1]-z[-1])
         ]
     )
-    
+
     # Example using the truss elements
     element_batches_truss = [
         ElementBatch(
@@ -106,7 +106,7 @@ for (u_d,lab) in zip([-0.2,0.2,0.2],('compression','stretch','skew_stretch')):
             material_params=matrix_mat_params,
         )
     ]
-    
+
     u_truss, residual_truss, element_batches_truss = solve_bvp(
         element_residual_func=linear_truss_residual,
         vertices_vd=points,
@@ -121,11 +121,11 @@ for (u_d,lab) in zip([-0.2,0.2,0.2],('compression','stretch','skew_stretch')):
         ),
         plot_convergence=True,
     )
-    plt.savefig(f"output/solver_convergence_3D_{lab}.png")
+    plt.savefig(get_output(f"solver_convergence_3D_{lab}.png"))
     plt.close()
-    
+
     u_truss = u_truss.reshape((-1,3))
-    export_to_latex_table(points,u_truss,filename = f"output/displacement_table_3D_{lab}.txt")
+    export_to_latex_table(points,u_truss,filename = get_output(f"displacement_table_3D_{lab}.txt"))
     print("\n*** Truss Elements! ***")
     print(f"*** {lab:^15} ***")
     print("|R| = ", jnp.linalg.norm(residual_truss))
@@ -138,20 +138,20 @@ for (u_d,lab) in zip([-0.2,0.2,0.2],('compression','stretch','skew_stretch')):
         val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
         print(f"{coord_str:>26} | {val_str:>35}")
     print("\n"*2)
-    
+
     # Check solution against Dirichlet boundary conditions
     dirichlet_dofs = np.array([bc.index for bc in bcs])
     dirichlet_values = np.array([bc.value for bc in bcs])
     dirichlet_comp = np.array([bc.component for bc in bcs])
     assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
     print("Woo Hoo! Solution at least matches at the endopints\n")
-    
+
     # plt.scatter(*points.T,label = 'initial')
     # plt.scatter(*u_truss.T,marker='d',label = 'solution')
     # plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
     # plt.legend()
     # plt.show()
-    
+
     # Check solutions against "known" solution. 
-    assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!" 
+    assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!"
     print("Solution matches expected results!")
