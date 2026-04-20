@@ -14,17 +14,18 @@ print(jax.extend.backend.get_backend().platform)
 x_of_t = lambda t:2*t
 y_of_t = lambda t:1*t
 n_elements = 6
-t_soln = np.linspace(0,0.9,n_elements+1)
-x_soln = x_of_t(t_soln)
-t = np.linspace(0,1,n_elements+1,dtype=np.float32)
-y_soln = y_of_t(t_soln)
 
+t = np.linspace(0,1,n_elements+1,dtype=np.float32)
 x = x_of_t(t)
 y = y_of_t(t)
 points=np.vstack((x,y)).T
 cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
 # points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
 cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
+
+t_soln = np.linspace(0,1.2,n_elements+1)
+x_soln = x_of_t(t_soln)
+y_soln = y_of_t(t)
 
 # Sizes of arrays
 U = 2  # number of solution components
@@ -77,14 +78,15 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
         linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         # linear_precond_type=PreconditionerType.JACOBI,
         # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=5,
-        linear_max_iter=5,
+        nonlinear_max_iter=1,
+        linear_max_iter=100,
         # nonlinear_relative_tol=1e-18,
         # nonlinear_absolute_tol=1e-18,
     ),
-    plot_convergence=False,
+    plot_convergence=True,
 )
-
+plt.savefig("output/solver_convergence_bar.png")
+plt.close()
 u_truss = u_truss.reshape((-1,2))
 print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
@@ -107,7 +109,8 @@ plt.scatter(*points.T,label = 'initial')
 plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
 plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
 plt.legend()
-plt.show()
+plt.savefig("output/bar_solution.png")
+plt.close()
 
 assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp].reshape((-1,2)), dirichlet_values.reshape((-1,2))).all(), f"Dirichlet is not satisfied"
 print("Woo Hoo! Solution at least matches at the endopints\n")

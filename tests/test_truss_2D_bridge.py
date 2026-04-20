@@ -1,4 +1,5 @@
 from helper import *
+import matplotlib.pyplot as plt
 
 jax.config.update("jax_enable_x64", True)
 
@@ -156,6 +157,8 @@ u_truss, residual_truss, element_batches_truss = solve_bvp(
     plot_convergence=True,
 )
 
+plt.savefig(f"output/solver_convergence_bridge.png")
+plt.close()
 u_truss = u_truss.reshape((-1,2))
 print("\n*** Truss Elements! ***")
 print("|R| = ", jnp.linalg.norm(residual_truss))
@@ -174,10 +177,10 @@ plt.scatter(*points.T,label = 'initial')
 plot_truss(points+u_truss,cells,linecolor='tab:orange',linestyle='solid',markercolor='tab:orange',marker='d')
 plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
 plot_truss(coordinate_soln,cells,linecolor='tab:green',linestyle='dashed',markercolor='tab:green',marker='x')
-plt.scatter(*coordinate_soln.T,marker='x',label = 'truth')
+plt.scatter(*coordinate_soln.T,marker='x',label = 'FEniCS')
 plt.legend()
 plt.subplots_adjust(left=0.03,right=0.99,top=0.98)
-plt.show()
+plt.savefig("output/bridge_solution.png")
 
 dirichlet_dofs = np.array([bc.index for bc in bcs])
 dirichlet_values = np.array([bc.value for bc in bcs])

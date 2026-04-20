@@ -7,6 +7,40 @@ import jax.extend
 
 print(jax.extend.backend.get_backend().platform)
 
+def sci_to_latex(val):
+    """
+    Convert a float to LaTeX scientific notation: a \\times 10^{b}
+    """
+    s = f"{val:.3e}"           # e.g., -1.234e-05
+    mantissa, exp = s.split('e')
+    exp = int(exp)             # remove leading zeros like e-05 -> -5
+
+    # Clean mantissa (remove trailing zeros if desired)
+    mantissa = f"{float(mantissa):.3f}".rstrip('0').rstrip('.')
+
+    return f"{mantissa} \\cdot 10^{{{exp}}}"
+
+
+def export_to_latex_table(points, u_truss, filename="table.txt"):
+    with open(filename, "w") as f:
+        f.write("\\begin{tabular}{ccc|ccc}\n")
+        f.write("\\hline\n")
+
+        f.write("\\multicolumn{3}{c|}{\\textbf{points}} & "
+                "\\multicolumn{3}{c}{\\textbf{displacement}} \\\\\n")
+
+        f.write("\\hline\n")
+
+        for p, v in zip(points, u_truss):
+            # coord_vals = [f"${xi:0.3g}$" for xi in p]
+            coord_vals = [f"${f'{xi:.3f}'.rstrip('0').rstrip('.')}$" for xi in p]
+            val_vals   = [f"${sci_to_latex(vi)}$" for vi in v]
+
+            row = " & ".join(coord_vals + val_vals)
+            f.write(row + " \\\\\n")
+
+        f.write("\\end{tabular}\n")
+
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
@@ -14,10 +48,6 @@ x_of_t = lambda t:2*t
 y_of_t = lambda t:1*t
 z_of_t = lambda t:3*t
 n_elements = 4
-t_soln = np.linspace(0,1.2,n_elements+1)
-x_soln = x_of_t(t_soln)
-y_soln = y_of_t(t_soln)
-z_soln = z_of_t(t_soln)
 
 t = np.linspace(0,1,n_elements+1,dtype=np.float32)
 x = x_of_t(t)
@@ -48,71 +78,80 @@ print("# DoFs = ", F)
 # Set material properties
 matrix_mat_params = jnp.array([1e9])  # E
 
-# Set boundary conditions. Leave the (0,0) end point fixed, but take (2,1)->(2.4,1.2)
-# The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
-bcs = (
-    [
-        DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
-        DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=0.0),
-        DirichletBC(bc_type = BCType.NODE,component=2, index=0,value=0.0),
-        DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=x_soln[-1]-x[-1]),
-        DirichletBC(bc_type=BCType.NODE,component=1,index=n_elements,value=y_soln[-1]-y[-1]),
-        DirichletBC(bc_type=BCType.NODE,component=2,index=n_elements,value=z_soln[-1]-z[-1])
-    ]
-)
-
-# Example using the truss elements
-element_batches_truss = [
-    ElementBatch(
-        fe_type=fe_type,
-        n_dofs_per_basis=3,
-        connectivity_en=cells,
-        constitutive_model=elastic_truss,
-        material_params=matrix_mat_params,
+for (u_d,lab) in zip([-0.2,0.2,0.2],('compression','stretch','skew_stretch')):
+    t_soln = np.linspace(0,1 + u_d,n_elements+1)
+    x_soln = x_of_t(t_soln)
+    y_soln = y_of_t(t if lab=='skew_stretch' else t_soln)
+    z_soln = z_of_t(t if lab=='skew_stretch' else t_soln)
+    # Set boundary conditions. Leave the (0,0) end point fixed, but take (2,1)->(2.4,1.2)
+    # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
+    bcs = (
+        [
+            DirichletBC(bc_type = BCType.NODE,component=0, index=0,value=0.0),
+            DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=0.0),
+            DirichletBC(bc_type = BCType.NODE,component=2, index=0,value=0.0),
+            DirichletBC(bc_type=BCType.NODE,component=0,index=n_elements,value=x_soln[-1]-x[-1]),
+            DirichletBC(bc_type=BCType.NODE,component=1,index=n_elements,value=y_soln[-1]-y[-1]),
+            DirichletBC(bc_type=BCType.NODE,component=2,index=n_elements,value=z_soln[-1]-z[-1])
+        ]
     )
-]
-
-u_truss, residual_truss, element_batches_truss = solve_bvp(
-    element_residual_func=linear_truss_residual,
-    vertices_vd=points,
-    element_batches=element_batches_truss,
-    boundary_conditions=bcs,
-    solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-        # linear_precond_type=PreconditionerType.JACOBI,
-        # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=1,
-        linear_max_iter=5,
-    ),
-    plot_convergence=False,
-)
-
-u_truss = u_truss.reshape((-1,3))
-print("\n*** Truss Elements! ***")
-print("|R| = ", jnp.linalg.norm(residual_truss))
-print('-'*64)
-print(f"{'initial':^27}|{'final':^35}")
-print('-'*64)
-for x, v in zip(points, u_truss):
-    # Format each coordinate and value to 6 decimal places
-    coord_str = "[" + " ".join(f"{xi:7.3f}" for xi in x) + "]"
-    val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
-    print(f"{coord_str:>26} | {val_str:>35}")
-print("\n"*2)
-
-# Check solution against Dirichlet boundary conditions
-dirichlet_dofs = np.array([bc.index for bc in bcs])
-dirichlet_values = np.array([bc.value for bc in bcs])
-dirichlet_comp = np.array([bc.component for bc in bcs])
-assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
-print("Woo Hoo! Solution at least matches at the endopints\n")
-
-# plt.scatter(*points.T,label = 'initial')
-# plt.scatter(*u_truss.T,marker='d',label = 'solution')
-# plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
-# plt.legend()
-# plt.show()
-
-# Check solutions against "known" solution. 
-assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!" 
-print("Solution matches expected results!")
+    
+    # Example using the truss elements
+    element_batches_truss = [
+        ElementBatch(
+            fe_type=fe_type,
+            n_dofs_per_basis=3,
+            connectivity_en=cells,
+            constitutive_model=elastic_truss,
+            material_params=matrix_mat_params,
+        )
+    ]
+    
+    u_truss, residual_truss, element_batches_truss = solve_bvp(
+        element_residual_func=linear_truss_residual,
+        vertices_vd=points,
+        element_batches=element_batches_truss,
+        boundary_conditions=bcs,
+        solver_options=SolverOptions(
+            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            # linear_precond_type=PreconditionerType.JACOBI,
+            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            nonlinear_max_iter=10,
+            linear_max_iter=10,
+        ),
+        plot_convergence=True,
+    )
+    plt.savefig(f"output/solver_convergence_3D_{lab}.png")
+    plt.close()
+    
+    u_truss = u_truss.reshape((-1,3))
+    export_to_latex_table(points,u_truss,filename = f"output/displacement_table_3D_{lab}.txt")
+    print("\n*** Truss Elements! ***")
+    print(f"*** {lab:^15} ***")
+    print("|R| = ", jnp.linalg.norm(residual_truss))
+    print('-'*64)
+    print(f"{'initial':^27}|{'final':^35}")
+    print('-'*64)
+    for p, v in zip(points, u_truss):
+        # Format each coordinate and value to 6 decimal places
+        coord_str = "[" + " ".join(f"{xi:7.3f}" for xi in p) + "]"
+        val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
+        print(f"{coord_str:>26} | {val_str:>35}")
+    print("\n"*2)
+    
+    # Check solution against Dirichlet boundary conditions
+    dirichlet_dofs = np.array([bc.index for bc in bcs])
+    dirichlet_values = np.array([bc.value for bc in bcs])
+    dirichlet_comp = np.array([bc.component for bc in bcs])
+    assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
+    print("Woo Hoo! Solution at least matches at the endopints\n")
+    
+    # plt.scatter(*points.T,label = 'initial')
+    # plt.scatter(*u_truss.T,marker='d',label = 'solution')
+    # plt.scatter(x_soln,y_soln,marker='x',label = 'truth')
+    # plt.legend()
+    # plt.show()
+    
+    # Check solutions against "known" solution. 
+    assert jnp.isclose(points+u_truss,np.vstack((x_soln,y_soln,z_soln)).T).all(), "does not match expected solution!" 
+    print("Solution matches expected results!")
