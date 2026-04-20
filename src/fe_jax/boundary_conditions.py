@@ -38,6 +38,17 @@ class DirichletBC:
         BCType.NODE
     )  # Type of boundary condition (e.g. fixing the solution at a node)
 
+class NeumannBC:
+    """
+    Represents a Neumann boundary condition (i.e. external load at a DoF).
+    """
+
+    index: int  # Index of node, element, etc. to constrain (if bc_type is GLOBAL_DOF, then this is ignored)
+    component: int  # Component of the solution to constrain (e.g. 0=u, 1=v, 2=w for linear elasticity)
+    value: float  # Specified value for the external load
+    bc_type: BCType = (
+        BCType.NODE
+    )  # Type of boundary condition (e.g. fixing the solution at a node)
 
 @dataclass
 class PeriodicBC:
