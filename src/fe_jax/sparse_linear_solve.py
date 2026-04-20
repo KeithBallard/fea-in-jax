@@ -49,7 +49,7 @@ nproc = comm.Get_size()
 class PreconditionerType(Enum):
     NONE = 0
     JACOBI = 1
-    ILU_CUPY = 2
+    ILU = 2
     # Note: consider implementing spai preconditioner
     # https://tbetcke.github.io/hpc_lecture_notes/it_solvers4.html
 
@@ -86,6 +86,7 @@ class SolverOptions:
     nonlinear_max_iter: int = 1
     nonlinear_relative_tol: float = 1e-2
     nonlinear_absolute_tol: float = 1e-2
+    petsc_solve_type: int = 1
 
 
 @struct.dataclass
@@ -275,6 +276,7 @@ def linear_solve(
     match solver_options.linear_precond_type:
         case PreconditionerType.NONE:
             preconditioner = None
+            petscPrecond = 1
 
         case PreconditionerType.JACOBI:
             assert (
@@ -282,15 +284,17 @@ def linear_solve(
             ), f"{solver_options.linear_precond_type} requires the `jacobian_diagonal` argument to be provided."
 
             preconditioner = lambda x: x / diag_J_w_dirichlet(x_0)
+            petscPrecond = 0
 
-        case PreconditionerType.ILU_CUPY:
+        case PreconditionerType.ILU:
             assert (
                 J_w_dirichlet is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
             J_sparse = J_w_dirichlet(x_0)
-            ilu_ctx = __cupy_spilu_init(J_sparse)
-            preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
+            #ilu_ctx = __cupy_spilu_init(J_sparse)
+            #preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
+            petscPrecond = 1
 
         case _:
             raise Exception(
@@ -460,10 +464,7 @@ def linear_solve(
            delta_x = __petsc_solve_matfree(ctx, -R_0)
 
         case LinearSolverType.PETSC:
-            if preconditioner is not None:
-                print(
-                    f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
-                )
+                
             assert (
                 J_w_dirichlet is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
@@ -473,7 +474,7 @@ def linear_solve(
             J_sparse = J_w_dirichlet(x_0)
 
 
-            ctx = __petsc_init(J_sparse[3],J_sparse[0],J_sparse[1],J_sparse[2])
+            ctx = __petsc_init(J_sparse[3],J_sparse[0],J_sparse[1],J_sparse[2],solver_options.petsc_solve_type,petscPrecond)
             #ctx = __petsc_init(J_sparse)
 
             jax.debug.print("id of the object is {object}",object=ctx)
@@ -787,7 +788,7 @@ def __petsc_init_MPI_impl(A):
 
     return __store_object(ksp)
     
-def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
+def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols,petscSolver,petscPrecond):
     
     print("inside init")
 
@@ -795,6 +796,9 @@ def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
     jacMatVals  = cp.from_dlpack(jaxMatVals,copy=False)
     jacMatRows  = jnp.asarray(jaxMatRows,dtype=jnp.int32)
     jacMatCols  = jnp.asarray(jaxMatCols,dtype=jnp.int32)
+
+    petscSolver  = cp.from_dlpack(petscSolver,copy=False)
+    petscPrecond  = cp.from_dlpack(petscPrecond,copy=False)
 
     print("converted vectors")
 
@@ -829,21 +833,38 @@ def __petsc_init_impl_v2(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols):
     
     #matdupe = mat.duplicate(copy=True)
 
+
+    if petscSolver == 0:
+        solverString = "cg"
+    elif petscSolver == 1:
+        solverString = "lgmres"
+    else:
+        solverString = "bcgs"
+    
+    print(solverString)
+
+    if petscPrecond == 1:
+        precondString = "ilu"
+    else:
+        precondString = "jacobi"
+
+    print(precondString)
+
     ksp = PETSc.KSP().create()
     ksp.setOperators(mat)
-    ksp.setType("bcgs")
+    ksp.setType(solverString)
     ksp.setConvergenceHistory()
-    ksp.getPC().setType("jacobi")
+    ksp.getPC().setType(precondString)
 
     print("assembled ksp")
 
     cp.asarray(out)[...] = __store_object(ksp)
 
 @jax.jit
-def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols) -> __CupyCtx:
+def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols,petscSolver,petscPrecond) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
-    handle = buffer_callback(__petsc_init_impl_v2, result_info)(jacMatShape,jacMatVals,jacMatRows,jacMatCols)
+    handle = buffer_callback(__petsc_init_impl_v2, result_info)(jacMatShape,jacMatVals,jacMatRows,jacMatCols,petscSolver,petscPrecond)
     return __CupyCtx(handle=handle)
 
 

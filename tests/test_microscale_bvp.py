@@ -3,18 +3,26 @@ from helper import *
 jax.config.update("jax_enable_x64", True)
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']="false" #needed to avoid JAX eating all the memory MPI will later need. Probably there's an intelligent way of doing this, but I'm not sure quite what it is yet, y'dig?
 
-
+sys.argv
 
 import jax.extend
-print(jax.extend.backend.get_backend().platform)
-
 
 
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
+
+
 # Read in the mesh
-mesh = meshio.read(get_mesh(f"microscale_2D_r2.vtk"))
+meshFile = sys.argv[1]
+solverType = sys.argv[2]
+petscSolverType = int(sys.argv[3])
+
+print(petscSolverType)
+preconditioner = sys.argv[4]
+
+
+mesh = meshio.read(get_mesh(meshFile))
 points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
 cells = np.array(mesh.cells[0].data, dtype=np.uint64)
 mesh.cell_data["DomainIDs"][0] = np.array(
@@ -113,8 +121,10 @@ u, residual, element_batches = solve_bvp(
     dirichlet_bcs=dirichlet_bcs,
     dirichlet_values=dirichlet_values,
     solver_options=SolverOptions(
-        linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY,   #CG_JAX_SCIPY_W_INFO
-        linear_precond_type=PreconditionerType.JACOBI,
+        linear_solve_type=LinearSolverType[solverType],   #CG_JAX_SCIPY_W_INFO
+        linear_precond_type=PreconditionerType[preconditioner],
+        petsc_solve_type = petscSolverType
+
     ),
     plot_convergence=False
 )
