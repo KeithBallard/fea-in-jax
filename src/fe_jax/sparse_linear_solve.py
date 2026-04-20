@@ -521,7 +521,7 @@ def linear_solve(
     # problem but even the jaxopt solvers will only get close for large problems.
     # Consequently, overwrite the values directly to ensure the BCs are right, even though the
     # residual may increase.
-    # delta_x = constraints.apply_to_solution(delta_x)
+    delta_x = constraints.apply_to_delta_solution(delta_x,x_0)
 
     return delta_x, info
 

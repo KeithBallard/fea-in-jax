@@ -49,6 +49,20 @@ class ConstraintSystem:
         """
         return u.at[self.dep_dofs].set((self.P @ u) + self.g)
 
+    @jax.jit
+    def apply_to_delta_solution(self, delta_u: jnp.ndarray,u_0: jnp.ndarray) -> jnp.ndarray:
+        """
+        Apply the constraints to the solution vector.
+        """
+        # I tried to emulate the apply_to_solution method, but
+        # it does not seems like the P matrix is set up correctly, 
+        # as all self.P@ANYTHING returns all 0's. I would guess P is
+        # currently all zeroes. 
+        # return delta_u.at[self.dep_dofs].set((self.P @ delta_u) + (self.g - (self.P @ u_0)))
+
+        return delta_u.at[self.dep_dofs].set(self.g - u_0[self.dep_dofs])
+
+    @jax.jit
     def apply_to_residual(self, R: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:
         """
         Apply the constraints to the residual vector such that the "residual" for entries

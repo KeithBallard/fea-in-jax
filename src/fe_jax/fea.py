@@ -1204,7 +1204,7 @@ def solve_nonlinear_step(
         )
 
         u_f = u_f + delta_u
-        u_f = constraints.apply_to_solution(u_f)
+        # u_f = constraints.apply_to_solution(u_f)
         R_f = residual_isv_func_w_constraints(u_f=u_f)[0]
 
         return (
