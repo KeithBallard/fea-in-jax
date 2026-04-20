@@ -6,10 +6,9 @@ numDoF_LARGE               = [45582             ,180426            ,800000,28640
 
 load('testOutput.mat')
 
-testDataValues = testData{1};
+testData
 
-
-dataSet1 = [str2num(testDataValues.f0) str2num(testDataValues.f1) str2num(testDataValues.f2)];
+dataset1 = [testData{1}.f0,testData{1}.f1,testData{1}.f2];
 
 %plot code we used to produce the images in the paper
 loglog(numDoF,dataSet1,'-o','LineWidth',2);
@@ -25,3 +24,4 @@ ax.TickLength = [0.02 0.02];
 ax.LineWidth = 1; 
 ax.FontSize = 18;
 hold off;
+export_fig('exampleOutputPlot','-png','-transparent');

@@ -27,8 +27,8 @@ for i in file:
     solverTime = match.group(1)
     outputDict[fileName + str(fileNum)] = solverTime
     fileNum = fileNum + 1
-    dicts.append(outputDict)
 
+dicts.append(outputDict)
 
 sio.savemat("testOutput.mat",{"testData":dicts})
 
