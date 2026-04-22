@@ -273,13 +273,14 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
     """
 
     E = material_params_m[..., 0]
+    A = material_params_m[..., 1]
     # Assumes the node number puts the endpoints as first and last entries. 
     dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
     l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
 
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    stress_dd = E*eps_a*P_dd
+    stress_dd = E*A*eps_a*P_dd
     # if eps_dd.shape[1] == 1:  # 1D
     #     C_ss = jnp.array([[E*A/L]])
     # elif eps_dd.shape[1] == 2:  # 2D

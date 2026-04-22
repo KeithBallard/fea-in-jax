@@ -78,7 +78,7 @@ def run_truss_3D_bar(n_elements: int, end_point: tuple, stretch_factors: tuple, 
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([1e9])  # E
+    matrix_mat_params = jnp.array([1e9,1])  # E
 
     # Set boundary conditions. Leave the (0,0) end point fixed, but take (2,1)->(2.4,1.2)
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
@@ -156,5 +156,5 @@ def run_truss_3D_bar(n_elements: int, end_point: tuple, stretch_factors: tuple, 
 
 def test_truss_3D_bar(case_args) -> None:
     u, ref_soln = run_truss_3D_bar(*case_args)
-    assert jnp.isclose(u,ref_soln).all(), f"does not match expected solution: {case_args[-1]}!"
+    assert jnp.isclose(u,ref_soln,atol=1e-7,rtol=1e-6).all(), f"does not match expected solution: {case_args[-1]}! Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
 

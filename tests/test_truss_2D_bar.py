@@ -47,7 +47,7 @@ def run_truss_2D_bar(n_elements: int, end_point: tuple,stretch_factor: tuple,lab
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([1e9])  # E
+    matrix_mat_params = jnp.array([1.0e9,1.0])  # E
 
     # Set boundary conditions. Leave the (0,0) end point fixed, but take (xn,yn)->(sx*xn,sy*yn)
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
@@ -56,7 +56,7 @@ def run_truss_2D_bar(n_elements: int, end_point: tuple,stretch_factor: tuple,lab
             DirichletBC(bc_type = BCType.NODE, component = 0, index = 0         , value = 0.0),
             DirichletBC(bc_type = BCType.NODE, component = 1, index = 0         , value = 0.0),
             DirichletBC(bc_type = BCType.NODE, component = 0, index = n_elements, value = soln[-1,0]),
-            DirichletBC(bc_type = BCType.NODE, component = 1, index = n_elements, value = soln[-1,1])
+            DirichletBC(bc_type = BCType.NODE, component = 1, index = n_elements, value = soln[-1,1]),
         ]
     )
 

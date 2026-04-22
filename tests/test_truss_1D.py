@@ -63,7 +63,7 @@ def run_truss_1D_bar(n_elements, stretch_factor, label):
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([1.0e9])  # E
+    matrix_mat_params = jnp.array([1.0e9,1])  # E
 
 
     # Example using the isotropic constitutive relation

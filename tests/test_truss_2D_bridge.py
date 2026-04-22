@@ -28,7 +28,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
             [1.0*l, h1 ]
         ]
     )
-    
+
     cells = np.array(
         [[i,(i+1)%points.shape[0]] for i in range(points.shape[0])] + # Exterior members
         [[b,t] for b,t in zip(range(1,6),range(11,6,-1))] + # Vertical members
@@ -53,11 +53,11 @@ def run_truss_2D_bridge(label="2D_bridge"):
         ]
     )
     coordinate_soln = points + displacement_soln
-    
+
     # points = np.linspace(0, 1, n_elements + 1, dtype=np.float32).reshape((-1, 1))
     # cells = np.array([[i, i + 1] for i in range(len(points) - 1)], dtype=np.uint64)
     cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
-    
+
     # Sizes of arrays
     U = 2  # number of solution components
     V = points.shape[0]  # number of vertices
@@ -72,12 +72,12 @@ def run_truss_2D_bridge(label="2D_bridge"):
         quadrature_degree=2,
     )
     Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
-    
+
     print("# DoFs = ", F)
-    
+
     # Set material properties
-    matrix_mat_params = jnp.array([200e3])  # E
-    
+    matrix_mat_params = jnp.array([200e3,1])  # E
+
     # Set boundary conditions. Taken from running FEniCS example and manually copying over.
     # This is pretty crude, but should work for this purpose.
     # I point to the coordinates that will get boundary conditions
@@ -96,7 +96,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
     # [ 15.000   6.000   0.000] | [-1.033e-20 -6.319e-04]
     # [ 10.000   5.330   0.000] | [ 8.861e-05 -5.905e-04]
     # [  5.000   3.330   0.000] | [ 1.372e-04 -4.503e-04]
-    
+
     # -----------------------------------------------------------------------------
     #        coordinates        |                 displacements
     # -----------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
             DirichletBC(bc_type = BCType.NODE,component=1, index=5,value=displacement_soln[5][1])
         ]
     )
-    
+
     # Example using the truss elements
     element_batches_truss = [
         ElementBatch(
@@ -141,7 +141,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
             material_params=matrix_mat_params,
         )
     ]
-    
+
     u_truss, residual_truss, element_batches_truss = solve_bvp(
         element_residual_func=linear_truss_residual,
         vertices_vd=points,
@@ -151,12 +151,12 @@ def run_truss_2D_bridge(label="2D_bridge"):
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=5,
+            nonlinear_max_iter=1,
             linear_max_iter=5,
         ),
         plot_convergence=True,
     )
-    
+
     plt.savefig(get_output(f"solver_convergence_{label}.png"))
     plt.close()
     u_truss = u_truss.reshape((-1,2))
@@ -171,7 +171,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
         val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
         print(f"{coord_str:>18} | {val_str:>24}")
     print("\n"*2)
-    
+
     plt.figure(figsize=[12,3])
     plt.scatter(*points.T,label = 'initial')
     plot_truss(points+u_truss,cells,linecolor='tab:orange',linestyle='solid',markercolor='tab:orange',marker='d')
@@ -181,13 +181,13 @@ def run_truss_2D_bridge(label="2D_bridge"):
     plt.legend()
     plt.subplots_adjust(left=0.03,right=0.99,top=0.98)
     plt.savefig(get_output(f"solution_{label}.png"))
-    
+
     # dirichlet_dofs = np.array([bc.index for bc in bcs])
     # dirichlet_values = np.array([bc.value for bc in bcs])
     # dirichlet_comp = np.array([bc.component for bc in bcs])
     # assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
     # print("Solution at least matches at the Dirichlet boundary conditions.\n")
-    
+
     # assert jnp.isclose(u_truss,displacement_soln).all(), f"Does not match expected solution"
     # print("Solution matches the expected solution (copied form FEniCS)")
 
