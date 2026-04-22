@@ -211,6 +211,7 @@ def linear_solve(
     solver_info_0: SolverResultInfo,
     check_consistency: bool,
     x_0: jnp.ndarray,
+    f_ext,
     *args,
     **kwargs,
 ) -> tuple[jnp.ndarray, SolverResultInfo]:
@@ -285,7 +286,8 @@ def linear_solve(
                 jnp.isclose(J_vp(v), J_w_dirichlet(x_0) @ v).all(),
             )
 
-    R_0 = R_w_dirichlet(x_0)
+    # breakpoint()
+    R_0 = f_ext.apply_to_residual(R_w_dirichlet(x_0))
     delta_x = constraints.apply_to_solution(jnp.zeros_like(R_0))
     info = solver_info_0
 

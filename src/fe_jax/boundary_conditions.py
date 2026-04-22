@@ -38,6 +38,7 @@ class DirichletBC:
         BCType.NODE
     )  # Type of boundary condition (e.g. fixing the solution at a node)
 
+@dataclass
 class NeumannBC:
     """
     Represents a Neumann boundary condition (i.e. external load at a DoF).

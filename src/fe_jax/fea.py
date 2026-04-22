@@ -1,3 +1,4 @@
+from re import I, L
 from .setup import *
 from .utils import *
 from .solve_cg import cg as cg_w_info
@@ -1074,6 +1075,7 @@ def solve_nonlinear_step(
     u_0_g: jnp.ndarray,
     constraints: ConstraintSystem,
     solver_options: SolverOptions,
+    f_ext,
 ):
     """
     Solve the linearized system of equations emerging from the governing equations.
@@ -1201,6 +1203,7 @@ def solve_nonlinear_step(
             solver_info_0=info,
             check_consistency=False,
             x_0=u_f,
+            f_ext = f_ext,
         )
 
         u_f = u_f + delta_u
@@ -1231,6 +1234,65 @@ def solve_nonlinear_step(
 
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
+@dataclass
+class NeumannCondition:
+    """
+    Represents a force of value applied at DoF.
+    """
+    dep_dof: int
+    value: float
+
+def convert_boundary_conditions_to_external_load(
+    boundary_conditions: List[DirichletBC | PeriodicBC],
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    dof_enumeration: DofEnumeration,
+    n_solution_components: int,
+    global_values: List[int] = [],
+):
+    """
+    Searches the list of boundary conditions and converts the Neumann
+    conditions to data typw NeumannCondition
+    """
+    external_load = []
+    for bc in boundary_conditions:
+        if isinstance(bc, NeumannBC):
+            if bc.bc_type == BCType.NODE:
+                external_load.append(
+                    NeumannCondition(
+                        dep_dof = n_solution_components * bc.index + bc.component,
+                        value   = bc.value,
+                    )
+                )
+    return external_load
+
+@struct.dataclass
+class LoadSystem:
+    dep_dofs: int
+    loads: float
+    @jax.jit
+    def apply_to_residual(self,R: jnp.ndarray):
+        return R.at[self.dep_dofs].set((R[self.dep_dofs] + self.loads))
+
+def convert_external_load_to_system(
+    external_load, 
+):
+    n_loads = len(external_load)
+    if n_loads == 0:
+        return LoadSystem(
+            dep_dofs=jnp.array([],dtype=jnp.int32),
+            loads   =jnp.array([],dtype=jnp.float32),
+        )
+
+    dep_dofs = np.empty(n_loads,dtype = np.int32)
+    loads    = np.empty(n_loads,dtype = np.float32)
+    
+    for i,el in enumerate(external_load):
+        dep_dofs[i] = el.dep_dof
+        loads[i] = el.value
+    return LoadSystem(
+        dep_dofs = jnp.array(dep_dofs,dtype=jnp.int32),
+        loads  = jnp.array(loads,dtype=jnp.float32)
+    )
 
 def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
@@ -1331,6 +1393,16 @@ def preprocess_bvp(
         multipoint_constraints=multipoint_constraints,
         n_total_dofs=V * ebc.U[0],
     )
+    
+    external_load = convert_boundary_conditions_to_external_load(
+        boundary_conditions=boundary_conditions,
+        vertices_vd=vertices_vd,
+        dof_enumeration=dof_enumeration,
+        n_solution_components=ebc.U[0],
+        global_values=global_values,
+    )
+
+    f_ext = convert_external_load_to_system(external_load)
 
     return (
         ebc,
@@ -1338,6 +1410,7 @@ def preprocess_bvp(
         constraint_system,
         jacobian_nnz,
         element_residual_func,
+        f_ext,
     )
 
 
@@ -1378,7 +1451,7 @@ def solve_bvp(
     R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
     element_batches : element batches with updated internal state variables
     """
-    ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func = (
+    ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func, f_ext = (
         preprocess_bvp(
             vertices_vd=vertices_vd,
             element_batches=element_batches,
@@ -1414,6 +1487,7 @@ def solve_bvp(
         u_0_g=u_0_g,
         constraints=constraint_system,
         solver_options=solver_options,
+        f_ext = f_ext
     )
 
     # Update internal state variables for the element batches
