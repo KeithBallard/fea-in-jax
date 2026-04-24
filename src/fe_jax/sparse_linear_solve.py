@@ -287,7 +287,8 @@ def linear_solve(
             )
 
     # breakpoint()
-    R_0 = f_ext.apply_to_residual(R_w_dirichlet(x_0))
+    # R_0 = f_ext.apply_to_residual(R_w_dirichlet(x_0))
+    R_0 = R_w_dirichlet(x_0)
     delta_x = constraints.apply_to_solution(jnp.zeros_like(R_0))
     info = solver_info_0
 

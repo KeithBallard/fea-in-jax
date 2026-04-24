@@ -1,4 +1,3 @@
-from re import I, L
 from .setup import *
 from .utils import *
 from .solve_cg import cg as cg_w_info
@@ -1025,6 +1024,7 @@ def calculate_residual_w_constraints(
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
     constraints: ConstraintSystem,
+    f_ext
 ):
     """
     Compute the residual vector and updated internal state variables given the current
@@ -1061,6 +1061,7 @@ def calculate_residual_w_constraints(
     # Zero out terms corresponding to Dirichlet BCs and add (solution - what it should be) for those constrained DoFs.
     # This will ensure there will be a 1 on the diagonal of the Jacobian and also return the right residual.
     # debug_print(R_f)
+    R_f = f_ext.apply_to_residual(R_f)
     R_f = constraints.apply_to_residual(R_f, u_f)
     # debug_print(R_f)
 
@@ -1123,6 +1124,7 @@ def solve_nonlinear_step(
         assembly_map_b=assembly_map_b,
         u_f=u_f,
         constraints=constraints,
+        f_ext=f_ext
     )
 
     # Function that produces R(u)
@@ -1271,7 +1273,7 @@ class LoadSystem:
     loads: float
     @jax.jit
     def apply_to_residual(self,R: jnp.ndarray):
-        return R.at[self.dep_dofs].set((R[self.dep_dofs] + self.loads))
+        return R.at[self.dep_dofs].set((R[self.dep_dofs] - self.loads))
 
 def convert_external_load_to_system(
     external_load, 
