@@ -3,14 +3,14 @@ User facing constraint definitions.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Set, Tuple, Any
-import math
+from typing import Any, Dict, List, Set, Tuple
 
 from enum import Enum, auto
 import numpy as np
 
-from .boundary_conditions import *
+from .boundary_conditions import BCType, DirichletBC, PeriodicBC
 from .dof_enumeration import DofEnumeration
+from .utils import tensor_to_voigt_indices
 
 # Using a simplified tolerance for float comparisons
 TOLERANCE = 1e-16
@@ -33,7 +33,7 @@ class CheckResult(Enum):
     TRIVIAL = auto()
 
 
-@dataclass
+@dataclass(eq=False)
 class MultiPointConstraint:
     """
     Represents a multi-point constraint equation:
@@ -468,17 +468,25 @@ def convert_boundary_conditions_to_constraints(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     dof_enumeration: DofEnumeration,
     n_solution_components: int,
-    global_values: List[int] = [],
+    global_values: List[int] | None = None,
 ) -> Tuple[List[FixedPointConstraint], List[MultiPointConstraint]]:
     """
     Converts a list of DirichletBC and PeriodicBC to a list of constraints.
     """
+    if global_values is None:
+        global_values = []
+
     fixed_point_constraints = []
     multi_point_constraints = []
 
-    global_dof_offsets = (
-        np.cumsum(global_values) + dof_enumeration.free_global_dof_rank_begin
+    global_dof_offsets = np.array(
+        [
+            dof_enumeration.free_global_dof_rank_begin + sum(global_values[:i])
+            for i in range(len(global_values))
+        ],
+        dtype=np.int64,
     )
+    voigt_indices = tensor_to_voigt_indices(vertices_vd.shape)
 
     for bc in boundary_conditions:
         if isinstance(bc, DirichletBC):
@@ -490,29 +498,46 @@ def convert_boundary_conditions_to_constraints(
                     )
                 )
             elif bc.bc_type == BCType.GLOBAL_VALUE:
+                if bc.index >= len(global_values):
+                    raise ValueError(
+                        f"DirichletBC references global value {bc.index}, but only "
+                        f"{len(global_values)} global value blocks were declared."
+                    )
+                if bc.component >= global_values[bc.index]:
+                    raise ValueError(
+                        f"DirichletBC component {bc.component} is outside global "
+                        f"value block {bc.index} with size {global_values[bc.index]}."
+                    )
                 fixed_point_constraints.append(
                     FixedPointConstraint(
-                        dep_dof=n_solution_components * n_total_nodes
-                        + bc.index
-                        + bc.component,
+                        dep_dof=int(global_dof_offsets[bc.index] + bc.component),
                         value=bc.value,
                     )
                 )
         elif isinstance(bc, PeriodicBC):
+            if bc.global_gradient_index >= len(global_values):
+                raise ValueError(
+                    "PeriodicBC references global gradient block "
+                    f"{bc.global_gradient_index}, but only {len(global_values)} "
+                    "global value blocks were declared."
+                )
             d = vertices_vd[bc.secondary_index] - vertices_vd[bc.primary_index]
             for i in range(n_solution_components):
+                indep_terms = {
+                    n_solution_components * bc.primary_index + i: 1.0,
+                    **{
+                        int(
+                            global_dof_offsets[bc.global_gradient_index]
+                            + voigt_indices[i][j]
+                        ): float(d[j])
+                        for j in range(n_solution_components)
+                    },
+                }
                 multi_point_constraints.append(
                     MultiPointConstraint(
                         dep_dof=n_solution_components * bc.secondary_index + i,
-                        indep_dof_terms={
-                            n_solution_components * bc.primary_index + i: 1.0,
-                        }
-                        | {
-                            global_dof_offsets[bc.global_gradient_index]
-                            + tensor_to_voigt_indices(vertices_vd.shape)[i, j]: d[j]
-                            for j in range(n_solution_components)
-                        },
-                        global_gradient_index=bc.global_gradient_index,
+                        indep_dofs=list(indep_terms.keys()),
+                        factors=list(indep_terms.values()),
                     )
                 )
 

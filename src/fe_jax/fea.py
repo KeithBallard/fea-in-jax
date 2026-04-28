@@ -1241,19 +1241,21 @@ class NeumannCondition:
     """
     Represents a force of value applied at DoF.
     """
+
     dep_dof: int
     value: float
 
+
 def convert_boundary_conditions_to_external_load(
-    boundary_conditions: List[DirichletBC | PeriodicBC],
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     dof_enumeration: DofEnumeration,
     n_solution_components: int,
-    global_values: List[int] = [],
+    global_values: List[int] | None = None,
 ):
     """
     Searches the list of boundary conditions and converts the Neumann
-    conditions to data typw NeumannCondition
+    conditions to data type NeumannCondition.
     """
     external_load = []
     for bc in boundary_conditions:
@@ -1261,52 +1263,62 @@ def convert_boundary_conditions_to_external_load(
             if bc.bc_type == BCType.NODE:
                 external_load.append(
                     NeumannCondition(
-                        dep_dof = n_solution_components * bc.index + bc.component,
-                        value   = bc.value,
+                        dep_dof=n_solution_components * bc.index + bc.component,
+                        value=bc.value,
                     )
                 )
     return external_load
 
+
 @struct.dataclass
 class LoadSystem:
-    dep_dofs: int
-    loads: float
+    dep_dofs: jnp.ndarray
+    loads: jnp.ndarray
+
     @jax.jit
-    def apply_to_residual(self,R: jnp.ndarray):
+    def apply_to_residual(self, R: jnp.ndarray):
         return R.at[self.dep_dofs].set((R[self.dep_dofs] - self.loads))
 
+
 def convert_external_load_to_system(
-    external_load, 
+    external_load,
 ):
     n_loads = len(external_load)
     if n_loads == 0:
         return LoadSystem(
-            dep_dofs=jnp.array([],dtype=jnp.int32),
-            loads   =jnp.array([],dtype=jnp.float32),
+            dep_dofs=jnp.array([], dtype=jnp.int32),
+            loads=jnp.array([], dtype=jnp.float32),
         )
 
-    dep_dofs = np.empty(n_loads,dtype = np.int32)
-    loads    = np.empty(n_loads,dtype = np.float32)
-    
-    for i,el in enumerate(external_load):
+    dep_dofs = np.empty(n_loads, dtype=np.int32)
+    loads = np.empty(n_loads, dtype=np.float32)
+
+    for i, el in enumerate(external_load):
         dep_dofs[i] = el.dep_dof
         loads[i] = el.value
     return LoadSystem(
-        dep_dofs = jnp.array(dep_dofs,dtype=jnp.int32),
-        loads  = jnp.array(loads,dtype=jnp.float32)
+        dep_dofs=jnp.array(dep_dofs, dtype=jnp.int32),
+        loads=jnp.array(loads, dtype=jnp.float32),
     )
+
 
 def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
     element_residual_func: Callable,
-    boundary_conditions: List[DirichletBC | PeriodicBC],
-    multipoint_constraints: List[MultiPointConstraint] = [],
-    global_values: List[int] = [],
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
 ):
     """
     Converts information from a user-facing format to a JAX-ameniable format.
     """
+    if boundary_conditions is None:
+        boundary_conditions = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
 
     # For 1D problems, the vertices may be given as a 1D array, so we need to reshape it to a 2D array
     if vertices_vd.ndim == 1:
@@ -1315,6 +1327,8 @@ def preprocess_bvp(
     B = len(element_batches)
     V = vertices_vd.shape[0]
     D = vertices_vd.shape[1]
+    U = element_batches[0].n_dofs_per_basis
+    n_total_dofs = V * U + sum(global_values)
 
     # Validate input
     assert D <= 3
@@ -1341,17 +1355,16 @@ def preprocess_bvp(
     # we will need to construct the enumeration at a point where all element information
     # is known and pass it into this function.
     # NOTE assertion above ensures U is constant across batches
-    U = element_batches[0].n_dofs_per_basis
     dof_enumeration = DofEnumeration(
         n_owned_elements=sum([b.connectivity_en.shape[0] for b in element_batches]),
-        n_owned_dofs=V * U + sum(global_values),
+        n_owned_dofs=n_total_dofs,
         n_local_ghost_dofs=0,
         n_exclusive_ghost_dofs=0,
         n_free_global_dofs=sum(global_values),
         free_global_dof_rank_begin=V * U,
         owned_global_dof_begin=0,
-        owned_global_dof_end=V * U + sum(global_values),
-        rank_to_global_map=jnp.arange(V * U + sum(global_values)),
+        owned_global_dof_end=n_total_dofs,
+        rank_to_global_map=jnp.arange(n_total_dofs),
     )
 
     # Convert element batch information into something ameniable to JAX transforms like JIT
@@ -1380,7 +1393,7 @@ def preprocess_bvp(
     # NOTE: we need a concrete value to specialize for JIT of other functions
     jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
 
-    fixed_point_constraints, multipoint_constraints = (
+    fixed_point_constraints, boundary_multipoint_constraints = (
         convert_boundary_conditions_to_constraints(
             boundary_conditions=boundary_conditions,
             vertices_vd=vertices_vd,
@@ -1389,13 +1402,20 @@ def preprocess_bvp(
             global_values=global_values,
         )
     )
+    multipoint_constraints = consolidate_multipoint_constraints(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=[
+            *boundary_multipoint_constraints,
+            *multipoint_constraints,
+        ],
+    )
 
     constraint_system = convert_constraints_to_system(
         fixed_point_constraints=fixed_point_constraints,
         multipoint_constraints=multipoint_constraints,
-        n_total_dofs=V * ebc.U[0],
+        n_total_dofs=n_total_dofs,
     )
-    
+
     external_load = convert_boundary_conditions_to_external_load(
         boundary_conditions=boundary_conditions,
         vertices_vd=vertices_vd,
@@ -1420,8 +1440,9 @@ def solve_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
     element_residual_func: Callable,
-    boundary_conditions: List[DirichletBC | PeriodicBC],
-    global_values: List[int] = [],
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
     u_0_g: jnp.ndarray | None = None,
     solver_options: SolverOptions = SolverOptions(),
     plot_convergence: bool = False,
@@ -1453,20 +1474,31 @@ def solve_bvp(
     R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
     element_batches : element batches with updated internal state variables
     """
+    if boundary_conditions is None:
+        boundary_conditions = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
+
     ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func, f_ext = (
         preprocess_bvp(
             vertices_vd=vertices_vd,
             element_batches=element_batches,
             element_residual_func=element_residual_func,
             boundary_conditions=boundary_conditions,
+            multipoint_constraints=multipoint_constraints,
+            global_values=global_values,
         )
     )
 
+    n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
+
     # If an initial guess was not provided, then use zeros
     if u_0_g is None:
-        u_0_g = jnp.zeros(shape=(vertices_vd.shape[0] * ebc.U[0],))
+        u_0_g = jnp.zeros(shape=(n_total_dofs,))
     else:
-        assert u_0_g.shape == (vertices_vd.shape[0] * ebc.U[0],)
+        assert u_0_g.shape == (n_total_dofs,)
 
     inner_solve = solve_nonlinear_step
     if ebc.is_homogeneous:
@@ -1489,7 +1521,7 @@ def solve_bvp(
         u_0_g=u_0_g,
         constraints=constraint_system,
         solver_options=solver_options,
-        f_ext = f_ext
+        f_ext=f_ext,
     )
 
     # Update internal state variables for the element batches
