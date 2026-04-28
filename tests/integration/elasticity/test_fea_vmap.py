@@ -176,24 +176,25 @@ def calculate_residual_batch_element_kernel_vmap(
 
     return R_end
 
-u_end = jnp.array([[[0., 0.], [1., 0.], [0., 1.]]])
-x_end = jnp.array([[[0., 0.], [1., 0.], [0., 1.]]])
-fe_type = FiniteElementType(
-    cell_type=CellType.triangle,
-    family=ElementFamily.P,
-    basis_degree=1,
-    lagrange_variant=LagrangeVariant.equispaced,
-    quadrature_type=QuadratureType.default,
-    quadrature_degree=3,
-)
-xi_qp, W_q = get_quadrature(fe_type=fe_type)
-phi_qn, dphi_dxi_qnp = eval_basis_and_derivatives(fe_type=fe_type, xi_qp=xi_qp)
-material_params_eqm = jnp.zeros((1, xi_qp.shape[0], 2))
-material_params_eqm = material_params_eqm.at[:,:,0].set(1e9)
-material_params_eqm = material_params_eqm.at[:,:,1].set(0.3)
+def test_batch_element_kernel_matches_vmap_kernel():
+    u_end = jnp.array([[[0., 0.], [1., 0.], [0., 1.]]])
+    x_end = jnp.array([[[0., 0.], [1., 0.], [0., 1.]]])
+    fe_type = FiniteElementType(
+        cell_type=CellType.triangle,
+        family=ElementFamily.P,
+        basis_degree=1,
+        lagrange_variant=LagrangeVariant.equispaced,
+        quadrature_type=QuadratureType.default,
+        quadrature_degree=3,
+    )
+    xi_qp, W_q = get_quadrature(fe_type=fe_type)
+    phi_qn, dphi_dxi_qnp = eval_basis_and_derivatives(fe_type=fe_type, xi_qp=xi_qp)
+    material_params_eqm = jnp.zeros((1, xi_qp.shape[0], 2))
+    material_params_eqm = material_params_eqm.at[:,:,0].set(1e9)
+    material_params_eqm = material_params_eqm.at[:,:,1].set(0.3)
 
-R_1 = calculate_residual_batch_element_kernel(u_end, x_end, dphi_dxi_qnp, W_q, material_params_eqm)
-R_2 = calculate_residual_batch_element_kernel_vmap(u_end, x_end, dphi_dxi_qnp, W_q, material_params_eqm)
+    R_1 = calculate_residual_batch_element_kernel(u_end, x_end, dphi_dxi_qnp, W_q, material_params_eqm)
+    R_2 = calculate_residual_batch_element_kernel_vmap(u_end, x_end, dphi_dxi_qnp, W_q, material_params_eqm)
 
-print(R_1)
-print(R_2) 
+    print(R_1)
+    print(R_2) 
