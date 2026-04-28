@@ -41,6 +41,11 @@
     ```
     *Note: `jax` installation instructions vary depending on your hardware (CPU, GPU, TPU). Please refer to the [JAX installation guide](https://github.com/google/jax#installation) if the default pip install does not match your system configuration.*
 
+    For development, install the package in editable mode with the test dependency:
+    ```bash
+    pip install -e ".[dev]"
+    ```
+
 4.  **(Optional) Install `pyamgx`:**
     To enable GPU-accelerated algebraic multigrid preconditioners:
     1.  Install NVIDIA's [AMGX](https://github.com/NVIDIA/AMGX?tab=readme-ov-file#quickstart).

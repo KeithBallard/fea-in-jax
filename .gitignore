@@ -4,13 +4,19 @@
 *.png
 *.npy
 *.log
+.DS_Store
 
 __pycache__/
+.pytest_cache/
+.ruff_cache/
 .venv/
 .vscode/
+build/
+dist/
 doc/
 install/
 prof/
+*.egg-info/
 src/__pycache__/
 tests/output/
 tests/__pycache__/

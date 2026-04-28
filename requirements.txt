@@ -15,6 +15,7 @@ matplotlib
 mpi4py
 fenics-basix
 psutil
+scipy
 flax
 # Intel MKL Pardiso solver (optional)
 #pypardiso
