@@ -1,7 +1,6 @@
 import threading
 import psutil
 import time
-import matplotlib.pyplot as plt
 import numpy as np
 import subprocess
 import re
@@ -14,6 +13,12 @@ import statistics
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
+
+
+def _get_pyplot():
+    import matplotlib.pyplot as plt
+
+    return plt
 
 
 def pack(**kwargs):
@@ -146,7 +151,7 @@ def timeit(
         )
 
     if timings_figure_filepath != "":
-        import matplotlib.pyplot as plt
+        plt = _get_pyplot()
 
         # times.insert(0, first_call_time)
         plt.plot(times, label="calls")
@@ -173,6 +178,7 @@ def timeit(
 
 
 def get_colors_from_cmap(cmap_name, num_colors):
+    plt = _get_pyplot()
     cmap = plt.get_cmap(cmap_name)
     return [cmap(x) for x in np.linspace(0, 1, num_colors)]
 
@@ -224,6 +230,7 @@ class CPUPoll:
         time.sleep(1.2 * self.sampling_time)
 
     def get_plt_fig(self, ax=None, legend=True):
+        plt = _get_pyplot()
 
         if ax is None:
             fig, ax1 = plt.subplots()

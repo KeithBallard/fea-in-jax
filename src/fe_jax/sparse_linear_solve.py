@@ -16,20 +16,23 @@ from enum import Enum, auto
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from functools import partial
+import logging
 
 from .utils import debug_print
 from .sparse_matrix import *
 from .constraint_system import ConstraintSystem
 from .solve_cg import cg as cg_w_info
 
+_logger = logging.getLogger(__name__)
+
 try:
     import jaxopt.linear_solve
 
     JAXOPT_AVAILABLE = True
-    print("'jaxopt' imported, adding related solvers.")
+    _logger.info("'jaxopt' imported, adding related solvers.")
 except ImportError:
     JAXOPT_AVAILABLE = False
-    print("'jaxopt' was not imported successfully, skipping related solvers.")
+    _logger.info("'jaxopt' was not imported successfully, skipping related solvers.")
 
 try:
     import cupy as cp
@@ -37,10 +40,10 @@ try:
     import cupyx.scipy.sparse.linalg as cplinalg
 
     CUPY_AVAILABLE = True
-    print("'cupy' imported, adding related solvers/preconditioners.")
+    _logger.info("'cupy' imported, adding related solvers/preconditioners.")
 except ImportError:
     CUPY_AVAILABLE = False
-    print(
+    _logger.info(
         "'cupy' was not imported successfully, skipping related solvers/preconditioners."
     )
 
@@ -52,10 +55,10 @@ try:
         CUPY_AVAILABLE
     ), "The interface to `pyamgx` requires `cupy`, which was not available. Please install `cupy`."
     PYAMX_AVAILABLE = True
-    print("'pyamgx' imported, adding related solvers/preconditioners.")
+    _logger.info("'pyamgx' imported, adding related solvers/preconditioners.")
 except ImportError:
     PYAMX_AVAILABLE = False
-    print(
+    _logger.info(
         "'pyamgx' was not imported successfully, skipping related solvers/preconditioners."
     )
 
@@ -63,15 +66,15 @@ try:
     import pypardiso
 
     if not CUPY_AVAILABLE:
-        print(
+        _logger.warning(
             "Warning: 'pypardiso' was imported successfully, but 'cupy' is not available. 'pypardiso' will not be available."
         )
     assert CUPY_AVAILABLE
     PYPARDISO_AVAILABLE = True
-    print("'pypardiso' imported, adding related solvers.")
+    _logger.info("'pypardiso' imported, adding related solvers.")
 except ImportError:
     PYPARDISO_AVAILABLE = False
-    print("'pypardiso' was not imported successfully, skipping related solvers.")
+    _logger.info("'pypardiso' was not imported successfully, skipping related solvers.")
 
 
 class PreconditionerType(Enum):
