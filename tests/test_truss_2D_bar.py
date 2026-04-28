@@ -127,6 +127,8 @@ def run_truss_2D_bar(n_elements: int, end_point: tuple,stretch_factor: tuple,lab
 
 def test_truss_2D_bar(case_args):
     u, ref_soln = run_truss_2D_bar(*case_args)
-    assert jnp.isclose(u,ref_soln).all(), f"does not match expected solution: {case_args[-1]}!"
-
+    assert jnp.isclose(u,ref_soln).all(), (
+        f"does not match expected solution: {case_args[-1]}! "
+        f"Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
+    )
 

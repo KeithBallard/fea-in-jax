@@ -157,4 +157,7 @@ def run_truss_1D_bar(n_elements, stretch_factor, label):
 
 def test_truss_1D_bar(case_args):
     u,ref_soln = run_truss_1D_bar(*case_args)
-    assert jnp.isclose(u,ref_soln).all(), f"Does not match isotropic solution: {case_args[-1]}!"
+    assert jnp.isclose(u,ref_soln).all(), (
+        f"Does not match isotropic solution: {case_args[-1]}! "
+        f"Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
+    )

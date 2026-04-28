@@ -1,4 +1,5 @@
 from helper import *
+import pytest
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
@@ -13,7 +14,10 @@ def plot_truss(points,cells,linecolor='tab:blue',markercolor='k',marker=None,lin
         plt.plot(*points[conn].T,color=linecolor,linestyle = linestyle)
     plt.scatter(points[:,0],points[:,1],color=markercolor,marker=marker)
 
-def run_truss_2D_bridge(label="2D_bridge"):
+def run_truss_2D_bridge(
+    label="2D_bridge",
+    nonlinear_max_iter=30,
+):
     l = 5.0
     h1 = 3.33
     h2 = 5.33
@@ -76,7 +80,7 @@ def run_truss_2D_bridge(label="2D_bridge"):
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([200e3,1])  # E
+    matrix_mat_params = jnp.array([200e3, 1], dtype=jnp.float64)  # E, A
 
     # Set boundary conditions. Taken from running FEniCS example and manually copying over.
     # This is pretty crude, but should work for this purpose.
@@ -118,17 +122,11 @@ def run_truss_2D_bridge(label="2D_bridge"):
             DirichletBC(bc_type = BCType.NODE,component=1, index=0,value=displacement_soln[0][1]),
             DirichletBC(bc_type = BCType.NODE,component=0, index=6,value=displacement_soln[6][0]),
             DirichletBC(bc_type = BCType.NODE,component=1, index=6,value=displacement_soln[6][1]),
-            NeumannBC(bc_type = BCType.NODE,component=1, index=3,value=-3.73424834),
-            # DirichletBC(bc_type = BCType.NODE,component=0, index=1,value=displacement_soln[1][0]),
-            # DirichletBC(bc_type = BCType.NODE,component=1, index=1,value=displacement_soln[1][1]),
-            # DirichletBC(bc_type = BCType.NODE,component=0, index=2,value=displacement_soln[2][0]),
-            # DirichletBC(bc_type = BCType.NODE,component=1, index=2,value=displacement_soln[2][1]),
-            # DirichletBC(bc_type = BCType.NODE,component=0, index=3,value=displacement_soln[3][0]),
-            # DirichletBC(bc_type = BCType.NODE,component=1, index=3,value=displacement_soln[3][1]),
-            # DirichletBC(bc_type = BCType.NODE,component=0, index=4,value=displacement_soln[4][0]),
-            # DirichletBC(bc_type = BCType.NODE,component=1, index=4,value=displacement_soln[4][1]),
-            # DirichletBC(bc_type = BCType.NODE,component=0, index=5,value=displacement_soln[5][0]),
-            # DirichletBC(bc_type = BCType.NODE,component=1, index=5,value=displacement_soln[5][1])
+            NeumannBC(bc_type = BCType.NODE,component=1, index=1,value=-1),
+            NeumannBC(bc_type = BCType.NODE,component=1, index=2,value=-1),
+            NeumannBC(bc_type = BCType.NODE,component=1, index=3,value=-1),
+            NeumannBC(bc_type = BCType.NODE,component=1, index=4,value=-1),
+            NeumannBC(bc_type = BCType.NODE,component=1, index=5,value=-1),
         ]
     )
 
@@ -152,14 +150,12 @@ def run_truss_2D_bridge(label="2D_bridge"):
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=10,
-            linear_max_iter=10,
+            nonlinear_max_iter=nonlinear_max_iter,
+            linear_max_iter=30,
         ),
-        plot_convergence=True,
+        plot_convergence=False,
     )
 
-    plt.savefig(get_output(f"solver_convergence_{label}.png"))
-    plt.close()
     u_truss = u_truss.reshape((-1,2))
     print("\n*** Truss Elements! ***")
     print("|R| = ", jnp.linalg.norm(residual_truss))
@@ -181,8 +177,8 @@ def run_truss_2D_bridge(label="2D_bridge"):
     plt.scatter(*(points + 2000*displacement_soln).T,marker='x',label = 'FEniCS')
     plt.legend()
     plt.subplots_adjust(left=0.03,right=0.99,top=0.98)
-    plt.show()
     plt.savefig(get_output(f"solution_{label}.png"))
+    plt.close()
 
     # dirichlet_dofs = np.array([bc.index for bc in bcs])
     # dirichlet_values = np.array([bc.value for bc in bcs])
@@ -195,7 +191,21 @@ def run_truss_2D_bridge(label="2D_bridge"):
 
     return u_truss,displacement_soln
 
-def test_truss_2D_bridge():
-    u, ref_soln = run_truss_2D_bridge()
-    assert jnp.isclose(u,ref_soln).all(), f"Does not match expected solution"
+def test_truss_2D_bridge_linearized():
+    u, ref_soln = run_truss_2D_bridge(
+        label="2D_bridge_linearized",
+        nonlinear_max_iter=1,
+    )
+    assert jnp.allclose(u, ref_soln, rtol=1e-11, atol=1e-12), (
+        "The one-step linearized bridge solution does not match the "
+        f"FEniCS small-displacement solution. Max absolute error is "
+        f"{jnp.max(jnp.abs(u - ref_soln)):.3e}."
+    )
 
+
+@pytest.mark.skip(reason="Nonlinear reference solution still needs to be added.")
+def test_truss_2D_bridge_nonlinear():
+    run_truss_2D_bridge(
+        label="2D_bridge_nonlinear",
+        nonlinear_max_iter=30,
+    )

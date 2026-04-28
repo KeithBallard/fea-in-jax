@@ -12,7 +12,7 @@ def run_truss_2element_Neumann():
     points = np.array([[-5,0],[0,-5*np.sqrt(3)],[5,0]],dtype = jnp.float64)
     cells = np.array([[0,1],[1,2]],dtype = jnp.int32)
     cell_domain_ids = np.zeros(cells.shape[0], dtype=np.int64)
-    
+
     # Sizes of arrays
     U = 2  # number of solution components
     V = points.shape[0]  # number of vertices
@@ -27,12 +27,12 @@ def run_truss_2element_Neumann():
         quadrature_degree=2,
     )
     Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
-    
+
     print("# DoFs = ", F)
-    
+
     # Set material properties
     matrix_mat_params = jnp.array([10e6,0.1])
-    
+
     # Set boundary conditions. Leave the (0,0) end point fixed, but take (2,1)->(2.4,1.2)
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
     bcs = (
@@ -46,7 +46,7 @@ def run_truss_2element_Neumann():
             NeumannBC(bc_type=BCType.NODE, component = 1, index=1, value = -1732),
         ]
     )
-    
+
     # Example using the truss elements
     element_batches_truss = [
         ElementBatch(
@@ -57,7 +57,7 @@ def run_truss_2element_Neumann():
             material_params=matrix_mat_params,
         )
     ]
-    
+
     u_truss, residual_truss, element_batches_truss = solve_bvp(
         element_residual_func=linear_truss_residual,
         vertices_vd=points,
@@ -67,12 +67,12 @@ def run_truss_2element_Neumann():
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=10,
-            linear_max_iter=10,
+            nonlinear_max_iter=1,
+            linear_max_iter=30,
         ),
         plot_convergence=False,
     )
-    
+
     u_truss = u_truss.reshape((-1,2))
     print("\n*** Truss Elements! ***")
     print("|R| = ", jnp.linalg.norm(residual_truss))
@@ -85,14 +85,14 @@ def run_truss_2element_Neumann():
         val_str = "[" + " ".join(f"{vi: .3e}" for vi in v) + "]"
         print(f"{coord_str:>18} | {val_str:>24}")
     print("\n"*2)
-    
+
     # Check solution against Dirichlet boundary conditions
     # dirichlet_dofs = np.array([bc.index for bc in bcs if isinstance(bc,DirichletBC)])
     # dirichlet_values = np.array([bc.value for bc in bcs if isinstance(bc,DirichletBC)])
     # dirichlet_comp = np.array([bc.component for bc in bcs if isinstance(bc,DirichletBC)])
     # assert jnp.isclose(u_truss[dirichlet_dofs,dirichlet_comp], dirichlet_values).all(), f"Dirichlet is not satisfied"
     # print("Woo Hoo! Solution at least matches at the endopints\n")
-    
+
     # plt.scatter(*points.T,label = 'initial')
     # plt.scatter(*(points+u_truss).T,marker='d',label = 'solution')
     # plt.legend()
@@ -103,5 +103,5 @@ def run_truss_2element_Neumann():
 
 def test_truss_2element_Neumann():
     u, ref_soln = run_truss_2element_Neumann()
-    assert jnp.isclose(u,ref_soln).all()<1e-5
+    assert jnp.allclose(u,ref_soln,rtol=1e-11,atol=1e-12)
 

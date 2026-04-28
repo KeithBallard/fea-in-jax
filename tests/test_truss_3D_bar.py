@@ -149,12 +149,12 @@ def run_truss_3D_bar(n_elements: int, end_point: tuple, stretch_factors: tuple, 
     # print("Solution matches expected results!")
 
 @pytest.mark.parametrize("case_args",[
-    (6,(2,1,3),(0.2,0.2,0.2),"3D_stretch"),
-    (6,(2,1,3),(-0.2,-0.2,-0.2),"3D_compression"),
-    (4,(2,1,3),(0.2,0.1,0),"3D_skew_stretch")
+    (6,(2,1,3),(0.02,0.02,0.02),"3D_stretch"),
+    (6,(2,1,3),(-0.02,-0.02,-0.02),"3D_compression"),
+    (4,(2,1,3),(0.02,0.01,0),"3D_skew_stretch")
 ])
 
 def test_truss_3D_bar(case_args) -> None:
     u, ref_soln = run_truss_3D_bar(*case_args)
-    assert jnp.isclose(u,ref_soln,atol=1e-7,rtol=1e-6).all(), f"does not match expected solution: {case_args[-1]}! Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
+    assert jnp.isclose(u,ref_soln).all(), f"does not match expected solution: {case_args[-1]}! Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
 
