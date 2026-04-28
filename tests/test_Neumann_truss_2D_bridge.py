@@ -6,6 +6,8 @@ import jax.extend
 # from jax_smi import initialise_tracking
 # initialise_tracking()
 
+pytestmark = pytest.mark.truss
+
 if __name__ == "__main__":
     print(jax.extend.backend.get_backend().platform)
 

@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
 
+pytestmark = pytest.mark.truss
+
 if __name__ == '__main__':
     print(jax.extend.backend.get_backend().platform)
 

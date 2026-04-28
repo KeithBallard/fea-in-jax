@@ -5,6 +5,8 @@ import jax.extend
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_enable_x64", True)
 
+pytestmark = pytest.mark.truss
+
 if __name__ == "__main__":
     print(jax.extend.backend.get_backend().platform)
 
@@ -131,4 +133,3 @@ def test_truss_2D_bar(case_args):
         f"does not match expected solution: {case_args[-1]}! "
         f"Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
     )
-

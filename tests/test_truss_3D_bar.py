@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
 
+pytestmark = pytest.mark.truss
+
 if __name__ == "__main__":
     print(jax.extend.backend.get_backend().platform)
 # from jax_smi import initialise_tracking
@@ -157,4 +159,3 @@ def run_truss_3D_bar(n_elements: int, end_point: tuple, stretch_factors: tuple, 
 def test_truss_3D_bar(case_args) -> None:
     u, ref_soln = run_truss_3D_bar(*case_args)
     assert jnp.isclose(u,ref_soln).all(), f"does not match expected solution: {case_args[-1]}! Absolute error is {np.max(np.abs(u-ref_soln)):.3e}."
-

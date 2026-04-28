@@ -1,8 +1,11 @@
 from helper import *
+import pytest
 import matplotlib.pyplot as plt
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_enable_x64", True)
 import jax.extend
+
+pytestmark = pytest.mark.truss
 
 if __name__ == '__main__':
     print(jax.extend.backend.get_backend().platform)
@@ -104,4 +107,3 @@ def run_truss_2element_Neumann():
 def test_truss_2element_Neumann():
     u, ref_soln = run_truss_2element_Neumann()
     assert jnp.allclose(u,ref_soln,rtol=1e-11,atol=1e-12)
-

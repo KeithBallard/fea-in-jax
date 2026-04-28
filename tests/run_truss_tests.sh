@@ -4,6 +4,7 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${TMPDIR:-/tmp}}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/matplotlib}"
 
 pytest \
+  -m truss \
   test_truss_1D.py \
   test_truss_2D_bar.py \
   test_Neumann_truss_2D_bridge.py \
