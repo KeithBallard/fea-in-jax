@@ -21,7 +21,7 @@ with poll_cpu() as cpu_poll:
         cpu_poll.restart()
 
         # Read in the mesh
-        mesh = meshio.read(get_mesh('polygon_mesh_0.5.vtk'))
+        mesh = meshio.read(get_mesh("polygon_mesh_0.5.vtk"))
         cpu_poll.mark_event("Finished reading mesh")
 
         # Refine the mesh
@@ -47,8 +47,7 @@ with poll_cpu() as cpu_poll:
             quadrature_type=QuadratureType.default,
             quadrature_degree=2,
         )
-        Q = get_quadrature(fe_type=fe_type)[0].shape[0] # number of quadrature points
-        
+        Q = get_quadrature(fe_type=fe_type)[0].shape[0]  # number of quadrature points
 
         print(f"Beginning subdivision {n_subdivisions} w/ # of DoFs {F}")
 
@@ -56,14 +55,16 @@ with poll_cpu() as cpu_poll:
         boundary_points = find_tri_mesh_boundary_verts(cells=cells)
         # An array that is (# of constrainted DoFs, 2) with structure [point index][component of solution]
         # Constrain very boundary point to have a random displacement
-        dirichlet_bcs = np.zeros((U * boundary_points.shape[0], 2), dtype=np.uint64)
-        for i in range(boundary_points.shape[0]):
-            for j in range(U):
-                dirichlet_bcs[U * i + j, 0] = i
-                dirichlet_bcs[U * i + j, 1] = j
-        # print(f'dirichlet_bcs: {dirichlet_bcs}')
+        dirichlet_bcs = [
+            DirichletBC(index=i, component=j, value=1.0)
+            for j in range(U)
+            for i in range(boundary_points.shape[0])
+        ]
         # Values of the Dirichlet boundary conditions matching 'dirichlet_bcs'
-        dirichlet_values = 0.001 * np.random.rand(dirichlet_bcs.shape[0])
+        dirichlet_values = 0.001 * np.random.rand(len(dirichlet_bcs))
+        for i in range(len(dirichlet_bcs)):
+            dirichlet_bcs[i].value = dirichlet_values[i]
+        # print(f'dirichlet_bcs: {dirichlet_bcs}')
 
         # Set material properties at the quadrature point level randomly seeded such that
         # E = [90e9, 100e9] and nu = 0.25
@@ -78,7 +79,7 @@ with poll_cpu() as cpu_poll:
                 n_dofs_per_basis=U,
                 connectivity_en=batch_cells,
                 constitutive_model=elastic_isotropic,
-                material_params_eqm=batch_mat_params_eqm
+                material_params=batch_mat_params_eqm,
             )
             for batch_cells, batch_mat_params_eqm in zip(
                 np.array_split(cells, n_batches, axis=0),
@@ -91,22 +92,20 @@ with poll_cpu() as cpu_poll:
         # Solve the boundary value problem
         result, times, jit_time, first_call_time, peak_memory = timeit(
             f=solve_bvp,
-            fixed_kwargs={
-                "element_residual_func": linear_elasticity_residual,
-                "vertices_vd": points,
-                "element_batches": element_batches,
-                "u_0_g": jnp.zeros(shape=(V * U)),
-                "dirichlet_bcs": dirichlet_bcs,
-                "dirichlet_values": dirichlet_values,
-                "solver_options": SolverOptions(linear_solve_type=LinearSolverType.CG_JAXOPT),
-                "profile_memory": True,
-            },
             generated_kwargs={},
             time_jit=True,
             n_calls=n_subsequent_calls,
             timings_figure_filepath="",
             return_timing=True,
             return_memory=True,
+            # args passed along to solve_bvp
+            element_residual_func=linear_elasticity_residual,
+            vertices_vd=points,
+            element_batches=element_batches,
+            u_0_g=jnp.zeros(shape=(V * U)),
+            boundary_conditions=dirichlet_bcs,
+            solver_options=SolverOptions(linear_solve_type=LinearSolverType.CG_JAXOPT),
+            profile_memory=True,
         )
 
         cpu_poll.mark_event(f"Finished {n_subsequent_calls} solve_bvp calls")
@@ -152,7 +151,9 @@ fig.savefig(get_output(f"test_fea_scaling_{case_name}.png"), dpi=300)
 plt.clf()
 for device, data in solve_memory.items():
     np.save(
-        get_output(f"test_fea_scaling_{case_name}_{device.replace(':','_')}_peak_memory_y"),
+        get_output(
+            f"test_fea_scaling_{case_name}_{device.replace(':','_')}_peak_memory_y"
+        ),
         data,
     )
     plt.scatter(n_dofs_2, data, label=f"{device}")

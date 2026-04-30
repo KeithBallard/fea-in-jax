@@ -1,7 +1,6 @@
 import threading
 import psutil
 import time
-import matplotlib.pyplot as plt
 import numpy as np
 import subprocess
 import re
@@ -13,13 +12,21 @@ from typing import Callable
 import statistics
 from contextlib import contextmanager
 from functools import wraps
+from pathlib import Path
+
+
+def _get_pyplot():
+    import matplotlib.pyplot as plt
+
+    return plt
 
 
 def pack(**kwargs):
     """
     Helper to transform arguments into a dictionary. Use with the timeit function.
     """
-    return kwargs 
+    return kwargs
+
 
 def timer(time_jit=False, n_calls=1):
     def timer_decorator(f):
@@ -72,9 +79,9 @@ def timeit(
     time_jit: bool = True,
     n_calls: int = 1,
     timings_figure_filepath: str = "",
-    return_timing = False,
-    return_memory = False,
-    **fixed_kwargs
+    return_timing=False,
+    return_memory=False,
+    **fixed_kwargs,
 ):
     """
     Times a function call, possibly timing just-in-time compilation on the first call and takes
@@ -144,7 +151,7 @@ def timeit(
         )
 
     if timings_figure_filepath != "":
-        import matplotlib.pyplot as plt
+        plt = _get_pyplot()
 
         # times.insert(0, first_call_time)
         plt.plot(times, label="calls")
@@ -166,11 +173,12 @@ def timeit(
     if return_timing:
         to_return.extend([times, jit_time, first_call_time])
     if return_memory:
-        to_return.extend([memory_usage.get('peak_memory', {})])
+        to_return.extend([memory_usage.get("peak_memory", {})])
     return tuple(to_return)
 
 
 def get_colors_from_cmap(cmap_name, num_colors):
+    plt = _get_pyplot()
     cmap = plt.get_cmap(cmap_name)
     return [cmap(x) for x in np.linspace(0, 1, num_colors)]
 
@@ -222,6 +230,7 @@ class CPUPoll:
         time.sleep(1.2 * self.sampling_time)
 
     def get_plt_fig(self, ax=None, legend=True):
+        plt = _get_pyplot()
 
         if ax is None:
             fig, ax1 = plt.subplots()
@@ -405,6 +414,8 @@ def start_memory_profile(label=None):
 
     # define the profile output file
     prof_file_0 = os.path.join("prof", f"memory_profile_{label}_0.prof")
+
+    Path(prof_file_0).parent.mkdir(parents=True, exist_ok=True)
 
     # write memory profile
     jax.profiler.save_device_memory_profile(prof_file_0)

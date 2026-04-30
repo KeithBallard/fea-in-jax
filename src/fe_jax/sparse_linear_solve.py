@@ -16,19 +16,23 @@ from enum import Enum, auto
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from functools import partial
+import logging
 
 from .utils import debug_print
 from .sparse_matrix import *
+from .constraint_system import ConstraintSystem
 from .solve_cg import cg as cg_w_info
+
+_logger = logging.getLogger(__name__)
 
 try:
     import jaxopt.linear_solve
 
     JAXOPT_AVAILABLE = True
-    print("'jaxopt' imported, adding related solvers.")
+    _logger.info("'jaxopt' imported, adding related solvers.")
 except ImportError:
     JAXOPT_AVAILABLE = False
-    print("'jaxopt' was not imported successfully, skipping related solvers.")
+    _logger.info("'jaxopt' was not imported successfully, skipping related solvers.")
 
 try:
     import cupy as cp
@@ -36,10 +40,10 @@ try:
     import cupyx.scipy.sparse.linalg as cplinalg
 
     CUPY_AVAILABLE = True
-    print("'cupy' imported, adding related solvers/preconditioners.")
+    _logger.info("'cupy' imported, adding related solvers/preconditioners.")
 except ImportError:
     CUPY_AVAILABLE = False
-    print(
+    _logger.info(
         "'cupy' was not imported successfully, skipping related solvers/preconditioners."
     )
 
@@ -51,25 +55,26 @@ try:
         CUPY_AVAILABLE
     ), "The interface to `pyamgx` requires `cupy`, which was not available. Please install `cupy`."
     PYAMX_AVAILABLE = True
-    print("'pyamgx' imported, adding related solvers/preconditioners.")
+    _logger.info("'pyamgx' imported, adding related solvers/preconditioners.")
 except ImportError:
     PYAMX_AVAILABLE = False
-    print(
+    _logger.info(
         "'pyamgx' was not imported successfully, skipping related solvers/preconditioners."
     )
-
 
 try:
     import pypardiso
 
-    assert (
-        CUPY_AVAILABLE
-    ), "The interface to `pypardiso` requires `cupy`, which was not available. Please install `cupy`."
+    if not CUPY_AVAILABLE:
+        _logger.warning(
+            "Warning: 'pypardiso' was imported successfully, but 'cupy' is not available. 'pypardiso' will not be available."
+        )
+    assert CUPY_AVAILABLE
     PYPARDISO_AVAILABLE = True
-    print("'pypardiso' imported, adding related solvers.")
+    _logger.info("'pypardiso' imported, adding related solvers.")
 except ImportError:
     PYPARDISO_AVAILABLE = False
-    print("'pypardiso' was not imported successfully, skipping related solvers.")
+    _logger.info("'pypardiso' was not imported successfully, skipping related solvers.")
 
 
 class PreconditionerType(Enum):
@@ -204,12 +209,12 @@ def linear_solve(
     residual: Residual,
     jacobian: Optional[Jacobian],
     jacobian_diagonal: Optional[JacobianDiagonl],
-    dirichlet_dofs: jnp.ndarray,
-    dirichlet_values: jnp.ndarray,
+    constraints: ConstraintSystem,
     solver_options: SolverOptions,
     solver_info_0: SolverResultInfo,
     check_consistency: bool,
     x_0: jnp.ndarray,
+    f_ext,
     *args,
     **kwargs,
 ) -> tuple[jnp.ndarray, SolverResultInfo]:
@@ -229,7 +234,7 @@ def linear_solve(
             J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
         else:
             J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
-                jacobian.function(x, *args, **kwargs), dirichlet_dofs
+                jacobian.function(x, *args, **kwargs), constraints.dep_dofs
             )
     else:
         J_w_dirichlet = None
@@ -242,7 +247,7 @@ def linear_solve(
         else:
             diag_J_w_dirichlet = (
                 lambda x: jacobian_diagonal.function(x, *args, **kwargs)
-                .at[dirichlet_dofs]
+                .at[constraints.dep_dofs]
                 .set(1.0)
             )
     else:
@@ -284,12 +289,10 @@ def linear_solve(
                 jnp.isclose(J_vp(v), J_w_dirichlet(x_0) @ v).all(),
             )
 
+    # breakpoint()
+    # R_0 = f_ext.apply_to_residual(R_w_dirichlet(x_0))
     R_0 = R_w_dirichlet(x_0)
-    delta_x = (
-        jnp.zeros_like(R_0)
-        .at[dirichlet_dofs]
-        .set(dirichlet_values - x_0[dirichlet_dofs])
-    )
+    delta_x = constraints.apply_to_solution(jnp.zeros_like(R_0))
     info = solver_info_0
 
     match solver_options.linear_precond_type:
@@ -524,7 +527,7 @@ def linear_solve(
     # problem but even the jaxopt solvers will only get close for large problems.
     # Consequently, overwrite the values directly to ensure the BCs are right, even though the
     # residual may increase.
-    delta_x = delta_x.at[dirichlet_dofs].set(dirichlet_values - x_0[dirichlet_dofs])
+    delta_x = constraints.apply_to_delta_solution(delta_x,x_0)
 
     return delta_x, info
 
@@ -863,8 +866,8 @@ if PYPARDISO_AVAILABLE:
     import cupy as cp
 
     def __pypardiso_solve_impl(
-        #ctx, <- buffer_callback implementation
-        #out, <- buffer_callback implementation
+        # ctx, <- buffer_callback implementation
+        # out, <- buffer_callback implementation
         A_data: jnp.ndarray,
         A_row: jnp.ndarray,
         A_col: jnp.ndarray,
@@ -873,13 +876,16 @@ if PYPARDISO_AVAILABLE:
         A_scipy = scipy.sparse.csr_matrix(
             (
                 cp.asarray(A_data).get().astype(np.float64),
-                (cp.asarray(A_row).get().astype(np.int32), cp.asarray(A_col).get().astype(np.int32)),
+                (
+                    cp.asarray(A_row).get().astype(np.int32),
+                    cp.asarray(A_col).get().astype(np.int32),
+                ),
             ),
             shape=(b.shape[0], b.shape[0]),
         )
         b_np = cp.asarray(b).get().astype(np.float64)
         result = pypardiso.spsolve(A_scipy, b_np)
-        #cp.asarray(out)[...] = cp.asarray(result) <- buffer_callback implementation
+        # cp.asarray(out)[...] = cp.asarray(result) <- buffer_callback implementation
         return result
 
     @jax.jit
@@ -893,10 +899,12 @@ if PYPARDISO_AVAILABLE:
         Fortunately, for this solver, the cost is low since the solve is performed on the host anyway.
         """
         result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        return jax.pure_callback(__pypardiso_solve_impl, result_info, A.data, A.row, A.col, b)
-        #result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        #jax.debug.print("A.row - jax {}", A.row)
-        #jax.debug.print("A.data - jax {}", A.data)
-        #return buffer_callback(
+        return jax.pure_callback(
+            __pypardiso_solve_impl, result_info, A.data, A.row, A.col, b
+        )
+        # result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+        # jax.debug.print("A.row - jax {}", A.row)
+        # jax.debug.print("A.data - jax {}", A.data)
+        # return buffer_callback(
         #    __pypardiso_solve_impl, result_info, command_buffer_compatible=False
-        #)(A.data, A.row, A.col, b)
+        # )(A.data, A.row, A.col, b)

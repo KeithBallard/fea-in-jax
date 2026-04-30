@@ -43,17 +43,21 @@ def uniform_quad_grid(n_rows: int, n_cols: int, bbox):
         x = i / float(n_rows - 1) * (x_stop - x_start) + x_start
         for j in range(n_cols):
             y = j / float(n_cols - 1) * (y_stop - y_start) + y_start
-            V[i * n_cols + j, :] = [x, y, 0.]
+            V[i * n_cols + j, :] = [x, y, 0.0]
 
     # Create the faces matrix (defining quadrilaterals)
     F = np.zeros(((n_rows - 1) * (n_cols - 1), 4), dtype=np.int64)
     for i in range(n_rows - 1):
         for j in range(n_cols - 1):
-            f = i *  (n_cols - 1) +  j
-            F[f, :] = [i * n_cols + j, (i + 1) * n_cols + j, i * n_cols + j + 1, (i + 1) * n_cols + j + 1]
+            f = i * (n_cols - 1) + j
+            F[f, :] = [
+                i * n_cols + j,
+                (i + 1) * n_cols + j,
+                i * n_cols + j + 1,
+                (i + 1) * n_cols + j + 1,
+            ]
 
     return (V, F)
-
 
 
 @njit
@@ -84,7 +88,7 @@ def uniform_tri_grid(n_rows: int, n_cols: int):
         x = i / float(n_rows - 1) * (x_stop - x_start) + x_start
         for j in range(n_cols):
             y = j / float(n_cols - 1) * (y_stop - y_start) + y_start
-            V[i * n_cols + j, :] = [x, y, 0.]
+            V[i * n_cols + j, :] = [x, y, 0.0]
 
     # Create the faces matrix (defining triangles)
     F = np.zeros((2 * (n_rows - 1) * (n_cols - 1), 3), dtype=np.int64)
@@ -103,11 +107,11 @@ def uniform_tri_grid(n_rows: int, n_cols: int):
 
 
 def refine_tri_mesh(
-    vertices: np.ndarray[Any, np.dtype[np.float32|np.float64]],
+    vertices: np.ndarray[Any, np.dtype[np.float32 | np.float64]],
     cells: np.ndarray[Any, np.dtype[np.uint64]],
     number_of_subdivisions: int,
 ) -> tuple[
-    np.ndarray[Any, np.dtype[np.float32|np.float64]],
+    np.ndarray[Any, np.dtype[np.float32 | np.float64]],
     np.ndarray[Any, np.dtype[np.uint64]],
 ]:
     """
@@ -129,7 +133,7 @@ def refine_tri_mesh(
 
 
 def find_tri_mesh_boundary_verts(
-    cells: np.ndarray[Any, np.dtype[np.uint64]] | np.ndarray[Any, np.dtype[np.int64]]
+    cells: np.ndarray[Any, np.dtype[np.uint64]] | np.ndarray[Any, np.dtype[np.int64]],
 ) -> np.ndarray[Any, np.dtype[np.uint64]] | np.ndarray[Any, np.dtype[np.int64]]:
     """
     Given a triangle mesh, this finds the vertices along the boundary of the mesh.
@@ -150,36 +154,38 @@ def find_tri_mesh_boundary_verts(
 
 @njit
 def mesh_to_jax_helper(
-    vertices: np.ndarray[Any, np.dtype[np.float32|np.float64]],
+    vertices: np.ndarray[Any, np.dtype[np.float32 | np.float64]],
     cells: np.ndarray[Any, np.dtype[np.uint64]],
-) -> np.ndarray[Any, np.dtype[np.float32|np.float64]]:
-    x_n = np.zeros((cells.shape[0], cells.shape[1], 2), dtype=vertices.dtype)
+) -> np.ndarray[Any, np.dtype[np.float32 | np.float64]]:
+    x_end = np.zeros(
+        (cells.shape[0], cells.shape[1], vertices.shape[1]), dtype=vertices.dtype
+    )
     for i in range(cells.shape[0]):
         for j in range(cells.shape[1]):
-            # Note: [0:2] is added to ignore z-coordinate if one exists.
-            x_n[i, j] = vertices[cells[i, j]][0:2]
-    return x_n
+            x_end[i, j] = vertices[cells[i, j]]
+    return x_end
 
 
 # @timer()
 def mesh_to_jax(
-    vertices: np.ndarray[Any, np.dtype[np.float32|np.float64]],
+    vertices: np.ndarray[Any, np.dtype[np.float32 | np.float64]],
     cells: np.ndarray[Any, np.dtype[np.uint64]],
 ) -> jnp.ndarray:
     """
-    Given the vertex coordinates and list of triangles as a triplet of vertex indices,
-    this returns a 3-dimensional arry describing the triangles in terms of vertices.
+    Given the vertex coordinates and list of connectivity as a list of vertex indices,
+    this returns a 3-dimensional arry describing the elements in terms of vertices.
 
     Returns
     -------
     ```
-    [ [[t0_v0_x, t0_v0_y],
-        [t0_v1_x, t0_v1_y],
-        [t0_v2_x, t0_v2_y]],
+    For example, in 2D the result would be:
+    [ [[e0_v0_x, e0_v0_y],
+        [e0_v1_x, e0_v1_y],
+        [e0_v2_x, e0_v2_y]],
         ...,
-        [[tN_v0_x, tN_v0_y],
-        [tN_v1_x, tN_v1_y],
-        [tN_v2_x, tN_v2_y]]
+        [[eN_v0_x, eN_v0_y],
+        [eN_v1_x, eN_v1_y],
+        [eN_v2_x, eN_v2_y]]
     ]
     ```
     """
@@ -228,7 +234,10 @@ def build_row_ind(
 def build_col_ind_and_data(
     csr_row_ind: np.ndarray[Any, np.dtype[np.uint64]],
     cells: np.ndarray[Any, np.dtype[np.uint64]],
-) -> tuple[np.ndarray[Any, np.dtype[np.uint64]], np.ndarray[Any, np.dtype[np.float32|np.float64]]]:
+) -> tuple[
+    np.ndarray[Any, np.dtype[np.uint64]],
+    np.ndarray[Any, np.dtype[np.float32 | np.float64]],
+]:
     """
     Create column offset map and data for the compressed sparse row (CSR) format.
     """
@@ -285,7 +294,7 @@ def mesh_to_sparse_assembly_map(
     )
 
 
-@partial(jax.jit,static_argnames = ["E","V","U"])
+@partial(jax.jit, static_argnames=["E", "V", "U"])
 def transform_global_to_element_node(
     assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int, V: int, U: int
 ):
@@ -328,9 +337,7 @@ def transform_element_node_to_global_unraveled_nosum(
     """
     TODO document
     """
-    n_cell_per_vert = (
-        assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
-    )
+    n_cell_per_vert = assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
     v_g = jsparse.bcsr_dot_general(
         assembly_map,
         v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
@@ -355,10 +362,9 @@ def transform_element_node_to_global_unraveled_sum(
     )
     return v_g.reshape(np.prod(v_g.shape))
 
+
 @jax.jit
-def transform_element_node_to_global_sum(
-    assembly_map: jsparse.BCSR, v_en: jnp.ndarray
-):
+def transform_element_node_to_global_sum(assembly_map: jsparse.BCSR, v_en: jnp.ndarray):
     """
     TODO document
     """
@@ -367,7 +373,8 @@ def transform_element_node_to_global_sum(
         v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
         dimension_numbers=(((2,), (1,)), ((0,), (0,))),
     )
-    return v_g.reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
+    return v_g.reshape(np.prod(v_g.shape) // v_en.shape[2], v_en.shape[2])
+
 
 @jax.jit
 def transform_element_node_to_global_nosum(
@@ -376,12 +383,12 @@ def transform_element_node_to_global_nosum(
     """
     TODO document
     """
-    n_cell_per_vert = (
-        assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
-    )
+    n_cell_per_vert = assembly_map.indptr[0, 1:] - assembly_map.indptr[0, :-1]
     v_g = jsparse.bcsr_dot_general(
         assembly_map,
         v_en.reshape(1, v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
         dimension_numbers=(((2,), (1,)), ((0,), (0,))),
     )
-    return (v_g / n_cell_per_vert[jnp.newaxis, :, jnp.newaxis]).reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
+    return (v_g / n_cell_per_vert[jnp.newaxis, :, jnp.newaxis]).reshape(
+        np.prod(v_g.shape) // v_en.shape[2], v_en.shape[2]
+    )
