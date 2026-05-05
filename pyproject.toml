@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fea-in-jax"
+version = "0.1.0"
+description = "Finite element analysis utilities written in JAX."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "fenics-basix",
+    "flax",
+    "jax",
+    "jaxopt",
+    "libigl",
+    "matplotlib",
+    "meshio",
+    "mpi4py",
+    "numba",
+    "numpy",
+    "psutil",
+    "scipy",
+]
+
+[project.optional-dependencies]
+cuda12 = [
+    "cupy-cuda12x",
+    "jax[cuda12]",
+]
+cuda13 = [
+    "cupy-cuda13x",
+    "jax[cuda13]",
+]
+dev = [
+    "pytest",
+]
+pardiso = [
+    "pypardiso",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+norecursedirs = [
+    "amgx",
+    "exploring_jax",
+    "prnn",
+    "test_amgx",
+    "test_mpi4py_cuda",
+    "test_petsc",
+]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+]
+markers = [
+    "truss: truss-element regression and integration tests",
+    "slow: tests that are too expensive for the default fast suite",
+]
