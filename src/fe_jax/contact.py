@@ -1,312 +1,264 @@
 from jax import numpy as jnp
-from dataclasses import dataclass
 from typing import Callable
 
-@dataclass
-class ContactPointPair:
+
+def _validate_point_cloud(
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    points = jnp.asarray(points)
+    point_fiber_ids = jnp.asarray(point_fiber_ids)
+
+    if points.ndim != 2 or points.shape[1] not in (1, 2, 3):
+        raise ValueError("points must have shape (N_total, 1), (N_total, 2), or (N_total, 3)")
+    if point_fiber_ids.ndim != 1:
+        raise ValueError("point_fiber_ids must have shape (N_total,)")
+    if point_fiber_ids.shape[0] != points.shape[0]:
+        raise ValueError("point_fiber_ids must have the same leading dimension as points")
+
+    return points, point_fiber_ids
+
+
+def merge_contact_cells(
+    distinct_contacts: jnp.ndarray,
+    n_distinct: jnp.ndarray,
+    self_contacts: jnp.ndarray,
+    n_self: jnp.ndarray,
+    capacity: int,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
-    A node-node contact candidate between two fibers.
-
-    This records a pair of nodes whose Euclidean distance is within the
-    contact radius. Fibers may have different numbers of nodes.
-    """
-    # Which two fibers are considered in this contact.
-    fiber_i: int
-    fiber_j: int
-
-    node_i: int # nodal value in fiber i of the contact
-    node_j: int # nodal value in fiber j on the contact
-
-    x_i: jnp.ndarray # coordinate position of the contact point in fiber i
-    x_j: jnp.ndarray # coordinate position of the contact point in fiber j
-
-    distance: float # Distance between x_i and x_j
-
-def duplicate_filtering(
-        contacts: list[ContactPointPair]
-) -> list[ContactPointPair]:
-    """
-    Remove duplicate contact candidates from a contact list.
-
-    This function depends on the contact pairs already being canonicalized.
-    In particular, it assumes each ContactPointPair satisfies the invariant
-
-        (fiber_i, node_i) <= (fiber_j, node_j)
-
-    lexicographically. Under that assumption, two contact records that refer
-    to the same pair of endpoints will have the same key and the later one will
-    be discarded.
+    Merge fixed-capacity distinct-contact and self-contact buffers.
 
     Parameters
     ----------
-    contacts : list[ContactPointPair]
-        Contact candidates, preferably already canonicalized.
+    distinct_contacts : jnp.ndarray
+        Array of shape (capacity, 2). Rows after n_distinct may be sentinel rows.
+    n_distinct : jnp.ndarray
+        Number of valid rows in distinct_contacts.
+    self_contacts : jnp.ndarray
+        Array of shape (capacity, 2). Rows after n_self may be sentinel rows.
+    n_self : jnp.ndarray
+        Number of valid rows in self_contacts.
+    capacity : int
+        Output capacity.
 
     Returns
     -------
-    list[ContactPointPair]
-        Contacts with repeated endpoint pairs removed, preserving the first
-        occurrence of each unique pair.
+    contact_cells : jnp.ndarray
+        Array of shape (capacity, 2) containing merged contact pairs.
+        Unused rows are filled with 0.
+    n_contact : jnp.ndarray
+        Number of valid merged contact rows, clipped to capacity.
+    overflowed : jnp.ndarray
+        True if n_distinct + n_self exceeds capacity.
     """
-    contacts_filtered = []
-    keys = set()
-    for contact in contacts:
-        assert (contact.fiber_i, contact.node_i) <= (contact.fiber_j, contact.node_j), f"duplicate_filtering expects canonicalized contacts, but got ({contact.fiber_i},{contact.node_i}) > ({contact.fiber_j,contact.node_j}). \n After detection, run values through canonicalize_contact_point_pair."
-        key = (
-            contact.fiber_i,
-            contact.node_i,
-            contact.fiber_j,
-            contact.node_j
-        )
-        if key not in keys:
-            keys.add(key)
-            contacts_filtered.append(contact)
-    return contacts_filtered
+    distinct_contacts = jnp.asarray(distinct_contacts)
+    self_contacts = jnp.asarray(self_contacts)
+    n_distinct = jnp.asarray(n_distinct, dtype=jnp.int32)
+    n_self = jnp.asarray(n_self, dtype=jnp.int32)
+
+    idx = jnp.arange(capacity, dtype=jnp.int32)
+
+    n_distinct_valid = jnp.minimum(n_distinct, capacity)
+    n_self_valid = jnp.minimum(n_self, capacity)
+
+    distinct_valid = idx < n_distinct_valid
+    self_valid = idx < n_self_valid
+
+    all_rows = jnp.concatenate([distinct_contacts, self_contacts], axis=0)
+    all_valid = jnp.concatenate([distinct_valid, self_valid], axis=0)
+
+    sentinel = jnp.zeros_like(all_rows)
+    all_rows = jnp.where(all_valid[:, None], all_rows, sentinel)
+
+    # Stable sort: valid rows first, invalid rows last.
+    order = jnp.argsort(~all_valid, stable=True)
+    merged = all_rows[order]
+
+    n_total = n_distinct + n_self
+    n_contact = jnp.minimum(n_total, capacity)
+    overflowed = n_total > capacity
+
+    contact_cells = merged[:capacity]
+
+    return contact_cells, n_contact, overflowed
 
 def distinct_fiber_node2node(
-    fiber_x: int,
-    x_nd: jnp.ndarray,
-    fiber_y: int,
-    y_nd: jnp.ndarray,
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    capacity: int,
     radius: float
-) -> list[ContactPointPair]:
+) -> tuple[jnp.ndarray,int,bool]:
     """
-    Find node-node contact candidates between two distinct fibers.
+    Find node-node contact candidates between distinct fibers.
 
     Parameters
     ----------
-    fiber_x: int
-        index for the first fiber
-    x_nd : array-like, shape (n_x, 3)
-        Node coordinates for the first fiber.
-    fiber_y: int
-        index for the second fiber
-    y_nd : array-like, shape (n_y, 3)
-        Node coordinates for the second fiber.
+    points : array-like, shape (N_total, D)
+        Global point coordinates. ``D`` may be 1, 2, or 3.
+    point_fiber_ids : array-like, shape (N_total,)
+        Fiber id for each point.
+    capacity : int
+        Fixed output buffer capacity.
     radius : float
         Contact threshold. A node pair is considered in contact if the
         distance between them is <= radius.
 
     Returns
     -------
-    list[ContactPointPair]
-        All node pairs within the threshold.
+    tuple[jnp.ndarray, int, bool]
+        ``distinct_contacts`` with shape ``(capacity, 2)``, the number of valid
+        distinct contacts, and an overflow flag.
     """
-    x_nd = jnp.asarray(x_nd)
-    y_nd = jnp.asarray(y_nd)
+    points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if x_nd.ndim != 2 or x_nd.shape[1] != 3:
-        raise ValueError(f"Fiber x_nd must have shape (n_nodes, 3)")
-    if y_nd.ndim != 2 or y_nd.shape[1] != 3:
-        raise ValueError(f"Fiber y_nd must have shape (n_nodes, 3)")
+    if capacity <= 0:
+        raise ValueError("capacity must be positive")
 
+    N = points.shape[0]
 
-    Nx = len(x_nd)
-    Ny = len(y_nd)
-    contacts = []
-    for i in range(Nx):
-        for j in range(Ny):
-            dist = jnp.linalg.norm(x_nd[i,:]-y_nd[j,:])
-            if dist<=radius:
-                contacts.append(
-                    canonicalize_contact_point_pair(
-                        fiber_i  = fiber_x,
-                        fiber_j  = fiber_y,
-                        node_i   = i,
-                        node_j   = j,
-                        x_i      = x_nd[i,:],
-                        x_j      = y_nd[j,:],
-                        distance = dist,
-                    )
-                )
-    return contacts
+    d = points[:,None,:] - points[None,:,:]
+    dist = jnp.linalg.norm(d,axis=-1)
+
+    distinct_fiber_mask = point_fiber_ids[:,None] != point_fiber_ids[None,:]
+    upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1)
+    dist_mask = dist <= radius
+
+    pair_mask = distinct_fiber_mask & upper_mask & dist_mask
+
+    i_idx,j_idx = jnp.nonzero(pair_mask, size=capacity, fill_value = 0)
+    distinct_contacts = jnp.stack([i_idx,j_idx], axis=1)
+    n_distinct = jnp.sum(pair_mask).astype(jnp.int32)
+
+    return distinct_contacts, n_distinct, n_distinct > capacity
 
 def self_fiber_node2node(
-    fiber_x: int,
-    x_nd: jnp.ndarray,
-    radius: float
-) -> list[ContactPointPair]:
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    capacity: int,
+    radius: float,
+    adjacency_block: int
+) -> tuple[jnp.ndarray,int,bool]:
     """
-    Find node-node self-contact candidates within a single fiber.
-    This is a first-pass self-contact detector for a fiber represented as an
-    ordered sequence of nodes. It checks all node pairs (i, j) with j > i and
-    reports a pair only if:
-
-    - the Euclidean distance between the two nodes is <= radius, and
-    - the arc length along the fiber between the two nodes is sufficiently
-      large to avoid detecting neighboring or near-neighboring nodes as contact
-
-    The arc length is computed from the ordered node sequence by summing the
-    lengths of the segments between node indices i and j.
+    Find node-node self-contact candidates within each fiber.
 
     Parameters
     ----------
-    fiber_x : int
-        Index of the fiber.
-    x_nd : array-like, shape (n_nodes, 3)
-        Node coordinates for the fiber. Nodes must be ordered along the fiber.
+    points : array-like, shape (N_total, D)
+        Global point coordinates. ``D`` may be 1, 2, or 3.
+    point_fiber_ids : array-like, shape (N_total,)
+        Fiber id for each point.
+    capacity : int
+        Fixed output buffer capacity.
     radius : float
         Contact threshold. A node pair is considered in contact if its Euclidean
-        distance is <= radius and its arc length separation is sufficiently large.
+        distance is <= radius.
+    adjacency_block : int
+        Minimum index separation to allow self-contact. A value of ``k``
+        excludes pairs with ``j - i <= k``.
 
     Returns
     -------
-    list[ContactPointPair]
-        All non-neighboring self-contact candidates on the fiber.
+    tuple[jnp.ndarray, int, bool]
+        ``self_contacts`` with shape ``(capacity, 2)``, the number of valid
+        self-contact pairs, and an overflow flag.
     """
-    x_nd = jnp.asarray(x_nd)
+    points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if x_nd.ndim != 2 or x_nd.shape[1] != 3:
-        raise ValueError(f"Fiber x_nd must have shape (n_nodes, 3)")
+    if capacity <= 0:
+        raise ValueError("capacity must be positive")
+    if adjacency_block < 0:
+        raise ValueError("adjacency_block must be nonnegative")
 
-    Nx = len(x_nd)
-    contacts = []
-    for i in range(Nx):
-        for j in range(i+1,Nx):
-            dist = jnp.linalg.norm(x_nd[i,:]-x_nd[j,:])
-            diff = x_nd[i+1:j+1] - x_nd[i:j]
-            arclength = jnp.linalg.norm(diff,axis=1).sum()
-            if dist<=radius and arclength>2*radius:
-                contacts.append(
-                    canonicalize_contact_point_pair(
-                        fiber_i  = fiber_x,
-                        fiber_j  = fiber_x,
-                        node_i   = i,
-                        node_j   = j,
-                        x_i      = x_nd[i,:],
-                        x_j      = x_nd[j,:],
-                        distance = dist,
-                    )
-                   )
-    return contacts
+    N = points.shape[0]
 
-def canonicalize_contact_point_pair(
-    fiber_i: int,
-    fiber_j: int,
-    node_i: int,
-    node_j: int,
-    x_i: jnp.ndarray,
-    x_j: jnp.ndarray,
-    distance
-) -> ContactPointPair:
-    """
-    Canonicalize a ContactPointPair to ensure (fiber_i,node_i)<=(fiber_j,node_j) lexicographically.
-        - if fiber_i != fiber_j, the smaller fiber index comes first.
-        - if fiber_i == fiber_j, the smaller node sets the order.
+    d = points[:,None,:] - points[None,:,:]
+    dist = jnp.linalg.norm(d,axis=-1)
 
-    Parameters
-    ----------
-    fiber_i: int
-        The first fiber listed in the contact
-    fiber_j: int
-        The second fiber listed in the contact
-    node_i: int
-        nodal value in fiber i of the contact
-    node_j: int
-        nodal value in fiber j of the contact
-    x_i: jnp.ndarray
-        coordinate position of the contact point in fiber i
-    x_j: jnp.ndarray
-        coordinate position of the contact point in fiber j
-    distance: float
-        distance between x_i and x_j
+    same_fiber_mask = point_fiber_ids[:,None] == point_fiber_ids[None,:]
+    upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1 + adjacency_block)
+    dist_mask = (dist <= radius)
 
-    Returns
-    -------
-    ContactPointPair
-        canonicalized ((fiber_i,node_i)<=(fiber_j,node_j)) contact
-    """
-    A = (fiber_i, node_i)
-    B = (fiber_j, node_j)
+    pair_mask = same_fiber_mask & upper_mask & dist_mask
 
-    if A<B:
-        # Keep the order the same
-        return ContactPointPair(
-            fiber_i  = fiber_i,
-            fiber_j  = fiber_j,
-            node_i   = node_i,
-            node_j   = node_j,
-            x_i      = x_i,
-            x_j      = x_j,
-            distance = distance,
-        )
-    else:
-        # Swap the order
-        return ContactPointPair(
-            fiber_i  = fiber_j,
-            fiber_j  = fiber_i,
-            node_i   = node_j,
-            node_j   = node_i,
-            x_i      = x_j,
-            x_j      = x_i,
-            distance = distance,
-        )
+    i_idx,j_idx = jnp.nonzero(pair_mask, size=capacity, fill_value = 0)
+    self_contacts = jnp.stack([i_idx,j_idx], axis=1)
+    n_self = jnp.sum(pair_mask).astype(jnp.int32)
+
+    return self_contacts, n_self, n_self > capacity
 
 def contact_batch(
-    fibers: list[jnp.ndarray],
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    n_contact: int,
+    adjacency_block: int,
     radius: float,
     distinct_fiber_fn: Callable = distinct_fiber_node2node,
     self_fiber_fn: Callable = self_fiber_node2node,
-) -> list[ContactPointPair]:
+) -> jnp.ndarray:
     """
-    Find node-node contact candidates across a collection of fibers.
+    Find node-node contact candidates from global point and fiber-id arrays.
 
     This function orchestrates contact detection by calling one detector for
-    distinct-fiber pairs and one detector for self-contact on each fiber.
-    The detector functions are injected so alternative contact algorithms can
-    be tested without modifying this routine. The returned contact pairs are
-    expected to be canonicalized ContactPointPair objects, because duplicate
-    filtering depends on the canonical endpoint ordering invariant.
+    distinct-fiber pairs and one detector for self-contact. The detector
+    functions are injected so alternative contact algorithms can be tested
+    without modifying this routine. The returned contact cells are fixed-size
+    ``(n_contact, 2)`` integer arrays with ``[-1, -1]`` sentinel rows for
+    unused capacity.
 
     Parameters
     ----------
-    fibers : sequence of arrays, each shape (n_i, 3)
-        Collection of fibers. Each fiber may have a different number of nodes.
+    points : array-like, shape (N_total, D)
+        Global point coordinates. ``D`` may be 1, 2, or 3.
+    point_fiber_ids : array-like, shape (N_total,)
+        Fiber id for each point.
+    n_contact : int
+        Fixed output capacity for the merged contact buffer.
     radius : float
         Contact threshold. A node pair is considered in contact if the
         distance between them is <= radius.
     distinct_fiber_fn : Callable
         Function used to detect contact between two different fibers.
-        It must accept two fiber indices, two node-coordinate arrays, and
-        radius, and return a list[ContactPointPair].
+        It must accept ``points``, ``point_fiber_ids``, ``capacity``, and
+        ``radius``, and return ``(contacts, n_valid, overflowed)``.
     self_fiber_fn : Callable
         Function used to detect self-contact within a single fiber.
-        It must accept one fiber index, one node-coordinate array, and radius,
-        and return a list[ContactPointPair].
+        It must accept ``points``, ``point_fiber_ids``, ``capacity``, ``radius``,
+        and ``adjacency_block``, and return ``(contacts, n_valid, overflowed)``.
 
     Returns
     -------
-    list[ContactPointPair]
-        Flat list of all contact candidates across all fibers, with duplicate
-        endpoint pairs removed.
+    jnp.ndarray
+        Fixed-capacity ``(n_contact, 2)`` array of contact node pairs. Unused
+        rows are filled with 0.
     """
-    normalized_fibers = [jnp.asarray(fiber) for fiber in fibers]
+    points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    for idx, fiber in enumerate(normalized_fibers):
-        if fiber.ndim != 2 or fiber.shape[1] != 3:
-            raise ValueError(f"Fiber {idx} must have shape (n_nodes, 3)")
+    if n_contact <= 0:
+        raise ValueError("n_contact must be positive")
 
-    # I am using F for number of fibers
-    F = len(normalized_fibers)
-    contacts = []
-    # Find and add contact points between distinct fibers
-    for i in range(F):
-        for j in range(i+1,F):
-            contacts += distinct_fiber_fn(
-                fiber_x = i,
-                x_nd    = normalized_fibers[i],
-                fiber_y = j,
-                y_nd    = normalized_fibers[j],
-                radius  = radius
-            )
-    # Find and add self contact points for on a single fiber
-    for i in range(F):
-        contacts += self_fiber_fn(
-            fiber_x = i,
-            x_nd    = normalized_fibers[i],
-            radius  = radius
-        )
-    return duplicate_filtering(contacts)
+    distinct_cells, n_distinct,distinct_overflow_flag = distinct_fiber_fn(
+        points = points,
+        point_fiber_ids = point_fiber_ids,
+        capacity = n_contact,
+        radius = radius
+    )
+    self_cells, n_self,self_overflow_flag = self_fiber_fn(
+        points = points,
+        point_fiber_ids = point_fiber_ids,
+        capacity = n_contact,
+        radius = radius,
+        adjacency_block = adjacency_block
+    )
+    # overflow_flag = (n_total<n_self+n_distinct) & distinct_overflow_flag & self_overflow_flag
+    contact_cells, n_contacts, overflowed = merge_contact_cells(
+        distinct_contacts=distinct_cells,
+        n_distinct=n_distinct,
+        self_contacts=self_cells,
+        n_self = n_self,
+        capacity = n_contact
+    )
+    return contact_cells, overflowed
