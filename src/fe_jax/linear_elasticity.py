@@ -261,7 +261,7 @@ def linear_elasticity_residual(
 
 @jax.tree_util.Partial
 @jax.jit
-def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd=jnp.ndarray):
+def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd: jnp.ndarray):
     """
     A constitive relation for a an elastic truss.
 
@@ -285,39 +285,42 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
     stress_dd = E*A*eps_a*P_dd
-    # if eps_dd.shape[1] == 1:  # 1D
-    #     C_ss = jnp.array([[E*A/L]])
-    # elif eps_dd.shape[1] == 2:  # 2D
-    #     C_ss =  jnp.array(
-    #         # THIS IS WRONG!, should be 3x3, not sure where I went wrong.
-    #         [
-    #             [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1]],
-    #             [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1]],
-    #             [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1]],
-    #             [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1]],
-    #         ]
-    #     )
-    # elif eps_dd.shape[1] == 3:  # 3D
-    #     C_ss = (E*A/L**3)*jnp.array(
-    #         [
-    #             [ dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2],-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2]],
-    #             [ dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2],-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2]],
-    #             [ dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2],-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2]],
-    #             [-dx_d[0]*dx_d[0],-dx_d[0]*dx_d[1],-dx_d[0]*dx_d[2], dx_d[0]*dx_d[0], dx_d[0]*dx_d[1], dx_d[0]*dx_d[2]],
-    #             [-dx_d[0]*dx_d[1],-dx_d[1]*dx_d[1],-dx_d[1]*dx_d[2], dx_d[0]*dx_d[1], dx_d[1]*dx_d[1], dx_d[1]*dx_d[2]],
-    #             [-dx_d[0]*dx_d[2],-dx_d[1]*dx_d[2],-dx_d[2]*dx_d[2], dx_d[0]*dx_d[2], dx_d[1]*dx_d[2], dx_d[2]*dx_d[2]],
-    #         ]
-    #     )
-    # else:
-    #     raise RuntimeError("Strain must be 1D, 2D or 3D to compute stress.")
 
-    # stress_dd = rank2_voigt_to_tensor(
-    #     jnp.einsum("si,i->s", C_ss, rank2_tensor_to_voigt(eps_dd))
-    # )
     return stress_dd, jnp.array([])  # no internal state
 
+@jax.jit
+def elastic_contact_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd: jnp.ndarray):
+    """
+    A constitive relation for contact elements which is basically
+    an elastic truss where stiffness depends on the length.
 
-@jax.tree_util.Partial
+    Parameters
+    ----------
+    eps_dd       : infinitesimal strain tensor, ndarray[float, (D, D)]
+    material_params_m : material parameters, ndarray[float, (M,)]
+    x_nd          : coordinates, ndarray[float, (N, D)]
+
+    Returns
+    -------
+    stress_dd  : stress tensor, ndarray[float, (D, D)]
+    """
+
+    E_max = material_params_m[..., 0]
+    A = material_params_m[..., 1]
+    radius = material_params_m[..., 2]
+    E = lambda d: jnp.where(d<radius,E_max - E_max/radius*d,0)
+    # Assumes the node number puts the endpoints as first and last entries. 
+    dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
+    l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
+
+    P_dd = jnp.outer(l_d,l_d)
+    eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
+    stress_dd = E(jnp.linalg.norm(dx_d))*A*eps_a*P_dd
+    E_act = E(jnp.linalg.norm(dx_d))
+    jax.debug.print("E = {E}",E=E_act)
+
+    return stress_dd, jnp.array([])  # no internal state
+
 @jax.jit
 def linear_truss_residual(
     u_nd: jnp.ndarray,
@@ -353,7 +356,7 @@ def linear_truss_residual(
     def lstsq_one(J_pd,dphi_dxi_np):
         dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
         return dphi_dx_nd.T
-    
+
     dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)

@@ -2,6 +2,7 @@ from helper import *
 import pytest
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_disable_jit", True)
 import jax.extend
 # from jax_smi import initialise_tracking
 # initialise_tracking()
