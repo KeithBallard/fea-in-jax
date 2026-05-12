@@ -91,7 +91,7 @@ def write_two_fiber_mesh_with_deformation(points, cells, point_ids, cell_ids, u_
 
     mesh.write(filename)
 
-def make_fiber(n_elements: int, x0: tuple, xN: tuple, fiber_id: int, cell_shift: int):
+def make_single_fiber(n_elements: int, x0: tuple, xN: tuple, fiber_id: int, cell_shift: int):
     points=np.vstack((
         np.linspace(x0[0],xN[0],n_elements+1),
         np.linspace(x0[1],xN[1],n_elements+1),
@@ -102,9 +102,7 @@ def make_fiber(n_elements: int, x0: tuple, xN: tuple, fiber_id: int, cell_shift:
     cell_ids = np.array([[fiber_id]]*len(cells))
     return points,cells,fiber_ids,cell_ids
 
-def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
-    """
-    """
+def make_fibers(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     point_blocks = []
     cell_blocks = []
     point_id_blocks = []
@@ -113,7 +111,7 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     vertex_offset = 0
 
     for fiber_id, (n_el, x0, xN) in enumerate(zip(n_elements, X0, XN)):
-        points_i, cells_i, point_ids_i, cell_ids_i = make_fiber(
+        points_i, cells_i, point_ids_i, cell_ids_i = make_single_fiber(
             n_elements=n_el,
             x0=x0,
             xN=xN,
@@ -131,18 +129,30 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     points = np.vstack(point_blocks)
     cells = np.vstack(cell_blocks)
     point_ids = np.vstack(point_id_blocks).reshape(-1)
-    cell_ids = np.vstack(cell_id_blocks)
+    cell_ids = np.vstack(cell_id_blocks).reshape(-1)
 
+    return points, cells, point_ids, cell_ids
+
+
+def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
+    """
+    """
+    points, cells, point_ids, cell_ids = make_fibers(
+        n_elements=n_elements,
+        X0=X0,
+        XN=XN
+    )
+    search_radius = 0.5
     contact_cells,_ = contact.contact_batch(
         points = points,
         point_fiber_ids = point_ids,
-        n_contact=500,
+        n_contact=21,
         adjacency_block = 50,
-        radius = 1)
+        radius = search_radius)
 
     cells = np.vstack((cells, contact_cells))
     cells = np.array(cells,dtype=np.int64)
-    cell_ids = np.hstack((cell_ids.reshape(-1),(np.max(cell_ids)+1)*np.ones(contact_cells.shape[0])))
+    cell_ids = np.hstack((cell_ids,(np.max(cell_ids)+1)*np.ones(contact_cells.shape[0])))
     cell_ids = np.array(cell_ids,dtype=np.int64)
 
 
@@ -164,7 +174,8 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([1e9,1])  # E
+    matrix_mat_params = jnp.array([1e9,1])  # E, A
+    matrix_mat_params_contact = jnp.array([4e9,1,search_radius])  # E_max, A, R
 
     # Set boundary conditions.
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
@@ -182,23 +193,26 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
             DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0]+n_elements[1]+1, value=0.0),
             DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0]+n_elements[1]+1, value=0.0),
             DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0]+n_elements[1]+1, value=0.0),
-            # NeumannBC(bc_type=BCType.NODE, component=0, index=int(n_elements/2), value=force_vector[0]),
-            # NeumannBC(bc_type=BCType.NODE, component=1, index=int(n_elements/2), value=force_vector[1]),
-            # NeumannBC(bc_type=BCType.NODE, component=2, index=int(n_elements/2), value=force_vector[2]),
         ]
     )
-    for i in bcs:
-        print(i)
 
     # Example using the truss elements
     element_batches_truss = [
         ElementBatch(
             fe_type=fe_type,
             n_dofs_per_basis=3,
-            connectivity_en=cells,
+            connectivity_en=cells[cell_ids != 2],
             constitutive_model=elastic_truss,
             material_params=matrix_mat_params,
+        ),
+        ElementBatch(
+            fe_type=fe_type,
+            n_dofs_per_basis=3,
+            connectivity_en=cells[cell_ids == 2],
+            constitutive_model=elastic_contact_truss,
+            material_params=matrix_mat_params_contact,
         )
+
     ]
 
     u_truss, residual_truss, element_batches_truss = solve_bvp(
@@ -210,8 +224,8 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=50,
-            linear_max_iter=50,
+            nonlinear_max_iter=2,
+            linear_max_iter=2,
         ),
         plot_convergence=False,
     )

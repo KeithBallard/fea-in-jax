@@ -18,6 +18,33 @@ def _validate_point_cloud(
 
     return points, point_fiber_ids
 
+def count_initial_contacts(
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    radius: float,
+    adjacency_block: int
+) -> int:
+    points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
+    if radius <= 0:
+        raise ValueError("radius must be positive")
+
+    N = points.shape[0]
+
+    d = points[:,None,:] - points[None,:,:]
+    dist = jnp.linalg.norm(d,axis=-1)
+    dist_mask = dist <= radius
+
+    distinct_fiber_mask = point_fiber_ids[:,None] != point_fiber_ids[None,:]
+    distinct_upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1)
+    distinct_pair_mask = distinct_fiber_mask & distinct_upper_mask & dist_mask
+    n_distinct = jnp.sum(distinct_pair_mask).astype(jnp.int32)
+
+    self_fiber_mask = point_fiber_ids[:,None] == point_fiber_ids[None,:]
+    self_upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1 + adjacency_block)
+    self_pair_mask = self_fiber_mask & self_upper_mask & dist_mask
+    n_self = jnp.sum(self_pair_mask).astype(jnp.int32)
+
+    return n_distinct + n_self
 
 def merge_contact_cells(
     distinct_contacts: jnp.ndarray,
@@ -261,4 +288,9 @@ def contact_batch(
         n_self = n_self,
         capacity = n_contact
     )
+    if overflowed:
+        raise OverflowError(
+            f"contact buffer capacity {n_contact} was too small; "
+            "increase capacity and retry"
+        )
     return contact_cells, overflowed
