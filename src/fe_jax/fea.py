@@ -876,8 +876,7 @@ def preprocess_bvp(
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
-    *,
-    contact_config: ContactPreprocessConfig | None = None
+    contact_batch_generator: Callable | None = None,
 ):
     """
     Converts information from a user-facing format to a JAX-ameniable format.
@@ -899,31 +898,9 @@ def preprocess_bvp(
     U = element_batches[0].n_dofs_per_basis
     n_total_dofs = V * U + sum(global_values)
 
-    if contact_config is not None:
-        capacity = contact.count_initial_contacts(
-            points          = vertices_vd,
-            point_fiber_ids = contact_config.vertices_fiber_ids,
-            adjacency_block = contact_config.self_adjacency_block,
-            radius          = contact_config.radius
-        )
-        capacity = max(2*int(capacity),1)
-        contact_cells,overflowed = contact.contact_batch(
-            points          = vertices_vd,
-            point_fiber_ids = contact_config.vertices_fiber_ids,
-            capacity        = capacity,
-            adjacency_block = contact_config.self_adjacency_block,
-            radius          = contact_config.radius
-        )
-        contact_batch = ElementBatch(
-            fe_type            = contact_config.fe_type,
-            n_dofs_per_basis   = element_batches[0].n_dofs_per_basis,
-            connectivity_en    = contact_cells,
-            constitutive_model = contact_config.constitutive_model,
-            material_params    = contact_config.material_params,
-        )
-        element_batches=[*element_batches,contact_batch]
-    else:
-        print("Contact is not being applied, contact_config not passed to solve_bvp.")
+    if contact_batch_generator is not None:
+        element_batches=[*element_batches, contact_batch_generator()]
+        # TODO print how many contact elements were discovered
 
     # Validate input
     assert D <= 3
@@ -1017,8 +994,7 @@ def solve_bvp(
     solver_options: SolverOptions = SolverOptions(),
     plot_convergence: bool = False,
     profile_memory: bool = False,
-    *,
-    contact_config: ContactPreprocessConfig | None = None,
+    contact_batch_generator: Callable | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
     """
     Solve a boundary value problem for static linear elasticity.

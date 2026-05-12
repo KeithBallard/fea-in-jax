@@ -281,7 +281,6 @@ def run_threeFiberTow(n_elements: list[int], X0: list[tuple], XN: list[tuple],se
     print("# DoFs = ", F)
 
     # Set material properties
-    matrix_mat_params = jnp.array([1e9,1])  # E, A
     matrix_mat_params_contact = jnp.array([4e9,1,search_radius])  # E_max, A, R
 
     # Set boundary conditions.

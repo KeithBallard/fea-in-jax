@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import jax
 from jax import numpy as jnp
 import numpy as np
 from typing import Callable
@@ -13,6 +14,7 @@ class ContactPreprocessConfig:
     material_params: jnp.ndarray
     fe_type: FiniteElementType
     constitutive_model: Callable
+    contact_pair_generator: Callable
 
 def _validate_point_cloud(
     points: jnp.ndarray,
@@ -124,12 +126,12 @@ def merge_contact_cells(
 
     return contact_cells, n_contact, overflowed
 
+@jax.jit
 def distinct_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    capacity: int,
     radius: float
-) -> tuple[jnp.ndarray,int,bool]:
+) -> jnp.ndarray:
     """
     Find node-node contact candidates between distinct fibers.
 
@@ -139,8 +141,6 @@ def distinct_fiber_node2node(
         Global point coordinates. ``D`` may be 1, 2, or 3.
     point_fiber_ids : array-like, shape (N_total,)
         Fiber id for each point.
-    capacity : int
-        Fixed output buffer capacity.
     radius : float
         Contact threshold. A node pair is considered in contact if the
         distance between them is <= radius.
@@ -154,8 +154,6 @@ def distinct_fiber_node2node(
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
 
     N = points.shape[0]
 
@@ -168,19 +166,18 @@ def distinct_fiber_node2node(
 
     pair_mask = distinct_fiber_mask & upper_mask & dist_mask
 
-    i_idx,j_idx = jnp.nonzero(pair_mask, size=capacity, fill_value = 0)
+    i_idx, j_idx = jnp.nonzero(pair_mask)
     distinct_contacts = jnp.stack([i_idx,j_idx], axis=1)
-    n_distinct = jnp.sum(pair_mask).astype(jnp.int32)
 
-    return distinct_contacts, n_distinct, n_distinct > capacity
+    return distinct_contacts
 
+@jax.jit
 def self_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    capacity: int,
     radius: float,
     adjacency_block: int
-) -> tuple[jnp.ndarray,int,bool]:
+) -> jnp.ndarray:
     """
     Find node-node self-contact candidates within each fiber.
 
@@ -190,8 +187,6 @@ def self_fiber_node2node(
         Global point coordinates. ``D`` may be 1, 2, or 3.
     point_fiber_ids : array-like, shape (N_total,)
         Fiber id for each point.
-    capacity : int
-        Fixed output buffer capacity.
     radius : float
         Contact threshold. A node pair is considered in contact if its Euclidean
         distance is <= radius.
@@ -208,8 +203,6 @@ def self_fiber_node2node(
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
     if adjacency_block < 0:
         raise ValueError("adjacency_block must be nonnegative")
 
@@ -224,16 +217,14 @@ def self_fiber_node2node(
 
     pair_mask = same_fiber_mask & upper_mask & dist_mask
 
-    i_idx,j_idx = jnp.nonzero(pair_mask, size=capacity, fill_value = 0)
+    i_idx,j_idx = jnp.nonzero(pair_mask)
     self_contacts = jnp.stack([i_idx,j_idx], axis=1)
-    n_self = jnp.sum(pair_mask).astype(jnp.int32)
 
-    return self_contacts, n_self, n_self > capacity
+    return self_contacts
 
 def contact_batch(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    capacity: int,
     adjacency_block: int,
     radius: float,
     distinct_fiber_fn: Callable = distinct_fiber_node2node,
@@ -255,8 +246,6 @@ def contact_batch(
         Global point coordinates. ``D`` may be 1, 2, or 3.
     point_fiber_ids : array-like, shape (N_total,)
         Fiber id for each point.
-    capacity : int
-        Fixed output capacity for the merged contact buffer.
     radius : float
         Contact threshold. A node pair is considered in contact if the
         distance between them is <= radius.
@@ -278,33 +267,16 @@ def contact_batch(
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
 
-    distinct_cells, n_distinct,distinct_overflow_flag = distinct_fiber_fn(
+    distinct_cells = distinct_fiber_fn(
         points = points,
         point_fiber_ids = point_fiber_ids,
-        capacity = capacity,
         radius = radius
     )
-    self_cells, n_self,self_overflow_flag = self_fiber_fn(
+    self_cells = self_fiber_fn(
         points = points,
         point_fiber_ids = point_fiber_ids,
-        capacity = capacity,
         radius = radius,
         adjacency_block = adjacency_block
     )
-    # overflow_flag = (n_total<n_self+n_distinct) & distinct_overflow_flag & self_overflow_flag
-    contact_cells, n_contacts, overflowed = merge_contact_cells(
-        distinct_contacts=distinct_cells,
-        n_distinct=n_distinct,
-        self_contacts=self_cells,
-        n_self = n_self,
-        capacity = capacity
-    )
-    if overflowed:
-        raise OverflowError(
-            f"contact buffer capacity {capacity} was too small; "
-            "increase capacity and retry"
-        )
-    return np.asarray(contact_cells,dtype=np.uint64), overflowed
+    return np.concatenate([distinct_cells, self_cells])
