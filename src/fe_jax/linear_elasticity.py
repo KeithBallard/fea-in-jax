@@ -312,8 +312,6 @@ def elastic_contact_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
     stress_dd = E(jnp.linalg.norm(dx_d))*A*eps_a*P_dd
-    E_act = E(jnp.linalg.norm(dx_d))
-    jax.debug.print("E = {E}",E=E_act)
 
     return stress_dd, jnp.array([])  # no internal state
 
