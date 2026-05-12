@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
 
-pytestmark = pytest.mark.truss
 
 if __name__ == "__main__":
     print(jax.extend.backend.get_backend().platform)
@@ -47,6 +46,70 @@ def export_to_latex_table(points, u_truss, filename="table.txt"):
 
         f.write("\\end{tabular}\n")
 
+def write_two_fiber_mesh_with_deformation_opt(
+    points,
+    cells,
+    point_ids,
+    cell_ids,
+    filename,
+    u_truss=None,
+):
+    """
+    Write a VTK mesh for the fibers.
+
+    If u_truss is None, write only the undeformed geometry.
+    If u_truss is provided, write both undeformed and deformed geometry.
+
+    ParaView can color by:
+      - point_data["fiber_id"]
+      - cell_data["fiber_id"]
+      - cell_data["state"] if deformation is written
+    """
+    points = np.asarray(points, dtype=np.float64)
+    cells = np.asarray(cells, dtype=np.uint64)
+    point_ids = np.asarray(point_ids, dtype=np.int64).reshape(-1)
+    cell_ids = np.asarray(cell_ids, dtype=np.int64).reshape(-1)
+
+    if u_truss is None:
+        mesh = meshio.Mesh(
+            points=points,
+            cells=[("line", cells)],
+            point_data={
+                "fiber_id": point_ids,
+            },
+            cell_data={
+                "fiber_id": [cell_ids],
+            },
+        )
+    else:
+        u_truss = np.asarray(u_truss, dtype=np.float64).reshape(points.shape)
+        V = points.shape[0]
+        E = cells.shape[0]
+
+        points_vis = np.vstack((points, points + u_truss))
+
+        mesh = meshio.Mesh(
+            points=points_vis,
+            cells=[
+                ("line", cells),
+                ("line", cells + V),
+            ],
+            point_data={
+                "fiber_id": np.concatenate((point_ids, point_ids)),
+            },
+            cell_data={
+                "fiber_id": [
+                    cell_ids,
+                    cell_ids,
+                ],
+                "state": [
+                    np.zeros(E, dtype=np.int64),
+                    np.ones(E, dtype=np.int64),
+                ],
+            },
+        )
+
+    mesh.write(filename)
 def write_two_fiber_mesh_with_deformation(points, cells, point_ids, cell_ids, u_truss, filename):
     """
     Write a single VTK mesh containing both:
@@ -108,6 +171,8 @@ def make_fibers(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     point_id_blocks = []
     cell_id_blocks = []
 
+    bcs = [] 
+
     vertex_offset = 0
 
     for fiber_id, (n_el, x0, xN) in enumerate(zip(n_elements, X0, XN)):
@@ -123,6 +188,12 @@ def make_fibers(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
         cell_blocks.append(cells_i)
         point_id_blocks.append(point_ids_i)
         cell_id_blocks.append(cell_ids_i)
+        bcs += [
+            DirichletBC(bc_type=BCType.NODE, component=c, index=i, value=0.0) for c in (0,1,2) for i in (vertex_offset+0,vertex_offset+n_el)
+        ]
+        bcs += [
+            NeumannBC(bc_type=BCType.NODE, component=0, index=vertex_offset + int(n_el/2) + s, value=1E6) for s in (-1,0,1)
+        ]
 
         vertex_offset += points_i.shape[0]
 
@@ -131,16 +202,52 @@ def make_fibers(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     point_ids = np.vstack(point_id_blocks).reshape(-1)
     cell_ids = np.vstack(cell_id_blocks).reshape(-1)
 
-    return points, cells, point_ids, cell_ids
+    return points, cells, point_ids, cell_ids, bcs
+
+def visualizeContacts(points,point_ids,cells,cell_ids,search_radius,filename):
+    capacity = contact.count_initial_contacts(
+        points = points,
+        point_fiber_ids = point_ids,
+        adjacency_block = 50,
+        radius = search_radius
+    )
+    print(f"Initially, {int(capacity)} contacts found with search radius {search_radius}")
+    contact_cells,_ = contact.contact_batch(
+        points = points,
+        point_fiber_ids = point_ids,
+        capacity=int(capacity),
+        adjacency_block = 50,
+        radius = search_radius
+    )
+
+    cells = np.vstack((cells, contact_cells))
+    cells = np.array(cells,dtype=np.int64)
+    cell_ids = np.hstack((cell_ids,(np.max(cell_ids)+1)*np.ones(contact_cells.shape[0])))
+    cell_ids = np.array(cell_ids,dtype=np.int64)
+    write_two_fiber_mesh_with_deformation_opt(
+        points=points,
+        cells=cells,
+        point_ids=point_ids,
+        cell_ids=cell_ids,
+        filename=get_output(filename + "_init.vtk"),
+    )
 
 
-def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],search_radius: float):
+def run_threeFiberTow(n_elements: list[int], X0: list[tuple], XN: list[tuple],search_radius: float):
     """
     """
-    points, cells, point_ids, cell_ids = make_fibers(
+    points, cells, point_ids, cell_ids, bcs = make_fibers(
         n_elements=n_elements,
         X0=X0,
         XN=XN
+    )
+    visualizeContacts(
+        points=points,
+        point_ids=point_ids,
+        cells=cells,
+        cell_ids=cell_ids,
+        search_radius=search_radius,
+        filename = "threeFiberTow"
     )
     # search_radius = 0.5
     # contact_cells,_ = contact.contact_batch(
@@ -179,22 +286,22 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
 
     # Set boundary conditions.
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
-    bcs = (
-        [
-            DirichletBC(bc_type=BCType.NODE, component=0, index=0         , value=-0.1),
-            DirichletBC(bc_type=BCType.NODE, component=1, index=0         , value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=2, index=0         , value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0], value=-0.1),
-            DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0], value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0], value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0]+1, value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0]+1, value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0]+1, value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0]+n_elements[1]+1, value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0]+n_elements[1]+1, value=0.0),
-            DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0]+n_elements[1]+1, value=0.0),
-        ]
-    )
+    # bcs = (
+    #     [
+    #         DirichletBC(bc_type=BCType.NODE, component=0, index=0         , value=-0.1),
+    #         DirichletBC(bc_type=BCType.NODE, component=1, index=0         , value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=2, index=0         , value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0], value=-0.1),
+    #         DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0], value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0], value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0]+1, value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0]+1, value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0]+1, value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=0, index=n_elements[0]+n_elements[1]+1, value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=1, index=n_elements[0]+n_elements[1]+1, value=0.0),
+    #         DirichletBC(bc_type=BCType.NODE, component=2, index=n_elements[0]+n_elements[1]+1, value=0.0),
+    #     ]
+    # )
 
     # Example using the truss elements
     element_batches_truss = [
@@ -238,7 +345,7 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
             point_ids=point_ids,
             cell_ids=cell_ids,
             u_truss=u_truss,
-            filename=get_output("two_fibers_preprocess_contact.vtk"),
+            filename=get_output("threeFiberTow_preprocess_contact.vtk"),
         )
         #     ],
     # return u_truss, points, cells

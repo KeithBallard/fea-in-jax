@@ -1,6 +1,18 @@
+from dataclasses import dataclass
 from jax import numpy as jnp
+import numpy as np
 from typing import Callable
 
+from fe_jax.basis_quadrature import FiniteElementType
+
+@dataclass
+class ContactPreprocessConfig:
+    vertices_fiber_ids: np.ndarray
+    radius: float
+    self_adjacency_block: int
+    material_params: jnp.ndarray
+    fe_type: FiniteElementType
+    constitutive_model: Callable
 
 def _validate_point_cloud(
     points: jnp.ndarray,
@@ -27,6 +39,8 @@ def count_initial_contacts(
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
+    if adjacency_block <= 0:
+        raise ValueError("adjacency_block must be positive")
 
     N = points.shape[0]
 
@@ -219,12 +233,12 @@ def self_fiber_node2node(
 def contact_batch(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    n_contact: int,
+    capacity: int,
     adjacency_block: int,
     radius: float,
     distinct_fiber_fn: Callable = distinct_fiber_node2node,
     self_fiber_fn: Callable = self_fiber_node2node,
-) -> jnp.ndarray:
+) -> np.ndarray:
     """
     Find node-node contact candidates from global point and fiber-id arrays.
 
@@ -232,7 +246,7 @@ def contact_batch(
     distinct-fiber pairs and one detector for self-contact. The detector
     functions are injected so alternative contact algorithms can be tested
     without modifying this routine. The returned contact cells are fixed-size
-    ``(n_contact, 2)`` integer arrays with ``[-1, -1]`` sentinel rows for
+    ``(capacity, 2)`` integer arrays with ``[0, 0]`` sentinel rows for
     unused capacity.
 
     Parameters
@@ -241,7 +255,7 @@ def contact_batch(
         Global point coordinates. ``D`` may be 1, 2, or 3.
     point_fiber_ids : array-like, shape (N_total,)
         Fiber id for each point.
-    n_contact : int
+    capacity : int
         Fixed output capacity for the merged contact buffer.
     radius : float
         Contact threshold. A node pair is considered in contact if the
@@ -257,26 +271,26 @@ def contact_batch(
 
     Returns
     -------
-    jnp.ndarray
-        Fixed-capacity ``(n_contact, 2)`` array of contact node pairs. Unused
+    :p.ndarray
+        Fixed-capacity ``(capacity, 2)`` array of contact node pairs. Unused
         rows are filled with 0.
     """
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
     if radius <= 0:
         raise ValueError("radius must be positive")
-    if n_contact <= 0:
-        raise ValueError("n_contact must be positive")
+    if capacity <= 0:
+        raise ValueError("capacity must be positive")
 
     distinct_cells, n_distinct,distinct_overflow_flag = distinct_fiber_fn(
         points = points,
         point_fiber_ids = point_fiber_ids,
-        capacity = n_contact,
+        capacity = capacity,
         radius = radius
     )
     self_cells, n_self,self_overflow_flag = self_fiber_fn(
         points = points,
         point_fiber_ids = point_fiber_ids,
-        capacity = n_contact,
+        capacity = capacity,
         radius = radius,
         adjacency_block = adjacency_block
     )
@@ -286,11 +300,11 @@ def contact_batch(
         n_distinct=n_distinct,
         self_contacts=self_cells,
         n_self = n_self,
-        capacity = n_contact
+        capacity = capacity
     )
     if overflowed:
         raise OverflowError(
-            f"contact buffer capacity {n_contact} was too small; "
+            f"contact buffer capacity {capacity} was too small; "
             "increase capacity and retry"
         )
-    return contact_cells, overflowed
+    return np.asarray(contact_cells,dtype=np.uint64), overflowed
