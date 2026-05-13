@@ -899,7 +899,7 @@ def preprocess_bvp(
     n_total_dofs = V * U + sum(global_values)
 
     if contact_batch_generator is not None:
-        element_batches=[*element_batches, contact_batch_generator()]
+        element_batches=[*element_batches, *contact_batch_generator()]
         # TODO print how many contact elements were discovered
 
     # Validate input
@@ -1036,14 +1036,14 @@ def solve_bvp(
         jacobian_nnz,
         element_residual_func,
         f_ext
-    )= preprocess_bvp(
+    ) = preprocess_bvp(
         vertices_vd=vertices_vd,
         element_batches=element_batches,
         element_residual_func=element_residual_func,
         boundary_conditions=boundary_conditions,
         multipoint_constraints=multipoint_constraints,
         global_values=global_values,
-        contact_config=contact_config,
+        contact_batch_generator=contact_batch_generator,
     )
 
     n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
