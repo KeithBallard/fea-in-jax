@@ -307,7 +307,7 @@ def run_threeFiberTow(n_elements: list[int], X0: list[tuple], XN: list[tuple],se
         ElementBatch(
             fe_type=fe_type,
             n_dofs_per_basis=3,
-            connectivity_en=cells[cell_ids != 2],
+            connectivity_en=cells,
             constitutive_model=elastic_truss,
             material_params=matrix_mat_params,
         )
