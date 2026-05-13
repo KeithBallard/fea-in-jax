@@ -126,7 +126,6 @@ def merge_contact_cells(
 
     return contact_cells, n_contact, overflowed
 
-@jax.jit
 def distinct_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
@@ -171,7 +170,6 @@ def distinct_fiber_node2node(
 
     return distinct_contacts
 
-@jax.jit
 def self_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
