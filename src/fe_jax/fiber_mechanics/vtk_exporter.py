@@ -58,7 +58,7 @@ def to_vtk_polydata(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkPolyData:
             radii_array.SetNumberOfComponents(1)
             radii_array.SetNumberOfTuples(line_polydata.GetNumberOfPoints())
             radii_array.Fill(vtms_obj.get_diameter(bundle_i) / 2.0)
-            
+
             line_polydata.GetPointData().AddArray(tow_id_array)
             line_polydata.GetPointData().AddArray(fiber_id_array)
             line_polydata.GetPointData().AddArray(material_id_array)
@@ -77,7 +77,7 @@ def to_vtk_tubes(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkTubeFilter:
     """
     Creates a VTK Tube Filter to render fibers as volumetric tubes.
 
-    Uses the radius attribute attached to the polydata (via `to_vtk_polydata`) 
+    Uses the radius attribute attached to the polydata (via `to_vtk_polydata`)
     to vary the tube thickness.
 
     Parameters
