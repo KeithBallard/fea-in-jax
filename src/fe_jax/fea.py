@@ -1335,7 +1335,7 @@ def preprocess_bvp(
     n_total_dofs = V * U + sum(global_values)
 
     if contact_batch_generator is not None:
-        element_batches=[*element_batches, contact_batch_generator()]
+        element_batches=[*element_batches, *contact_batch_generator()]
         # TODO print how many contact elements were discovered
 
     # Validate input
@@ -1498,7 +1498,7 @@ def solve_bvp(
             boundary_conditions=boundary_conditions,
             multipoint_constraints=multipoint_constraints,
             global_values=global_values,
-            contact_config=contact_config,
+            contact_batch_generator=contact_batch_generator,
         )
     )
 
