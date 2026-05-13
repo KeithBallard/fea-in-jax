@@ -23,7 +23,7 @@ def make_single_fiber(
     return points, cells, fiber_ids, cell_ids
 
 
-def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
+def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannForce):
     point_blocks = []
     cell_blocks = []
     point_id_blocks = []
@@ -56,7 +56,7 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
                 bc_type=BCType.NODE,
                 component=0,
                 index=vertex_offset + int(n_el / 2) + s,
-                value=1e6,
+                value=NeumannForce,
             )
             for s in (-1, 0, 1)
         ]
@@ -69,39 +69,68 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple]):
     cell_ids = np.vstack(cell_id_blocks).reshape(-1)
 
     fiber_offsets = np.concatenate(
-        [np.cumsum([b.shape[0] for b in point_blocks]), [points.shape[0]]]
+        [
+            [0],
+            np.cumsum([b.shape[0] for b in point_blocks])
+        ]
+    )
+    # fiber_offsets = np.cumsum([b.shape[0] for b in point_blocks])
+    bundle = VTMSBundle(
+        name="test",
+        n_fibers=len(n_elements),
+        material_id=np.array([0]),
+        diameter=np.array([0.1]),
+        points=points,
+        fiber_offsets=fiber_offsets,
+        # bundle_offsets=np.array([0, fiber_offsets.shape[0]]),
     )
     fabric = VTMSFabric(
         name="test",
         material_ids=np.array([0]),
-        diameters=np.array([1.0]),
+        diameters=np.array([0.1]),
         points=points,
         fiber_offsets=fiber_offsets,
         bundle_offsets=np.array([0, fiber_offsets.shape[0]]),
     )
-
-    return fabric, bcs
-
+    return fabric,bcs
 
 def run_threeFiberTow(
-    n_elements: list[int], X0: list[tuple], XN: list[tuple], search_radius: float
+    n_elements: list[int],
+    X0: list[tuple],
+    XN: list[tuple],
+    contact_search_radius: float,
+    NeumannForce
 ):
     """ """
-    fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN)
+    fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
+    write_vtk(fabric,get_output("threeFiberTow_pre.vtk"))
 
-    print("test")
+    E = 1e9
+    A = (fabric.diameters[0]/2)**2*np.pi
+    print(f"EA/N = {E*A/NeumannForce}")
     u, _, _ = solve_fiber_mechanics_bvp(
         fabric=fabric,
-        materials=[VTMSFiberMaterial(id=0, E=1e9, A=1.0)],
+        materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
         boundary_conditions=bcs,
-        contact_search_radius=0.25,
+        contact_search_radius=contact_search_radius,
+        solver_options=SolverOptions(
+            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            # linear_precond_type=PreconditionerType.JACOBI,
+            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            nonlinear_max_iter=100,
+            linear_max_iter=4,
+        ),
     )
-    print(u)
+    u = u.reshape((-1,3))
+    fabric.points = fabric.points + u
+    write_vtk(fabric,get_output("threeFiberTow_post.vtk"))
 
+    return u,fabric
 
-run_threeFiberTow(
+u,f = run_threeFiberTow(
     n_elements=[10, 10, 10],
     X0=[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
     XN=[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-    search_radius=0.25,
+    contact_search_radius=0.25,
+    NeumannForce = 1E5
 )
