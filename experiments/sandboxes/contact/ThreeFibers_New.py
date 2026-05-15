@@ -103,7 +103,7 @@ def run_threeFiberTow(
 ):
     """ """
     fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
-    write_vtk(fabric,get_output("threeFiberTow_pre.vtk"))
+    write_vtk(fabric,get_output(filename="threeFiberTow_pre.vtk", subdir="contact"))
 
     E = 1e9
     A = (fabric.diameters[0]/2)**2*np.pi
@@ -123,7 +123,7 @@ def run_threeFiberTow(
     )
     u = u.reshape((-1,3))
     fabric.points = fabric.points + u
-    write_vtk(fabric,get_output("threeFiberTow_post.vtk"))
+    write_vtk(fabric,get_output(filename="threeFiberTow_post.vtk", subdir="contact"))
 
     return u,fabric
 
