@@ -62,69 +62,69 @@ def count_initial_contacts(
 
     return n_distinct + n_self
 
-def merge_contact_cells(
-    distinct_contacts: jnp.ndarray,
-    n_distinct: jnp.ndarray,
-    self_contacts: jnp.ndarray,
-    n_self: jnp.ndarray,
-    capacity: int,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """
-    Merge fixed-capacity distinct-contact and self-contact buffers.
+# def merge_contact_cells(
+#     distinct_contacts: jnp.ndarray,
+#     n_distinct: jnp.ndarray,
+#     self_contacts: jnp.ndarray,
+#     n_self: jnp.ndarray,
+#     capacity: int,
+# ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+#     """
+#     Merge fixed-capacity distinct-contact and self-contact buffers.
 
-    Parameters
-    ----------
-    distinct_contacts : jnp.ndarray
-        Array of shape (capacity, 2). Rows after n_distinct may be sentinel rows.
-    n_distinct : jnp.ndarray
-        Number of valid rows in distinct_contacts.
-    self_contacts : jnp.ndarray
-        Array of shape (capacity, 2). Rows after n_self may be sentinel rows.
-    n_self : jnp.ndarray
-        Number of valid rows in self_contacts.
-    capacity : int
-        Output capacity.
+#     Parameters
+#     ----------
+#     distinct_contacts : jnp.ndarray
+#         Array of shape (capacity, 2). Rows after n_distinct may be sentinel rows.
+#     n_distinct : jnp.ndarray
+#         Number of valid rows in distinct_contacts.
+#     self_contacts : jnp.ndarray
+#         Array of shape (capacity, 2). Rows after n_self may be sentinel rows.
+#     n_self : jnp.ndarray
+#         Number of valid rows in self_contacts.
+#     capacity : int
+#         Output capacity.
 
-    Returns
-    -------
-    contact_cells : jnp.ndarray
-        Array of shape (capacity, 2) containing merged contact pairs.
-        Unused rows are filled with 0.
-    n_contact : jnp.ndarray
-        Number of valid merged contact rows, clipped to capacity.
-    overflowed : jnp.ndarray
-        True if n_distinct + n_self exceeds capacity.
-    """
-    distinct_contacts = jnp.asarray(distinct_contacts)
-    self_contacts = jnp.asarray(self_contacts)
-    n_distinct = jnp.asarray(n_distinct, dtype=jnp.int32)
-    n_self = jnp.asarray(n_self, dtype=jnp.int32)
+#     Returns
+#     -------
+#     contact_cells : jnp.ndarray
+#         Array of shape (capacity, 2) containing merged contact pairs.
+#         Unused rows are filled with 0.
+#     n_contact : jnp.ndarray
+#         Number of valid merged contact rows, clipped to capacity.
+#     overflowed : jnp.ndarray
+#         True if n_distinct + n_self exceeds capacity.
+#     """
+#     distinct_contacts = jnp.asarray(distinct_contacts)
+#     self_contacts = jnp.asarray(self_contacts)
+#     n_distinct = jnp.asarray(n_distinct, dtype=jnp.int32)
+#     n_self = jnp.asarray(n_self, dtype=jnp.int32)
 
-    idx = jnp.arange(capacity, dtype=jnp.int32)
+#     idx = jnp.arange(capacity, dtype=jnp.int32)
 
-    n_distinct_valid = jnp.minimum(n_distinct, capacity)
-    n_self_valid = jnp.minimum(n_self, capacity)
+#     n_distinct_valid = jnp.minimum(n_distinct, capacity)
+#     n_self_valid = jnp.minimum(n_self, capacity)
 
-    distinct_valid = idx < n_distinct_valid
-    self_valid = idx < n_self_valid
+#     distinct_valid = idx < n_distinct_valid
+#     self_valid = idx < n_self_valid
 
-    all_rows = jnp.concatenate([distinct_contacts, self_contacts], axis=0)
-    all_valid = jnp.concatenate([distinct_valid, self_valid], axis=0)
+#     all_rows = jnp.concatenate([distinct_contacts, self_contacts], axis=0)
+#     all_valid = jnp.concatenate([distinct_valid, self_valid], axis=0)
 
-    sentinel = jnp.zeros_like(all_rows)
-    all_rows = jnp.where(all_valid[:, None], all_rows, sentinel)
+#     sentinel = jnp.zeros_like(all_rows)
+#     all_rows = jnp.where(all_valid[:, None], all_rows, sentinel)
 
-    # Stable sort: valid rows first, invalid rows last.
-    order = jnp.argsort(~all_valid, stable=True)
-    merged = all_rows[order]
+#     # Stable sort: valid rows first, invalid rows last.
+#     order = jnp.argsort(~all_valid, stable=True)
+#     merged = all_rows[order]
 
-    n_total = n_distinct + n_self
-    n_contact = jnp.minimum(n_total, capacity)
-    overflowed = n_total > capacity
+#     n_total = n_distinct + n_self
+#     n_contact = jnp.minimum(n_total, capacity)
+#     overflowed = n_total > capacity
 
-    contact_cells = merged[:capacity]
+#     contact_cells = merged[:capacity]
 
-    return contact_cells, n_contact, overflowed
+#     return contact_cells, n_contact, overflowed
 
 def distinct_fiber_node2node(
     points: jnp.ndarray,
