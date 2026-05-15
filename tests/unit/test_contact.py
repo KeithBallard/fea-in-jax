@@ -2,143 +2,137 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from fe_jax.contact_jitless import (
-    ContactPointPair,
-    canonicalize_contact_point_pair,
+from fe_jax.contact import (
     contact_batch,
+    count_initial_contacts,
     distinct_fiber_node2node,
-    duplicate_filtering,
+    # merge_contact_cells,
     self_fiber_node2node,
 )
 
 
-def test_canonicalize_contact_point_pair_keeps_order_when_already_canonical():
-    pair = canonicalize_contact_point_pair(
-        fiber_i=1,
-        fiber_j=3,
-        node_i=2,
-        node_j=4,
-        x_i=jnp.array([1.0, 0.0, 0.0]),
-        x_j=jnp.array([3.0, 0.0, 0.0]),
-        distance=2.0,
+def test_count_initial_contacts_counts_distinct_and_self_contacts():
+    points = jnp.array(
+        [
+            [0.0, 0.0, 0.0],   # fiber 0, node 0
+            [0.0, 0.1, 0.0],   # fiber 1, node 0
+            [2.0, 0.0, 0.0],   # fiber 0, node 1
+            [2.0, 0.1, 0.0],   # fiber 1, node 1
+            [0.0, 0.0, 1.0],   # fiber 2, node 0
+            [0.0, 0.0, 1.1],   # fiber 2, node 1
+            [0.0, 0.0, 1.2],   # fiber 2, node 2
+            [0.0, 0.0, 1.3],   # fiber 2, node 3
+        ]
+    )
+    point_fiber_ids = jnp.array([0, 1, 0, 1, 2, 2, 2, 2])
+
+    # distinct contacts: (0,1) and (2,3)
+    # self contacts on fiber 2: (4,7)
+    count = count_initial_contacts(
+        points=points,
+        point_fiber_ids=point_fiber_ids,
+        radius=0.15,
+        adjacency_block=2,
     )
 
-    assert pair.fiber_i == 1
-    assert pair.fiber_j == 3
-    assert pair.node_i == 2
-    assert pair.node_j == 4
-    np.testing.assert_allclose(pair.x_i, jnp.array([1.0, 0.0, 0.0]))
-    np.testing.assert_allclose(pair.x_j, jnp.array([3.0, 0.0, 0.0]))
-    assert pair.distance == 2.0
+    assert int(count) == 2
 
 
-def test_canonicalize_contact_point_pair_swaps_order_when_needed():
-    pair = canonicalize_contact_point_pair(
-        fiber_i=4,
-        fiber_j=2,
-        node_i=7,
-        node_j=3,
-        x_i=jnp.array([4.0, 0.0, 0.0]),
-        x_j=jnp.array([2.0, 0.0, 0.0]),
-        distance=2.0,
-    )
+# def test_merge_contact_cells_packs_valid_rows_before_sentinels():
+#     distinct_contacts = jnp.array(
+#         [
+#             [0, 1],
+#             [0, 0],
+#             [0, 0],
+#         ],
+#         dtype=jnp.uint64,
+#     )
+#     self_contacts = jnp.array(
+#         [
+#             [2, 3],
+#             [0, 0],
+#             [0, 0],
+#         ],
+#         dtype=jnp.uint64,
+#     )
 
-    assert pair.fiber_i == 2
-    assert pair.fiber_j == 4
-    assert pair.node_i == 3
-    assert pair.node_j == 7
-    np.testing.assert_allclose(pair.x_i, jnp.array([2.0, 0.0, 0.0]))
-    np.testing.assert_allclose(pair.x_j, jnp.array([4.0, 0.0, 0.0]))
-    assert pair.distance == 2.0
+#     merged, n_contact, overflowed = merge_contact_cells(
+#         distinct_contacts=distinct_contacts,
+#         n_distinct=1,
+#         self_contacts=self_contacts,
+#         n_self=1,
+#         capacity=3,
+#     )
 
-
-def test_duplicate_filtering_removes_duplicates_and_keeps_first_occurrence():
-    pair_a = canonicalize_contact_point_pair(
-        fiber_i=0,
-        fiber_j=1,
-        node_i=0,
-        node_j=2,
-        x_i=jnp.array([0.0, 0.0, 0.0]),
-        x_j=jnp.array([1.0, 0.0, 0.0]),
-        distance=1.0,
-    )
-    pair_a_duplicate = ContactPointPair(
-        fiber_i=0,
-        fiber_j=1,
-        node_i=0,
-        node_j=2,
-        x_i=jnp.array([0.0, 1.0, 0.0]),
-        x_j=jnp.array([1.0, 1.0, 0.0]),
-        distance=9.0,
-    )
-    pair_b = canonicalize_contact_point_pair(
-        fiber_i=0,
-        fiber_j=2,
-        node_i=1,
-        node_j=3,
-        x_i=jnp.array([0.0, 0.0, 1.0]),
-        x_j=jnp.array([1.0, 0.0, 1.0]),
-        distance=1.0,
-    )
-
-    filtered = duplicate_filtering([pair_a, pair_a_duplicate, pair_b])
-
-    assert len(filtered) == 2
-    assert filtered[0] is pair_a
-    assert filtered[1] is pair_b
+#     np.testing.assert_array_equal(np.asarray(merged), np.array([[0, 1], [2, 3], [0, 0]], dtype=np.uint64))
+#     assert int(n_contact) == 2
+#     assert bool(overflowed) is False
 
 
-def test_duplicate_filtering_rejects_non_canonical_contacts():
-    bad_pair = ContactPointPair(
-        fiber_i=3,
-        fiber_j=1,
-        node_i=5,
-        node_j=2,
-        x_i=jnp.array([0.0, 0.0, 0.0]),
-        x_j=jnp.array([1.0, 0.0, 0.0]),
-        distance=1.0,
-    )
+# def test_merge_contact_cells_flags_overflow():
+#     distinct_contacts = jnp.array(
+#         [
+#             [0, 1],
+#             [2, 3],
+#         ],
+#         dtype=jnp.uint64,
+#     )
+#     self_contacts = jnp.array(
+#         [
+#             [4, 5],
+#             [6, 7],
+#         ],
+#         dtype=jnp.uint64,
+#     )
 
-    with pytest.raises(AssertionError):
-        duplicate_filtering([bad_pair])
+#     merged, n_contact, overflowed = merge_contact_cells(
+#         distinct_contacts=distinct_contacts,
+#         n_distinct=2,
+#         self_contacts=self_contacts,
+#         n_self=2,
+#         capacity=3,
+#     )
+
+#     np.testing.assert_array_equal(np.asarray(merged), np.array([[0, 1], [2, 3], [4, 5]], dtype=np.uint64))
+#     assert int(n_contact) == 3
+#     assert bool(overflowed) is True
 
 
 def test_distinct_fiber_node2node_finds_expected_pair():
-    fiber_a = jnp.array(
+    points = jnp.array(
         [
             [0.0, 0.0, 0.0],
             [2.0, 0.0, 0.0],
-            [4.0, 0.0, 0.0],
-        ]
-    )
-    fiber_b = jnp.array(
-        [
             [0.1, 0.0, 0.0],
             [10.0, 0.0, 0.0],
         ]
     )
+    point_fiber_ids = jnp.array([0, 0, 1, 1])
 
     contacts = distinct_fiber_node2node(
-        fiber_x=0,
-        x_nd=fiber_a,
-        fiber_y=1,
-        y_nd=fiber_b,
+        points=points,
+        point_fiber_ids=point_fiber_ids,
         radius=0.25,
     )
 
-    assert len(contacts) == 1
-    contact = contacts[0]
-    assert contact.fiber_i == 0
-    assert contact.fiber_j == 1
-    assert contact.node_i == 0
-    assert contact.node_j == 0
-    np.testing.assert_allclose(contact.x_i, fiber_a[0])
-    np.testing.assert_allclose(contact.x_j, fiber_b[0])
-    assert float(contact.distance) == pytest.approx(0.1)
+    np.testing.assert_array_equal(np.asarray(contacts), np.array([[0, 2]], dtype=np.int32))
 
 
-def test_self_fiber_node2node_excludes_neighboring_nodes_and_keeps_far_contact():
-    fiber = jnp.array(
+def test_distinct_fiber_node2node_accepts_1d_points():
+    points = jnp.array([[0.0], [1.0], [0.1], [10.0]])
+    point_fiber_ids = jnp.array([0, 0, 1, 1])
+
+    contacts = distinct_fiber_node2node(
+        points=points,
+        point_fiber_ids=point_fiber_ids,
+        radius=0.25,
+    )
+
+    np.testing.assert_array_equal(np.asarray(contacts), np.array([[0, 2]], dtype=np.int32))
+
+
+def test_self_fiber_node2node_excludes_neighbors_and_keeps_far_pair():
+    points = jnp.array(
         [
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -146,81 +140,101 @@ def test_self_fiber_node2node_excludes_neighboring_nodes_and_keeps_far_contact()
             [0.0, 0.1, 0.0],
         ]
     )
+    point_fiber_ids = jnp.array([5, 5, 5, 5])
 
     contacts = self_fiber_node2node(
-        fiber_x=5,
-        x_nd=fiber,
+        points=points,
+        point_fiber_ids=point_fiber_ids,
         radius=0.5,
+        adjacency_block=1,
     )
 
-    assert len(contacts) == 1
-    contact = contacts[0]
-    assert contact.fiber_i == 5
-    assert contact.fiber_j == 5
-    assert contact.node_i == 0
-    assert contact.node_j == 3
-    np.testing.assert_allclose(contact.x_i, fiber[0])
-    np.testing.assert_allclose(contact.x_j, fiber[3])
-    assert float(contact.distance) == pytest.approx(0.1)
+    np.testing.assert_array_equal(np.asarray(contacts), np.array([[0, 3]], dtype=np.int32))
 
 
-def test_contact_batch_uses_injected_detectors_and_orders_results():
-    fibers = [
-        jnp.array([[0.0, 0.0, 0.0]]),
-        jnp.array([[1.0, 0.0, 0.0]]),
-    ]
-
-    def distinct_stub(*, fiber_x, x_nd, fiber_y, y_nd, radius):
-        return [
-            canonicalize_contact_point_pair(
-                fiber_i=fiber_x,
-                fiber_j=fiber_y,
-                node_i=0,
-                node_j=0,
-                x_i=x_nd[0],
-                x_j=y_nd[0],
-                distance=radius,
-            )
+def test_self_fiber_node2node_accepts_2d_points():
+    points = jnp.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 0.1],
+            [0.0, 0.1],
         ]
+    )
+    point_fiber_ids = jnp.array([5, 5, 5, 5])
 
-    def self_stub(*, fiber_x, x_nd, radius):
-        return [
-            canonicalize_contact_point_pair(
-                fiber_i=fiber_x,
-                fiber_j=fiber_x,
-                node_i=0,
-                node_j=0,
-                x_i=x_nd[0],
-                x_j=x_nd[0],
-                distance=radius,
-            )
+    contacts = self_fiber_node2node(
+        points=points,
+        point_fiber_ids=point_fiber_ids,
+        radius=0.5,
+        adjacency_block=1,
+    )
+
+    np.testing.assert_array_equal(np.asarray(contacts), np.array([[0, 3]], dtype=np.int32))
+
+
+def test_contact_batch_concatenates_detector_outputs_and_forwards_arguments():
+    points = jnp.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
         ]
+    )
+    point_fiber_ids = jnp.array([0, 1])
+
+    distinct_calls = []
+    self_calls = []
+
+    def distinct_stub(*, points, point_fiber_ids, radius):
+        distinct_calls.append((np.asarray(points), np.asarray(point_fiber_ids), radius))
+        return jnp.array([[0, 1]], dtype=jnp.int32)
+
+    def self_stub(*, points, point_fiber_ids, radius, adjacency_block):
+        self_calls.append((np.asarray(points), np.asarray(point_fiber_ids), radius, adjacency_block))
+        return jnp.array([[1, 1]], dtype=jnp.int32)
 
     contacts = contact_batch(
-        fibers=fibers,
+        points=points,
+        point_fiber_ids=point_fiber_ids,
+        adjacency_block=3,
         radius=0.5,
         distinct_fiber_fn=distinct_stub,
         self_fiber_fn=self_stub,
     )
 
-    assert len(contacts) == 3
-    assert contacts[0].fiber_i == 0
-    assert contacts[0].fiber_j == 1
-    assert contacts[1].fiber_i == 0
-    assert contacts[1].fiber_j == 0
-    assert contacts[2].fiber_i == 1
-    assert contacts[2].fiber_j == 1
+    np.testing.assert_array_equal(np.asarray(contacts), np.array([[0, 1], [1, 1]], dtype=np.int32))
+    assert len(distinct_calls) == 1
+    assert len(self_calls) == 1
+    np.testing.assert_array_equal(distinct_calls[0][0], np.asarray(points))
+    np.testing.assert_array_equal(distinct_calls[0][1], np.asarray(point_fiber_ids))
+    assert distinct_calls[0][2] == 0.5
+    np.testing.assert_array_equal(self_calls[0][0], np.asarray(points))
+    np.testing.assert_array_equal(self_calls[0][1], np.asarray(point_fiber_ids))
+    assert self_calls[0][2] == 0.5
+    assert self_calls[0][3] == 3
 
 
 def test_contact_batch_rejects_non_positive_radius():
-    fibers = [jnp.array([[0.0, 0.0, 0.0]])]
+    points = jnp.array([[0.0, 0.0, 0.0]])
+    point_fiber_ids = jnp.array([0])
 
     with pytest.raises(ValueError, match="radius must be positive"):
-        contact_batch(fibers=fibers, radius=0.0)
+        contact_batch(
+            points=points,
+            point_fiber_ids=point_fiber_ids,
+            adjacency_block=1,
+            radius=0.0,
+        )
 
 
-def test_contact_batch_rejects_bad_fiber_shape():
-    fibers = [jnp.array([[0.0, 0.0], [1.0, 1.0]])]
+def test_contact_batch_rejects_bad_point_shape():
+    points = jnp.array([[0.0, 0.0, 0.0, 1.0]])
+    point_fiber_ids = jnp.array([0])
 
-    with pytest.raises(ValueError, match="Fiber 0 must have shape"):
-        contact_batch(fibers=fibers, radius=0.1)
+    with pytest.raises(ValueError, match="points must have shape"):
+        contact_batch(
+            points=points,
+            point_fiber_ids=point_fiber_ids,
+            adjacency_block=1,
+            radius=0.5,
+        )
