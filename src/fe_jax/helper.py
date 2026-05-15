@@ -5,7 +5,6 @@ from pathlib import Path
 # Keep CPU device fanout consistent for scripts that import this helper module.
 os.environ.setdefault("XLA_FLAGS", "--xla_force_host_platform_device_count=8")
 
-# sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../src")
 
 from . import * # noga: F401,F403
 
@@ -14,7 +13,7 @@ import matplotlib.pyplot as plt
 import meshio
 import numpy as np
 
-# os.environ["XLA_FLAGS"] = ("--xla_force_host_platform_device_count=8"  # Use 8 CPU devices)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def get_mesh(mesh_name: str):
     return os.path.join(
@@ -29,7 +28,11 @@ def get_fabric(fabric_name: str):
         f"{fabric_name}.fab",
     )
 
-def get_output(filename: str):
+def get_output(filename: str, subdir: str = ""):
+    output_dir = _REPO_ROOT / "output" / subdir
+    output_dir.mkdir(parents = True, exist_ok=True)
+    return str(output_dir/filename)
+
     os.makedirs(
         os.path.dirname(os.path.realpath(__file__)) + "/output",
         exist_ok=True
