@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 def test_mpc_enforcement_jacobian_constraints():
     jax.config.update("jax_enable_x64", True)

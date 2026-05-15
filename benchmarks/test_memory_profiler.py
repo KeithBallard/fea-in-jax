@@ -1,5 +1,5 @@
 
-from helper import MemoryProfile
+from fe_jax.helper import MemoryProfile
 
 if __name__ == '__main__':
      

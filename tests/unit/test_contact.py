@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from fe_jax.contact import (
+from fe_jax.contact_jitless import (
     ContactPointPair,
     canonicalize_contact_point_pair,
     contact_batch,

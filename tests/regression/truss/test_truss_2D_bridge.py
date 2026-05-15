@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
@@ -196,4 +196,3 @@ def run_truss_2D_bridge(label="2D_bridge"):
 def test_truss_2D_bridge():
     u, ref_soln = run_truss_2D_bridge()
     assert jnp.isclose(u,ref_soln).all(), f"Does not match expected solution"
-

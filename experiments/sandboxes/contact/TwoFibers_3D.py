@@ -1,6 +1,6 @@
 from fe_jax.boundary_conditions import NeumannBC
 from fe_jax import contact
-from helper import *
+from fe_jax.helper import *
 import pytest
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)

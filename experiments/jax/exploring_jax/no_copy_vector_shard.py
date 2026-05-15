@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from helper import *
+from fe_jax.helper import *
 import os
 
 os.environ["XLA_FLAGS"] = (

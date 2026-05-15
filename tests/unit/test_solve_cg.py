@@ -28,7 +28,7 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 
-from helper import *
+from fe_jax.helper import *
 from fe_jax.solve_cg import *
 
 from enum import Enum

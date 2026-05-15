@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 import pytest
 import matplotlib.pyplot as plt
 # jax.config.update("jax_disable_jit", True)

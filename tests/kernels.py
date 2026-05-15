@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 import jax.numpy as jnp
 import jax

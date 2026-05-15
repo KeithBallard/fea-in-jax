@@ -10,7 +10,7 @@ import os.path
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 
-from helper import *
+from fe_jax.helper import *
 
 #jax.config.update("jax_platform_name", "cpu")
 

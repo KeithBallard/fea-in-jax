@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 import meshio
 import jax.numpy as jnp

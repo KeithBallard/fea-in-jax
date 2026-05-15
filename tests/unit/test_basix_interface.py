@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 # Baseline taken from: https://people.math.sc.edu/Burkardt/classes/cg_2007/cg_lab_fem_basis_triangle.pdf
 

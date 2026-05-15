@@ -1,7 +1,7 @@
 import meshio
 
 import fea_traditional as test
-from helper import *
+from fe_jax.helper import *
 
 import numpy as np
 

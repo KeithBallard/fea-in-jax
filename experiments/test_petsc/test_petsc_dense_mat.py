@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
-from helper import *
+from fe_jax.helper import *
 import time
 import jax.dlpack as jdl
 import cupy as cp

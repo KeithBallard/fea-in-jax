@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 
 @partial(jax.jit, static_argnames=["D"])

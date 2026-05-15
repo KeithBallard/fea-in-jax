@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 max_n_subdivisions = 3
 n_subsequent_calls = 3

@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 
 def test_uniform_tri_grid_writes_triangle_mesh():
