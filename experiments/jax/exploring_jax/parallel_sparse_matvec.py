@@ -2,7 +2,7 @@ import jax
 import jax.experimental
 import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
-from helper import *
+from fe_jax.helper import *
 import os
 
 os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={3}"

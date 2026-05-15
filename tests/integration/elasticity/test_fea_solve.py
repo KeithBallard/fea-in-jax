@@ -3,7 +3,7 @@ import meshio
 import numpy as np
 
 import fea_traditional as test
-from helper import *
+from fe_jax.helper import *
 
 def test_fea_solve_on_polygon_mesh():
     # from jax_smi import initialise_tracking

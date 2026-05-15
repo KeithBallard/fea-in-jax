@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 
 def test_mpc_consolidation():

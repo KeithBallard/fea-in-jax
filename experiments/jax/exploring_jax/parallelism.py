@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
-from helper import *
+from fe_jax.helper import *
 
 import psutil
 import os

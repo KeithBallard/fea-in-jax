@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils, sparse
 from jax import random, vmap
-from helper import *
+from fe_jax.helper import *
 import os
 import scipy.sparse
 

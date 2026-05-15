@@ -1,5 +1,5 @@
 import meshio
-from helper import *
+from fe_jax.helper import *
 import jax.experimental.sparse as jsparse
 
 def test_mesh_to_sparse_assembly_map_round_trips_mesh_coordinates():

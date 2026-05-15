@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from helper import *
+from fe_jax.helper import *
 import os
 from mpi4py import MPI
 
@@ -92,4 +92,3 @@ local_sum = jnp.sum(local_v)
 global_sum = comm.allreduce(local_sum, op=MPI.SUM)
 if rank == 0:
     print(f"Global sum across all ranks: {global_sum} (expected: {N})")
-

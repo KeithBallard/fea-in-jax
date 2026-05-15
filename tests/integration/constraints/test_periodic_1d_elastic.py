@@ -1,4 +1,4 @@
-from helper import *
+from fe_jax.helper import *
 
 def test_periodic_1d_elastic_constraint_cases():
     jax.config.update("jax_enable_x64", True)

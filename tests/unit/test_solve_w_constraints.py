@@ -23,7 +23,7 @@
 #            [ 1 -1  1 ]
 #            [ 0  0  1 ]
 
-from helper import *
+from fe_jax.helper import *
 
 import matplotlib.pyplot as plt
 from jaxopt import linear_solve

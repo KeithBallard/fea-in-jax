@@ -1,6 +1,6 @@
 from fe_jax.boundary_conditions import NeumannBC
 from fe_jax import contact
-from helper import *
+from fe_jax.helper import *
 import pytest
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
@@ -117,4 +117,3 @@ def write_two_fiber_mesh(points, cells, point_ids, cell_ids, filename):
         },
     )
     mesh.write(get_output(filename))
-

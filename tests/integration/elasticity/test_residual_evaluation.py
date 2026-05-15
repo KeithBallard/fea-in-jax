@@ -1,6 +1,6 @@
 import meshio
 
-from helper import *
+from fe_jax.helper import *
 
 import numpy as np
 
