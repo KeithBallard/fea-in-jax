@@ -114,6 +114,7 @@ class SolverOptions:
     nonlinear_max_iter: int = 10
     nonlinear_relative_tol: float = 1e-10
     nonlinear_absolute_tol: float = 1e-8
+    max_linear_displacement: float = jnp.inf
 
     def __post_init__(self):
         # Validate that the selected preconditioner is available
@@ -358,6 +359,7 @@ def linear_solve(
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
                 maxiter=solver_options.linear_max_iter,
+                max_displacement=solver_options.max_linear_displacement,
             )
             info = SolverResultInfo(
                 nonlinear_iterations=solver_info_0.nonlinear_iterations,

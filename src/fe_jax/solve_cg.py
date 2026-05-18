@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 import jax.lax as lax
 import jax.numpy as jnp
-
+import jax
 from jax import device_put
 from jax._src.scipy.sparse.linalg import (
     _identity,
@@ -18,7 +18,7 @@ from jax.tree_util import tree_leaves, tree_map, tree_structure, tree_reduce, Pa
 
 
 def _cg_solve(
-    A, b, x0=None, *, maxiter, tol=1e-5, atol=0.0, M=_identity, return_diagnostics=False
+    A, b, x0=None, *, maxiter, tol=1e-5, atol=0.0, M=_identity, return_diagnostics=False,max_displacement=jnp.inf
 ):
 
     # tolerance handling uses the "non-legacy" behavior of scipy.sparse.linalg.cg
@@ -28,9 +28,13 @@ def _cg_solve(
     # https://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
 
     def cond_fun(value):
-        _, r, gamma, _, k, _ = value
+        x, r, gamma, _, k, _ = value
         rs = gamma.real if M is _identity else _vdot_real_tree(r, r)
-        return (rs > atol2) & (k < maxiter)
+        xm = tree_reduce(
+            jnp.maximum,
+            tree_map(lambda leaf: jnp.max(jnp.abs(leaf)), x),
+        )
+        return (rs > atol2) & (k < maxiter) & (xm < max_displacement)
 
     def body_fun(value):
         x, r, gamma, p, k, r_norm_ks = value
@@ -74,6 +78,7 @@ def _isolve(
     maxiter=None,
     M=None,
     check_symmetric=False,
+    max_displacement=jnp.inf,
 ):
     if x0 is None:
         x0 = tree_map(jnp.zeros_like, b)
@@ -102,7 +107,7 @@ def _isolve(
         )
 
     isolve_solve = partial(
-        _isolve_solve, x0=x0, tol=tol, atol=atol, maxiter=maxiter, M=M
+        _isolve_solve, x0=x0, tol=tol, atol=atol, maxiter=maxiter, M=M, max_displacement=max_displacement
     )
 
     # real-valued positive-definite linear operators are symmetric
@@ -123,7 +128,7 @@ def _isolve(
 
 
 # Keith: verbatim of jax's cg, but using my modified functions
-def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
+def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None,max_displacement=jnp.inf):
     return _isolve(
         _cg_solve,
         A=A,
@@ -134,4 +139,5 @@ def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
         maxiter=maxiter,
         M=M,
         check_symmetric=True,
+        max_displacement=max_displacement,
     )
