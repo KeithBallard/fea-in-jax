@@ -17,6 +17,7 @@ def solve_fiber_mechanics_bvp(
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
     contact_search_radius: float,
     solver_options: SolverOptions,
+    plot_convergence: bool = False,
 ):
     """
     TODO document
@@ -99,7 +100,7 @@ def solve_fiber_mechanics_bvp(
         element_batches=element_batches,
         boundary_conditions=boundary_conditions,
         solver_options=solver_options,
-        plot_convergence=False,
+        plot_convergence=plot_convergence,
         contact_batch_generator=contact_pair_generator,
     )
 
