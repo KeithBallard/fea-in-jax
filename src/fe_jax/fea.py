@@ -730,7 +730,6 @@ def solve_nonlinear_step(
         )
 
         u_f = u_f + delta_u
-        # u_f = constraints.apply_to_solution(u_f)
         R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
 
         return (
