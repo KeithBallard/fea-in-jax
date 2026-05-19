@@ -110,7 +110,6 @@ def run_threeFiberTow(
     E = 1e9
     A = (fabric.diameters[0]/2)**2*np.pi
     print(f"EA/N = {E*A/NeumannForce}")
-    print(f"{min(min_dist/2,fabric.diameters[0]/2)}")
     u, _, _ = solve_fiber_mechanics_bvp(
         fabric=fabric,
         materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
@@ -120,11 +119,11 @@ def run_threeFiberTow(
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=100,
+            nonlinear_max_iter=1000,
             linear_max_iter=500,
-            max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+            max_linear_displacement=min(min_dist/2,fabric.diameters[0]/2),
         ),
-        plot_convergence=False,
+        plot_convergence=True,
     )
     u = u.reshape((-1,3))
     fabric.points = fabric.points + u
