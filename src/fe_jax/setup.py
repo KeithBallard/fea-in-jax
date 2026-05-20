@@ -245,20 +245,22 @@ def mesh_to_sparse_assembly_map(
     )
 
 
-@partial(jax.jit, static_argnames=["E", "V", "U"])
+@partial(jax.jit, static_argnames=["E"])
 def transform_global_to_element_node(
-    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int, V: int, U: int
+    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int
 ):
     """
     Transforms a vector that represents a global assembled vector into the element-node representation.
 
     TODO: change this to transform into batches (keep batch info in Dimensions)
     """
+    U = v_g.shape[1]
+    N = assembly_map.shape[1]//E    
     return jsparse.bcoo_dot_general(
         assembly_map,
-        v_g.reshape(v_g.shape[0], v_g.shape[1]),
+        v_g,
         dimension_numbers=(((0,), (0,)), ((), ())),
-    ).reshape(E, V, U)
+    ).reshape(E, N, U)
 
 
 @partial(jax.jit, static_argnames=["E"])
