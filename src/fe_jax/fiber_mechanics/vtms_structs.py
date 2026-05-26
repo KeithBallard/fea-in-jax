@@ -65,7 +65,7 @@ class VTMSFabric:
         assert self.get_n_bundles() == self.diameters.shape[0]
         assert self.get_n_bundles() == self.material_ids.shape[0]
         assert self.fiber_offsets[-1] == self.points.shape[0]
-        assert self.bundle_offsets[-1] == self.fiber_offsets.shape[0], f"{self.bundle_offsets[-1]} != {self.fiber_offsets.shape[0] - 1}"
+        assert self.bundle_offsets[-1] == self.fiber_offsets.shape[0]-1, f"{self.bundle_offsets[-1]} != {self.fiber_offsets.shape[0] - 1}"
 
     def get_n_bundles(self) -> int:
         return self.bundle_offsets.shape[0] - 1
@@ -77,7 +77,7 @@ class VTMSFabric:
         return self.diameters[bundle_i]
 
     def get_n_fibers_in_bundle(self, bundle_i: int) -> int:
-        return self.bundle_offsets[bundle_i + 1] - self.bundle_offsets[bundle_i] - 1
+        return self.bundle_offsets[bundle_i + 1] - self.bundle_offsets[bundle_i]
 
     def get_fiber_points(self, bundle_i: int, fiber_i: int):
         s = slice(
@@ -185,7 +185,7 @@ def read_fib(filepath: str | Path) -> VTMSBundle:
     diameter = float(tokens[2])
     start_line += 1
 
-    n_points_per_fiber = np.zeros((n_fibers,), dtype=np.integer)
+    n_points_per_fiber = np.zeros((n_fibers,), dtype=np.int64)
 
     for i, line in enumerate(lines[start_line : start_line + n_fibers]):
         n_points_per_fiber[i] = int(line.strip().split()[-1])

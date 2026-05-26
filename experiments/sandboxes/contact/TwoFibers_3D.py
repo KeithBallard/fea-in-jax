@@ -1,10 +1,9 @@
-from fe_jax.boundary_conditions import NeumannBC
-from fe_jax import contact
 from fe_jax.helper import *
 import pytest
 import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 import jax.extend
+# jax.config.update("jax_disable_jit", True)
 
 pytestmark = pytest.mark.truss
 
@@ -175,7 +174,6 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
 
     # Set material properties
     matrix_mat_params = jnp.array([1e9,1])  # E, A
-    matrix_mat_params_contact = jnp.array([4e9,1,search_radius])  # E_max, A, R
 
     # Set boundary conditions.
     # The displacement is in the direciton of the bar, so this should be the same as a 1D displacement.
@@ -206,14 +204,36 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
             material_params=matrix_mat_params,
         )
     ]
-    contact_config = contact.ContactPreprocessConfig(
-        vertices_fiber_ids = point_ids,
-        radius = search_radius,
-        self_adjacency_block = 3,
-        material_params = matrix_mat_params_contact,
-        fe_type = fe_type,
-        constitutive_model = elastic_contact_truss
-    )
+    contact_fe_type = fe_type
+    self_adjacency_block = 3
+    contact_search_radius = search_radius
+    matrix_mat_params_contact = jnp.array([4e9,1,search_radius])  # E_max, A, R
+
+    def contact_pair_generator() -> list[ElementBatch] | None:
+        contact_cells = contact_batch(
+            points=points,
+            point_fiber_ids=point_ids,
+            adjacency_block=self_adjacency_block,
+            radius=contact_search_radius,
+        )
+        if contact_cells.shape[0] == 0: return []
+        return [
+            ElementBatch(
+                fe_type=contact_fe_type,
+                n_dofs_per_basis=3,
+                connectivity_en=contact_cells,
+                constitutive_model=elastic_contact_truss,
+                material_params=matrix_mat_params_contact,
+            )
+        ]
+    # contact_config = contact.ContactPreprocessConfig(
+    #     vertices_fiber_ids = point_ids,
+    #     radius = search_radius,
+    #     self_adjacency_block = 3,
+    #     material_params = matrix_mat_params_contact,
+    #     fe_type = fe_type,
+    #     constitutive_model = elastic_contact_truss
+    # )
 
     u_truss, residual_truss, element_batches_truss = solve_bvp(
         element_residual_func=linear_truss_residual,
@@ -222,13 +242,14 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
         boundary_conditions=bcs,
         solver_options=SolverOptions(
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-            # linear_precond_type=PreconditionerType.JACOBI,
+            linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=50,
-            linear_max_iter=50,
+            nonlinear_max_iter=500,
+            linear_max_iter=500,
+            max_linear_displacement=1.0
         ),
-        plot_convergence=False,
-        contact_config=contact_config
+        plot_convergence=True,
+        contact_batch_generator=contact_pair_generator,
     )
     u_truss = u_truss.reshape((-1,3))
     if not (np.isnan(u_truss).any() or np.isinf(u_truss).any()):
@@ -244,4 +265,4 @@ def run_truss_3D_bar(n_elements: list[int], X0: list[tuple], XN: list[tuple],sea
     # return u_truss, points, cells
 
 # Exampe Use Case
-# run_truss_3D_bar([10,10],[(0.1,0,-1),(0,-1,0)],[(0.1,0,1),(0,1,0)],0.5)
+run_truss_3D_bar([10,10],[(0.1,0,-1),(0,-1,0)],[(0.1,0,1),(0,1,0)],0.5)
