@@ -41,7 +41,7 @@
     ```
     *Note: `jax` installation instructions vary depending on your hardware (CPU, GPU, TPU). Please refer to the [JAX installation guide](https://github.com/google/jax#installation) if the default pip install does not match your system configuration.*
 
-    For development, install the package in editable mode with the test dependency:
+    For development, install the package in editable mode with the test dependency. This is required so local imports like `fe_jax.helper` resolve correctly:
     ```bash
     pip install -e ".[dev]"
     ```
