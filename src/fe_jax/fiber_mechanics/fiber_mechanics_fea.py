@@ -77,13 +77,14 @@ def solve_fiber_mechanics_bvp(
     contact_search_radius = contact_search_radius
     contact_params = jnp.array([10 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
 
-    def contact_pair_generator() -> list[ElementBatch]:
+    def contact_pair_generator() -> list[ElementBatch] | None:
         contact_cells = contact_batch(
             points=fabric.points,
             point_fiber_ids=point_fiber_ids,
             adjacency_block=self_adjacency_block,
             radius=contact_search_radius,
         )
+        if contact_cells.shape[0] == 0: return []
         return [
             ElementBatch(
                 fe_type=contact_fe_type,

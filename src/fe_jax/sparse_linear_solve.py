@@ -65,11 +65,11 @@ except ImportError:
 try:
     import pypardiso
 
-    if not CUPY_AVAILABLE:
-        _logger.warning(
-            "Warning: 'pypardiso' was imported successfully, but 'cupy' is not available. 'pypardiso' will not be available."
-        )
-    assert CUPY_AVAILABLE
+    # if not CUPY_AVAILABLE:
+    #     _logger.warning(
+    #         "Warning: 'pypardiso' was imported successfully, but 'cupy' is not available. 'pypardiso' will not be available."
+    #     )
+    # assert CUPY_AVAILABLE
     PYPARDISO_AVAILABLE = True
     _logger.info("'pypardiso' imported, adding related solvers.")
 except ImportError:
@@ -262,10 +262,31 @@ def linear_solve(
         )[1],
         x_0,
     )
+    # breakpoint()
 
     if check_consistency:
         v = jax.random.uniform(jax.random.key(0), x_0.shape, x_0.dtype)
         J_dense = jax.jacfwd(R_w_dirichlet)(x_0)
+
+        # from pathlib import Path
+        # import numpy as np
+
+        # def save_unique_npy(arr, filename):
+        #     path = Path(filename)
+        #     stem = path.stem
+        #     suffix = path.suffix or ".npy"
+        #     parent = path.parent
+
+        #     candidate = parent / f"{stem}_{0}{suffix}"
+        #     i = 1
+        #     while candidate.exists():
+        #         candidate = parent / f"{stem}_{i}{suffix}"
+        #         i += 1
+
+        #     jnp.save(candidate, arr)
+        #     return candidate
+        # saved_path = save_unique_npy(J_dense, "output/jac/debug_jacobian_with_Dirichlet.npy")
+        # print(f"saved to {saved_path}\n\n")
 
         jax.debug.print(
             "Jacobian-vector product via autodiff matches product via dense Jacobian from jacfwd: {}",
@@ -307,7 +328,27 @@ def linear_solve(
                 diag_J_w_dirichlet is not None
             ), f"{solver_options.linear_precond_type} requires the `jacobian_diagonal` argument to be provided."
 
-            preconditioner = lambda x: x / diag_J_w_dirichlet(x_0)
+            diag = diag_J_w_dirichlet(x_0)
+            # force constrained DOFs to be 1.0.
+            diag = jnp.where(jnp.isfinite(diag), diag, 1.0)
+            # Make it safe for CG:
+            # - avoid division by zero
+            # - keep the preconditioner positive definite
+            eps = 1e-12
+            scale = jnp.maximum(jnp.max(jnp.abs(diag)), 1.0)
+            safe_diag = jnp.maximum(jnp.abs(diag), eps * scale)
+
+            preconditioner = lambda x: x / safe_diag
+
+            # preconditioner = lambda x: x / diag_J_w_dirichlet(x_0)
+            # diag_floor = 1e-12
+            # good = jnp.isfinite(diag) & (diag > diag_floor)
+
+            # safe_diag = jnp.where(good, diag, 1.0)
+
+            # omega = 0.5
+            # preconditioner = lambda r: (1.0 - omega) * r + omega * (r / safe_diag)
+            # preconditioner = lambda r: r / safe_diag
 
         ##########################################################################################
         # cupy preconditioners
@@ -865,7 +906,7 @@ if PYAMX_AVAILABLE:
 
 if PYPARDISO_AVAILABLE:
     import pypardiso
-    import cupy as cp
+    # import cupy as cp
 
     def __pypardiso_solve_impl(
         # ctx, <- buffer_callback implementation
@@ -877,17 +918,22 @@ if PYPARDISO_AVAILABLE:
     ):
         A_scipy = scipy.sparse.csr_matrix(
             (
-                cp.asarray(A_data).get().astype(np.float64),
+                # cp.asarray(A_data).get().astype(np.float64),
+                np.asarray(A_data).astype(np.float64),
                 (
-                    cp.asarray(A_row).get().astype(np.int32),
-                    cp.asarray(A_col).get().astype(np.int32),
+                    # cp.asarray(A_row).get().astype(np.int32),
+                    # cp.asarray(A_col).get().astype(np.int32),
+                    np.asarray(A_row).astype(np.int32),
+                    np.asarray(A_col).astype(np.int32),
                 ),
             ),
             shape=(b.shape[0], b.shape[0]),
         )
-        b_np = cp.asarray(b).get().astype(np.float64)
+        # b_np = cp.asarray(b).get().astype(np.float64)
+        b_np = np.asarray(b).astype(np.float64)
         result = pypardiso.spsolve(A_scipy, b_np)
         # cp.asarray(out)[...] = cp.asarray(result) <- buffer_callback implementation
+        # buffer_callback implementation would write into `out`; pure_callback just returns result
         return result
 
     @jax.jit
