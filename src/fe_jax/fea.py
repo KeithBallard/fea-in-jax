@@ -631,7 +631,7 @@ def _calculate_jacobian_batch_element_kernel(
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state_qi):
-        u_nd = u_t.reshape(N, D)
+        u_nd = u_t.reshape(N, U)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
@@ -794,7 +794,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state):
-        u_nd = u_t.reshape(N, D)
+        u_nd = u_t.reshape(N, U)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
