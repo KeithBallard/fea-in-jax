@@ -729,6 +729,17 @@ def solve_nonlinear_step(
             f_ext=f_ext,
         )
 
+        D = ebc.U[0]
+        max_d = solver_options.max_linear_displacement
+        # TODO this only words if delta_u ONLY consists of nodal values, if other global DOFs are present this, need to be update (both the norm and the reshape with D.
+        max_u = jnp.max(
+            jnp.linalg.norm(
+                delta_u.reshape((-1,D)),
+                axis=1
+            )
+        )
+        scale = jnp.minimum(1.0, max_d/jnp.maximum(1e-16,max_u))
+        delta_u = delta_u*scale
         u_f = u_f + delta_u
         R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
 

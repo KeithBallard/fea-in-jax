@@ -90,7 +90,7 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannF
         diameters=np.array([0.1]),
         points=points,
         fiber_offsets=fiber_offsets,
-        bundle_offsets=np.array([0, fiber_offsets.shape[0]]),
+        bundle_offsets=np.array([0, fiber_offsets.shape[0]-1]),
     )
     return fabric,bcs
 
@@ -117,9 +117,9 @@ def run_threeFiberTow(
         boundary_conditions=bcs,
         contact_search_radius=contact_search_radius,
         solver_options=SolverOptions(
-            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
-            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             nonlinear_max_iter=100,
             linear_max_iter=500,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
