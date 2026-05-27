@@ -17,5 +17,6 @@ from .utils import *
 from .constraint_system import *
 from .constraints import *
 from .contact import *
+from .postprocess import *
 
 from .fiber_mechanics import *

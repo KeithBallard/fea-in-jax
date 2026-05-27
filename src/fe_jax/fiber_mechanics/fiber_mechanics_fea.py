@@ -1,4 +1,6 @@
 from .vtms_structs import *
+from .vtk_exporter import *
+from ..postprocess import get_output
 from ..fea import *
 from ..contact import *
 from ..linear_elasticity import *
@@ -17,12 +19,14 @@ def solve_fiber_mechanics_bvp(
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
     contact_search_radius: float,
     solver_options: SolverOptions,
+    pseudotime_iters: int = 1,
     plot_convergence: bool = False,
+    blow_up_threshold: float = jnp.inf,
+    filename_base: str | None = None,
 ):
     """
     TODO document
     """
-
     fe_type = FiniteElementType(
         cell_type=CellType.interval,
         family=ElementFamily.P,
@@ -75,7 +79,7 @@ def solve_fiber_mechanics_bvp(
     contact_fe_type = fe_type
     self_adjacency_block = 3
     contact_search_radius = contact_search_radius
-    contact_params = jnp.array([10 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
+    contact_params = jnp.array([100 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
 
     def contact_pair_generator() -> list[ElementBatch] | None:
         contact_cells = contact_batch(
@@ -95,14 +99,26 @@ def solve_fiber_mechanics_bvp(
             )
         ]
 
-    u_truss, residual_truss, element_batches_truss = solve_bvp(
-        element_residual_func=linear_truss_residual,
-        vertices_vd=fabric.points,
-        element_batches=element_batches,
-        boundary_conditions=boundary_conditions,
-        solver_options=solver_options,
-        plot_convergence=plot_convergence,
-        contact_batch_generator=contact_pair_generator,
-    )
+    if filename_base is not None:
+        write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk", subdir="contact"))
+    for i in range(pseudotime_iters):
+        print(f"\n \n   pseudo-timestep i = {i+1}\n \n")
+        u_truss, residual_truss, element_batches_truss = solve_bvp(
+            element_residual_func=linear_truss_residual,
+            vertices_vd=fabric.points,
+            element_batches=element_batches,
+            boundary_conditions=boundary_conditions,
+            solver_options=solver_options,
+            plot_convergence=plot_convergence,
+            contact_batch_generator=contact_pair_generator,
+        )
+        u_truss = u_truss.reshape((-1,fabric.points.shape[1]))
+        print(f"\nmax(||u||) = {np.linalg.norm(u_truss,axis=1).max()}\n")
+        fabric.points = fabric.points + np.array(u_truss)
+
+        if filename_base is not None:
+            write_vtk(fabric,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
+        if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss,axis=1).max()>blow_up_threshold:
+            raise RuntimeError(f"Nonlinear solve diverged: displacement magnitude exceeded threshold ({blow_up_threshold})")
 
     return u_truss, residual_truss, element_batches_truss
