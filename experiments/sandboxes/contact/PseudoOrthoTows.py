@@ -30,7 +30,7 @@ def make_fabric(n_elements: list[int], X: list[tuple],DirichletBC_ends: list[tup
     vertex_offset = 0
 
     for (n_el, x, bc) in zip(n_elements, X, DirichletBC_ends):
-        points_i, cells_i, point_ids_i, cell_ids_i = make_single_fiber(
+        points_i, cells_i = make_single_fiber(
             n_elements=n_el,
             x0=x[0],
             xN=x[1],
@@ -102,7 +102,6 @@ def run_orthogonalTows(
             linear_max_iter=500,
             # max_linear_displacement=min(min_dist/2,fabric.diameters[0]/2),
         ),
-        boundary_conditions_per_step=dyn_bcs,
         pseudotime_iters=pseudoT,
         filename_base=filename_base,
         blow_up_threshold=1e6,
