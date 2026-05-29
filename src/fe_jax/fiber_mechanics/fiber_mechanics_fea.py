@@ -4,7 +4,8 @@ from ..postprocess import get_output
 from ..fea import *
 from ..contact import *
 from ..linear_elasticity import *
-
+from typing import List
+from copy import deepcopy
 
 @dataclass
 class VTMSFiberMaterial:
@@ -23,6 +24,10 @@ def solve_fiber_mechanics_bvp(
     plot_convergence: bool = False,
     blow_up_threshold: float = jnp.inf,
     filename_base: str | None = None,
+    boundary_conditions_per_step: list[
+        list[DirichletBC | NeumannBC | PeriodicBC]
+    ]
+    | None = None,
 ):
     """
     TODO document
@@ -79,7 +84,7 @@ def solve_fiber_mechanics_bvp(
     contact_fe_type = fe_type
     self_adjacency_block = 3
     contact_search_radius = contact_search_radius
-    contact_params = jnp.array([100 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
+    contact_params = jnp.array([10 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
 
     def contact_pair_generator() -> list[ElementBatch] | None:
         contact_cells = contact_batch(
@@ -101,24 +106,41 @@ def solve_fiber_mechanics_bvp(
 
     if filename_base is not None:
         write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk", subdir="contact"))
+
+    if boundary_conditions_per_step is not None:
+        if len(boundary_conditions_per_step) != pseudotime_iters:
+            raise ValueError(
+                "boundary_conditions_per_step must contain exactly "
+                f"pseudotime_iters={pseudotime_iters} entries, but got "
+                f"{len(boundary_conditions_per_step)}."
+            )
+
     for i in range(pseudotime_iters):
         print(f"\n \n   pseudo-timestep i = {i+1}\n \n")
+        bcs_i = (
+            boundary_conditions_per_step[i]
+            if boundary_conditions_per_step is not None
+            else boundary_conditions
+        )
         u_truss, residual_truss, element_batches_truss = solve_bvp(
             element_residual_func=linear_truss_residual,
             vertices_vd=fabric.points,
+            u_0_g=None if i==0 else u_truss,
             element_batches=element_batches,
-            boundary_conditions=boundary_conditions,
+            boundary_conditions=bcs_i,
             solver_options=solver_options,
             plot_convergence=plot_convergence,
             contact_batch_generator=contact_pair_generator,
         )
-        u_truss = u_truss.reshape((-1,fabric.points.shape[1]))
-        print(f"\nmax(||u||) = {np.linalg.norm(u_truss,axis=1).max()}\n")
-        fabric.points = fabric.points + np.array(u_truss)
+        # u_truss = u_truss.reshape((-1,fabric.points.shape[1]))
+        print(f"\nmax(||u||) = {np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()}\n")
+        # fabric.points = fabric.points + np.array(u_truss)
 
         if filename_base is not None:
-            write_vtk(fabric,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
-        if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss,axis=1).max()>blow_up_threshold:
+            temp_fab = deepcopy(fabric)
+            temp_fab.points = temp_fab.points + np.array(u_truss.reshape((-1,temp_fab.points.shape[1])))
+            write_vtk(temp_fab,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
+        if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()>blow_up_threshold:
             raise RuntimeError(f"Nonlinear solve diverged: displacement magnitude exceeded threshold ({blow_up_threshold})")
 
     return u_truss, residual_truss, element_batches_truss
