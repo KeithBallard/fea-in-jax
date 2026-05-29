@@ -17,17 +17,17 @@ class VTMSFiberMaterial:
 def solve_fiber_mechanics_bvp(
     fabric: VTMSFabric,
     materials: list[VTMSFiberMaterial],
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
+    boundary_conditions: list[DirichletBC | NeumannBC | PeriodicBC] | list[list[DirichletBC | NeumannBC| PeriodicBC]],
     contact_search_radius: float,
     solver_options: SolverOptions,
     pseudotime_iters: int = 1,
     plot_convergence: bool = False,
     blow_up_threshold: float = jnp.inf,
     filename_base: str | None = None,
-    boundary_conditions_per_step: list[
-        list[DirichletBC | NeumannBC | PeriodicBC]
-    ]
-    | None = None,
+    # boundary_conditions_per_step: list[
+    #     list[DirichletBC | NeumannBC | PeriodicBC]
+    # ]
+    # | None = None,
 ):
     """
     TODO document
@@ -107,27 +107,43 @@ def solve_fiber_mechanics_bvp(
     if filename_base is not None:
         write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk", subdir="contact"))
 
-    if boundary_conditions_per_step is not None:
-        if len(boundary_conditions_per_step) != pseudotime_iters:
+    # Normalize boundary_conditions to a per-step schedule.
+    # Static input: [bc1, bc2, ...] -> [[bc1, bc2, ...], ..., [bc1, bc2, ...]]
+    # Dynamic input: [[...], [...], ...] stays as-is.
+    if len(boundary_conditions) == 0:
+        boundary_conditions = [[] for _ in range(pseudotime_iters)]
+    elif isinstance(boundary_conditions[0], (DirichletBC, NeumannBC, PeriodicBC)):
+        boundary_conditions = [
+            list(boundary_conditions) for _ in range(pseudotime_iters)
+        ]
+    else:
+        if len(boundary_conditions) != pseudotime_iters:
             raise ValueError(
-                "boundary_conditions_per_step must contain exactly "
-                f"pseudotime_iters={pseudotime_iters} entries, but got "
-                f"{len(boundary_conditions_per_step)}."
+                "If boundary_conditions is already a per-step schedule, it must have "
+                f"exactly pseudotime_iters={pseudotime_iters} entries."
             )
+
+    # if boundary_conditions_per_step is not None:
+    #     if len(boundary_conditions_per_step) != pseudotime_iters:
+    #         raise ValueError(
+    #             "boundary_conditions_per_step must contain exactly "
+    #             f"pseudotime_iters={pseudotime_iters} entries, but got "
+    #             f"{len(boundary_conditions_per_step)}."
+    #         )
 
     for i in range(pseudotime_iters):
         print(f"\n \n   pseudo-timestep i = {i+1}\n \n")
-        bcs_i = (
-            boundary_conditions_per_step[i]
-            if boundary_conditions_per_step is not None
-            else boundary_conditions
-        )
+        # bcs_i = (
+        #     boundary_conditions_per_step[i]
+        #     if boundary_conditions_per_step is not None
+        #     else boundary_conditions
+        # )
         u_truss, residual_truss, element_batches_truss = solve_bvp(
             element_residual_func=linear_truss_residual,
             vertices_vd=fabric.points,
             u_0_g=None if i==0 else u_truss,
             element_batches=element_batches,
-            boundary_conditions=bcs_i,
+            boundary_conditions=boundary_conditions[i],
             solver_options=solver_options,
             plot_convergence=plot_convergence,
             contact_batch_generator=contact_pair_generator,
