@@ -73,6 +73,7 @@ def run_orthogonalTows(
     DirichletBC_ends: list[tuple],
     pseudoT:int,
     filename_base:str,
+    contact_stiffness_model: Callable,
 ):
     """ """
     fabric, bcs = make_fabric(n_elements=n_elements, X=X, DirichletBC_ends=DirichletBC_ends)
@@ -92,8 +93,9 @@ def run_orthogonalTows(
         materials=[
             VTMSFiberMaterial(id=int(fabric.get_material_id(i)), E=E, A=A) for i in range(fabric.get_n_bundles())
         ],
-        boundary_conditions=bcs,
+        boundary_conditions=dyn_bcs,
         contact_search_radius=contact_search_radius,
+        contact_stiffness_model=contact_stiffness_model,
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
@@ -110,7 +112,7 @@ def run_orthogonalTows(
     return u,fabric
 
 args = {
-    'n_elements':[10]*6,
+    'n_elements':[40]*6,
     'X':[
         [[0.05,-1,0.05],[0.05,1,0.05]],
         [[0.05,-1,-0.05],[0.05,1,-0.05]],
@@ -123,8 +125,53 @@ args = {
         *[[-0.005,0,0]]*3,
         *[[ 0.005,0,0]]*3,
     ],
-    'contact_search_radius':0.25,
-    'pseudoT':20,
-    'filename_base':'PseudoTimeDirichlet_OrthoTows/UpdatedMethod',
+    'contact_search_radius':0.5,
+    'pseudoT':80,
+    'filename_base':'UpdatedContact/Exponential_Dirichlet',
+    'contact_stiffness_model': contact_stiffness_exponential
 }
 
+
+run_orthogonalTows(**args)
+# args['filename_base'] = 'ContactStiffnessModel/Linear_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_linear
+# ul_whole,fl_whole = run_orthogonalTows(**args)
+# args['filename_base'] = 'ContactStiffnessModel/Piecewise_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
+# up_whole,fp_whole = run_orthogonalTows(**args)
+# args['filename_base'] = 'ContactStiffnessModel/Exponential_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_exponential
+# ue_whole,fe_whole = run_orthogonalTows(**args)
+
+# args['contact_search_radius'] = 0.25
+# args['filename_base'] = 'ContactStiffnessModel/Linear_HalfS_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_linear
+# ul_half,fl_half = run_orthogonalTows(**args)
+# args['filename_base'] = 'ContactStiffnessModel/Piecewise_HalfS_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
+# up_half,fp_half = run_orthogonalTows(**args)
+# args['filename_base'] = 'ContactStiffnessModel/Exponential_HalfS_DirichletTest'
+# args['contact_stiffness_model'] = contact_stiffness_exponential
+# ue_half,fe_half = run_orthogonalTows(**args)
+
+def get_min(fabric,i,j):
+    fi = fabric.get_fiber_points(0,i)
+    fj = fabric.get_fiber_points(0,j)
+    D = np.linalg.norm(fi[None,:,:] - fj[:,None,:],axis=-1)
+    return D[D.nonzero()].min()
+
+def get_mins(fabric):
+    n = fabric.get_n_fibers_in_bundle(0)
+    M = []
+    for i in range(n):
+        for j in range(i+1,n):
+            print(f"({i},{j}) - {get_min(fabric,i,j)}")
+            M.append(get_min(fabric,i,j))
+    return np.array(M).min()
+
+# print(f"{get_mins(fl_whole):0.6f}")
+# print(f"{get_mins(fp_whole):0.6f}")
+# print(f"{get_mins(fe_whole):0.6f}")
+# print(f"{get_mins(fl_half):0.6f}")
+# print(f"{get_mins(fp_half):0.6f}")
+# print(f"{get_mins(fe_half):0.6f}")

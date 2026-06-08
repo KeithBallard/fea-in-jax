@@ -1,6 +1,6 @@
 from .vtms_structs import *
 from .vtk_exporter import *
-from ..postprocess import get_output
+from ..postprocess import get_output, write_fabric_mold_contact
 from ..fea import *
 from ..contact import *
 from ..linear_elasticity import *
@@ -13,6 +13,12 @@ class VTMSFiberMaterial:
     E: float
     A: float
 
+@dataclass
+class RigidMold:
+    points: np.ndarray
+    connections: np.ndarray
+    point_ids: np.ndarray | None = None
+
 
 def solve_fiber_mechanics_bvp(
     fabric: VTMSFabric,
@@ -20,10 +26,12 @@ def solve_fiber_mechanics_bvp(
     boundary_conditions: list[DirichletBC | NeumannBC | PeriodicBC] | list[list[DirichletBC | NeumannBC| PeriodicBC]],
     contact_search_radius: float,
     solver_options: SolverOptions,
+    contact_stiffness_model  = Callable,
     pseudotime_iters: int = 1,
     plot_convergence: bool = False,
     blow_up_threshold: float = jnp.inf,
     filename_base: str | None = None,
+    rigid_mold: RigidMold | None = None,
     # boundary_conditions_per_step: list[
     #     list[DirichletBC | NeumannBC | PeriodicBC]
     # ]
@@ -80,15 +88,44 @@ def solve_fiber_mechanics_bvp(
             for i in range(fabric.fiber_offsets.shape[0] - 1)
         ]
     )
+    if rigid_mold is not None:
+        point_fiber_ids = np.concatenate([point_fiber_ids,rigid_mold.point_ids])
+        element_batches+= [
+            ElementBatch(
+                fe_type=fe_type,
+                n_dofs_per_basis=n_dofs_per_basis,
+                connectivity_en=rigid_mold.connections + fabric.points.shape[0],
+                constitutive_model=elastic_truss,
+                material_params=jnp.array([materials[0].E,materials[0].A]),
+            )
+        ]
+
+    def assemble_vertices_vd(fabric, rigid_mold):
+        fabric_n = fabric.points.shape[0]
+        if rigid_mold is None:
+            return fabric.points, fabric_n, None
+        mold_n = rigid_mold.points.shape[0]
+        vertices_vd = np.vstack([fabric.points, rigid_mold.points])
+        return vertices_vd, fabric_n, slice(fabric_n, fabric_n + mold_n)
+    vertices_vd, fabric_n, mold_slice = assemble_vertices_vd(fabric,rigid_mold)
 
     contact_fe_type = fe_type
-    self_adjacency_block = 3
+    self_adjacency_block = 10000
     contact_search_radius = contact_search_radius
-    contact_params = jnp.array([10 * np.max(material_params[:,0]), np.max(material_params[:,1]), contact_search_radius])  # E_max, A, R
+    contact_params = jnp.array([
+        10. * np.max(material_params[:,0]),
+        np.max(material_params[:,1]),
+        contact_search_radius,
+        fabric.get_diameter(0),
+        1.25*fabric.get_diameter(0),
+        (1./100.) * np.max(material_params[:,0]),
+    ])  # E_max, A, R
 
-    def contact_pair_generator() -> list[ElementBatch] | None:
+    def contact_pair_generator(u_ref) -> list[ElementBatch] | None:
+        if u_ref is None:
+            u_ref = jnp.zeros((vertices_vd.shape[0]*vertices_vd.shape[1],))
         contact_cells = contact_batch(
-            points=fabric.points,
+            points=vertices_vd + np.array(u_ref).reshape(vertices_vd.shape),
             point_fiber_ids=point_fiber_ids,
             adjacency_block=self_adjacency_block,
             radius=contact_search_radius,
@@ -106,6 +143,15 @@ def solve_fiber_mechanics_bvp(
 
     if filename_base is not None:
         write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk", subdir="contact"))
+        write_fabric_mold_contact(
+            fabric = fabric,
+            mold = rigid_mold,
+            filename = get_output(filename = f"{filename_base}_wireframe_0.vtk", subdir="contact"),
+            contact_params = {
+                'self_adjacency_block': self_adjacency_block,
+                'contact_search_radius': contact_search_radius,
+            }
+        )
 
     # Normalize boundary_conditions to a per-step schedule.
     # Static input: [bc1, bc2, ...] -> [[bc1, bc2, ...], ..., [bc1, bc2, ...]]
@@ -131,6 +177,7 @@ def solve_fiber_mechanics_bvp(
     #             f"{len(boundary_conditions_per_step)}."
     #         )
 
+
     for i in range(pseudotime_iters):
         print(f"\n \n   pseudo-timestep i = {i+1}\n \n")
         # bcs_i = (
@@ -139,8 +186,12 @@ def solve_fiber_mechanics_bvp(
         #     else boundary_conditions
         # )
         u_truss, residual_truss, element_batches_truss = solve_bvp(
-            element_residual_func=linear_truss_residual,
-            vertices_vd=fabric.points,
+            # element_residual_func=linear_truss_residual,
+            element_residual_func=jax.tree_util.Partial(
+                linear_truss_residual,
+                contact_stiffness_model = contact_stiffness_model,
+            ),
+            vertices_vd=vertices_vd,
             u_0_g=None if i==0 else u_truss,
             element_batches=element_batches,
             boundary_conditions=boundary_conditions[i],
@@ -154,8 +205,19 @@ def solve_fiber_mechanics_bvp(
 
         if filename_base is not None:
             temp_fab = deepcopy(fabric)
-            temp_fab.points = temp_fab.points + np.array(u_truss.reshape((-1,temp_fab.points.shape[1])))
+            temp_fab.points += np.array(u_truss.reshape((-1,temp_fab.points.shape[1]))[:fabric_n,:])
+            temp_mold = deepcopy(rigid_mold)
+            temp_mold.points +=  np.array(u_truss.reshape((-1,temp_mold.points.shape[1]))[fabric_n:,:])
             write_vtk(temp_fab,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
+            write_fabric_mold_contact(
+                fabric = temp_fab,
+                mold = temp_mold,
+                filename = get_output(filename = f"{filename_base}_wireframe_{i+1}.vtk", subdir="contact"),
+                contact_params = {
+                    'self_adjacency_block': self_adjacency_block,
+                    'contact_search_radius': contact_search_radius,
+                }
+            )
         if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()>blow_up_threshold:
             raise RuntimeError(f"Nonlinear solve diverged: displacement magnitude exceeded threshold ({blow_up_threshold})")
 

@@ -289,7 +289,58 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
     return stress_dd, jnp.array([])  # no internal state
 
 @jax.jit
-def elastic_contact_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd: jnp.ndarray):
+def contact_stiffness_linear(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_max = material_params_m[..., 0]
+    radius = material_params_m[..., 2]
+    E = jnp.where(d<radius,E_max - E_max/radius*d,0)
+    return E
+
+@jax.jit
+def contact_stiffness_piecewise_linear(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_c= material_params_m[..., 0] # stiffness at physical contact (defined by fiber diameter)
+    s_r = material_params_m[..., 2] # search_radius
+    dmtr = material_params_m[..., 3] # diameter
+    c_r = material_params_m[..., 4] # contact_radius
+    E_min = material_params_m[..., 5] # contact_radius
+
+    seg1 = E_c + (E_c-E_min)/(dmtr - c_r)*(d-dmtr)
+    seg2 = E_min/(c_r-s_r)*(d-s_r)
+    # E = ()*(jnp.where(d<c_r,1,0))
+    # E += ()*(jnp.where(d>c_r,1,0)-jnp.where(d>s_r,1,0))
+    return jnp.where(
+        d<c_r,
+        seg1,
+        jnp.where(d<s_r,seg2, 0.0),
+    )
+
+@jax.jit
+def contact_stiffness_exponential(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_c= material_params_m[..., 0] # stiffness at physical contact (defined by fiber diameter)
+    dmtr = material_params_m[..., 3] # diameter
+    c_r = material_params_m[..., 4] # contact_radius
+    E_min = material_params_m[..., 5] # contact_radius
+    alpha =  jnp.exp((dmtr*jnp.log(E_min) - c_r*jnp.log(E_c))/(dmtr-c_r))
+    r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
+    return alpha*jnp.exp(-r*d)
+
+# @jax.jit
+@partial(jax.jit, static_argnames=("contact_stiffness_model",))
+def elastic_contact_truss(
+    eps_dd: jnp.ndarray,
+    material_params_m: jnp.ndarray,
+    x_nd: jnp.ndarray,
+    u_nd: jnp.ndarray,
+    contact_stiffness_model: Callable,
+):
     """
     A constitive relation for contact elements which is basically
     an elastic truss where stiffness depends on the length.
@@ -305,21 +356,22 @@ def elastic_contact_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x
     stress_dd  : stress tensor, ndarray[float, (D, D)]
     """
 
-    E_max = material_params_m[..., 0]
+    # E_max = material_params_m[..., 0]
     A = material_params_m[..., 1]
-    radius = material_params_m[..., 2]
-    E = lambda d: jnp.where(d<radius,E_max - E_max/radius*d,0)
+    # radius = material_params_m[..., 2]
+    # E = lambda d: jnp.where(d<radius,E_max - E_max/radius*d,0)
     # Assumes the node number puts the endpoints as first and last entries. 
     dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
     l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
 
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    stress_dd = E(jnp.linalg.norm(dx_d))*A*eps_a*P_dd
+    stress_dd = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*A*eps_a*P_dd
 
     return stress_dd, jnp.array([])  # no internal state
 
-@jax.jit
+# @jax.jit
+@partial(jax.jit, static_argnames=("contact_stiffness_model",))
 def linear_truss_residual(
     u_nd: jnp.ndarray,
     x_nd: jnp.ndarray,
@@ -328,6 +380,7 @@ def linear_truss_residual(
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
     constitutive_model: Callable,
+    contact_stiffness_model: Callable | None = None,
 ):
     """
     Residual function that computes the residual for the weak form corresponding to linear
@@ -384,6 +437,10 @@ def linear_truss_residual(
 
     if is_required(constitutive_model, "u_nd"):
         constitutive_args.append(u_nd)
+        in_axes.append(None)
+
+    if is_required(constitutive_model, "contact_stiffness_model"):
+        constitutive_args.append(contact_stiffness_model)
         in_axes.append(None)
 
     constitutive_model_vmap = jax.vmap(constitutive_model, in_axes=tuple(in_axes))
