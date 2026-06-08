@@ -1323,6 +1323,7 @@ def preprocess_bvp(
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
     contact_batch_generator: Callable | None = None,
+    u_0_g: jnp.ndarray | None = None,
 ):
     """
     Converts information from a user-facing format to a JAX-ameniable format.
@@ -1345,7 +1346,7 @@ def preprocess_bvp(
     n_total_dofs = V * U + sum(global_values)
 
     if contact_batch_generator is not None:
-        element_batches=[*element_batches, *contact_batch_generator()]
+        element_batches=[*element_batches, *contact_batch_generator(u_0_g)]
         # TODO print how many contact elements were discovered
 
     # Validate input
@@ -1509,6 +1510,7 @@ def solve_bvp(
             multipoint_constraints=multipoint_constraints,
             global_values=global_values,
             contact_batch_generator=contact_batch_generator,
+            u_0_g = u_0_g,
         )
     )
 

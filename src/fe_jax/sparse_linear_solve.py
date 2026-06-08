@@ -285,7 +285,7 @@ def linear_solve(
 
         #     jnp.save(candidate, arr)
         #     return candidate
-        # saved_path = save_unique_npy(J_dense, "output/jac/debug_jacobian_with_Dirichlet.npy")
+        # saved_path = save_unique_npy(J_dense, "output/jac/debug_jacobian_mold.npy")
         # print(f"saved to {saved_path}\n\n")
 
         jax.debug.print(
@@ -559,6 +559,26 @@ def linear_solve(
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
             J_sparse = J_w_dirichlet(x_0)
+            # from pathlib import Path
+            # import numpy as np
+
+            # def save_unique_npy(arr, filename):
+            #     path = Path(filename)
+            #     stem = path.stem
+            #     suffix = path.suffix or ".npy"
+            #     parent = path.parent
+
+            #     candidate = parent / f"{stem}_{0}{suffix}"
+            #     i = 1
+            #     while candidate.exists():
+            #         candidate = parent / f"{stem}_{i}{suffix}"
+            #         i += 1
+
+            #     jnp.save(candidate, arr)
+            #     return candidate
+            # saved_path = save_unique_npy(J_sparse.todense(), "output/jac/debug_jacobian_moldNEW.npy")
+            # print(f"saved to {saved_path}\n\n")
+
             delta_x = __pypardiso_solve(J_sparse, -R_0)
 
         case _:
