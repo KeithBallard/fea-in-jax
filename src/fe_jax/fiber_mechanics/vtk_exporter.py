@@ -117,12 +117,19 @@ def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as
     filepath = Path(filepath)
 
     writer_vtk = vtk.vtkPolyDataWriter()
+    writer_vtk.SetFileTypeToASCII()
     if not fibers_as_tubes:
         vtk_output = to_vtk_polydata(vtms_obj)
         writer_vtk.SetInputData(vtk_output)
     else:
+        # vtkTubeFilter emits triangle strips, which legacy PolyDataWriter
+        # can serialize inconsistently for ASCII output. Triangulate first so
+        # the file stays in the legacy .vtk format but avoids malformed strips.
         vtk_output = to_vtk_tubes(vtms_obj)
-        writer_vtk.SetInputConnection(vtk_output.GetOutputPort())
+        triangle_filter = vtk.vtkTriangleFilter()
+        triangle_filter.SetInputConnection(vtk_output.GetOutputPort())
+        triangle_filter.Update()
+        writer_vtk.SetInputConnection(triangle_filter.GetOutputPort())
     writer_vtk.SetFileName(str(filepath))
     writer_vtk.Write()
 
