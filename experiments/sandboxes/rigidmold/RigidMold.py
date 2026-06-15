@@ -210,6 +210,18 @@ args = {
     'dir_step':0.005,
 }
 
+args31 = {
+    'n_elements':[80]*31,
+    'X0':[[i[0],i[1],2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
+    'XN':[[i[0],i[1],-2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
+    'contact_search_radius':0.2,
+    'filename_base': 'testhex/third',
+    'contact_stiffness_model': contact_stiffness_exponential,
+    'pseudoT': 5,
+    'diameter': 0.1,
+    'rigid_mold_params': ((-0.8, 0), 0.3, 4.0, 0.025),
+    'dir_step':0.005,
+}
 # args['contact_stiffness_model'] = contact_stiffness_linear
 # ul,fl,dl = run_threeFiberTow(**args)
 # args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
