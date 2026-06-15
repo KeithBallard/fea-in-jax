@@ -100,7 +100,12 @@ def to_vtk_tubes(vtms_obj: VTMSFabric | VTMSBundle) -> vtk.vtkTubeFilter:
     return tube_filter
 
 
-def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as_tubes = True):
+def write_vtk(
+    vtms_obj: VTMSFabric | VTMSBundle,
+    filepath: str | Path,
+    fibers_as_tubes: bool = True,
+    file_type: str = "binary",
+):
     """
     Writes the fabric geometry to a legacy .vtk file.
 
@@ -113,11 +118,21 @@ def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as
     fibers_as_tubes : bool, optional
         If True, generates 3D tubes based on fiber radius. If False, writes
         simple polylines. Default is True.
+    file_type : str, optional
+        Legacy VTK file type to write. Must be ``"binary"`` or ``"ascii"``.
+        Default is ``"binary"``.
     """
     filepath = Path(filepath)
 
     writer_vtk = vtk.vtkPolyDataWriter()
-    writer_vtk.SetFileTypeToBinary()
+    file_type = file_type.lower()
+    if file_type == "binary":
+        writer_vtk.SetFileTypeToBinary()
+    elif file_type == "ascii":
+        writer_vtk.SetFileTypeToASCII()
+    else:
+        raise ValueError("file_type must be 'binary' or 'ascii'")
+
     if not fibers_as_tubes:
         vtk_output = to_vtk_polydata(vtms_obj)
         writer_vtk.SetInputData(vtk_output)

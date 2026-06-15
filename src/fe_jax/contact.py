@@ -20,8 +20,8 @@ def _validate_point_cloud(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    points = jnp.asarray(points)
-    point_fiber_ids = jnp.asarray(point_fiber_ids)
+    points = np.asarray(points)
+    point_fiber_ids = np.asarray(point_fiber_ids)
 
     if points.ndim != 2 or points.shape[1] not in (1, 2, 3):
         raise ValueError("points must have shape (N_total, 1), (N_total, 2), or (N_total, 3)")
@@ -156,17 +156,27 @@ def distinct_fiber_node2node(
 
     N = points.shape[0]
 
-    d = points[:,None,:] - points[None,:,:]
-    dist = jnp.linalg.norm(d,axis=-1)
+    # d = points[:,None,:] - points[None,:,:]
+    # dist = jnp.linalg.norm(d,axis=-1)
 
-    distinct_fiber_mask = point_fiber_ids[:,None] != point_fiber_ids[None,:]
-    upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1)
-    dist_mask = dist <= radius
+    # distinct_fiber_mask = point_fiber_ids[:,None] != point_fiber_ids[None,:]
+    # upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1)
+    # dist_mask = dist <= radius
 
-    pair_mask = distinct_fiber_mask & upper_mask & dist_mask
+    # pair_mask = distinct_fiber_mask & upper_mask & dist_mask
 
-    i_idx, j_idx = jnp.nonzero(pair_mask)
-    distinct_contacts = jnp.stack([i_idx,j_idx], axis=1)
+    # i_idx, j_idx = jnp.nonzero(pair_mask)
+    # distinct_contacts = jnp.stack([i_idx,j_idx], axis=1)
+
+    candidates = []
+    for i in range(N):
+        for j in range(i+1, N):
+            if point_fiber_ids[i] != point_fiber_ids[j] and np.linalg.norm(points[i]-points[j]) <= radius:
+                candidates.append([i,j])
+    if len(candidates)==0:
+        distinct_contacts = np.zeros((0,2),dtype=np.int32)
+    else:
+        distinct_contacts = np.array(candidates, dtype=np.int32)
 
     return distinct_contacts
 
@@ -204,19 +214,33 @@ def self_fiber_node2node(
     if adjacency_block < 0:
         raise ValueError("adjacency_block must be nonnegative")
 
-    N = points.shape[0]
+    # N = points.shape[0]
 
-    d = points[:,None,:] - points[None,:,:]
-    dist = jnp.linalg.norm(d,axis=-1)
+    # d = points[:,None,:] - points[None,:,:]
+    # dist = jnp.linalg.norm(d,axis=-1)
 
-    same_fiber_mask = point_fiber_ids[:,None] == point_fiber_ids[None,:]
-    upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1 + adjacency_block)
-    dist_mask = (dist <= radius)
+    # same_fiber_mask = point_fiber_ids[:,None] == point_fiber_ids[None,:]
+    # upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1 + adjacency_block)
+    # dist_mask = (dist <= radius)
 
-    pair_mask = same_fiber_mask & upper_mask & dist_mask
+    # pair_mask = same_fiber_mask & upper_mask & dist_mask
 
-    i_idx,j_idx = jnp.nonzero(pair_mask)
-    self_contacts = jnp.stack([i_idx,j_idx], axis=1)
+    # i_idx,j_idx = jnp.nonzero(pair_mask)
+    # self_contacts = jnp.stack([i_idx,j_idx], axis=1)
+
+    candidates = []
+    for fiber_id in np.unique(point_fiber_ids):
+        global_indeces = np.where(point_fiber_ids == fiber_id)[0]
+        fiber = points[global_indeces]
+        for i in range(int(fiber.shape[0])):
+            for j in range(i+1+adjacency_block,int(fiber.shape[0])):
+                if np.linalg.norm(fiber[i]-fiber[j]) <= radius:
+                    candidates.append([global_indeces[i],global_indeces[j]])
+    if len(candidates)==0:
+        self_contacts = np.zeros((0,2),dtype=np.int32)
+    else:
+        self_contacts = np.array(candidates, dtype=np.int32)
+
 
     return self_contacts
 
