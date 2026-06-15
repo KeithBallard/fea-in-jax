@@ -125,11 +125,15 @@ def write_vtk(vtms_obj: VTMSFabric | VTMSBundle, filepath: str | Path, fibers_as
         # vtkTubeFilter emits triangle strips, which legacy PolyDataWriter
         # can serialize inconsistently for ASCII output. Triangulate first so
         # the file stays in the legacy .vtk format but avoids malformed strips.
-        vtk_output = to_vtk_tubes(vtms_obj)
         triangle_filter = vtk.vtkTriangleFilter()
-        triangle_filter.SetInputConnection(vtk_output.GetOutputPort())
+        triangle_filter.SetInputConnection(to_vtk_tubes(vtms_obj).GetOutputPort())
         triangle_filter.Update()
-        writer_vtk.SetInputConnection(triangle_filter.GetOutputPort())
+        clean_filter = vtk.vtkCleanPolyData()
+        clean_filter.SetInputConnection(triangle_filter.GetOutputPort())
+        clean_filter.Update()
+        vtk_output = vtk.vtkPolyData()
+        vtk_output.ShallowCopy(clean_filter.GetOutput())
+        writer_vtk.SetInputData(vtk_output)
     writer_vtk.SetFileName(str(filepath))
     writer_vtk.Write()
 
