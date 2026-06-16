@@ -215,12 +215,12 @@ args31 = {
     'X0':[[i[0],i[1],2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
     'XN':[[i[0],i[1],-2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
     'contact_search_radius':0.2,
-    'filename_base': 'testhex/third',
+    'filename_base': 'ThirtyOneFiberTow/ThirtyOneFiberTow_LessStiffContact',
     'contact_stiffness_model': contact_stiffness_exponential,
-    'pseudoT': 5,
+    'pseudoT': 100,
     'diameter': 0.1,
-    'rigid_mold_params': ((-0.8, 0), 0.3, 4.0, 0.025),
-    'dir_step':0.005,
+    'rigid_mold_params': ((0.75, 0), 0.3, 4.0, 0.025),
+    'dir_step':-0.005,
 }
 # args['contact_stiffness_model'] = contact_stiffness_linear
 # ul,fl,dl = run_threeFiberTow(**args)
@@ -253,3 +253,26 @@ def get_mins(fabric):
 # f,_ = make_bundle(**{k: args[k] for k in ['n_elements','X0','XN']})
 # P,C = make_cyl_mold((0,0),0.25,0.4,0.025)
 # r = RigidMold(points = P, connections = C)
+def contact_test_case():
+    H = build_custom_hex([2,5,6,5,6,5,2],0.1)
+    fabric,_ = make_bundle(
+        n_elements=[80]*31,
+        X0 = [[i[0],i[1],2] for i in H],
+        XN = [[i[0],i[1],-2] for i in H],
+        diameter=0.1
+    )
+    point_fiber_ids = np.concatenate(
+        [
+            np.full((fabric.fiber_offsets[i+1]-fabric.fiber_offsets[i],), i)
+            for i in range(fabric.fiber_offsets.shape[0] - 1)
+        ]
+    )
+    mold_points,mold_connections = make_cyl_mold(*((-0.65, 0), 0.3, 4.0, 0.025))
+    mold = RigidMold(
+        points = mold_points,
+        point_ids= np.full((mold_points.shape[0],), point_fiber_ids.max()+1),
+        connections = mold_connections,
+    )
+    points = np.vstack([fabric.points,mold.points])
+    ids = np.concatenate([point_fiber_ids,mold.point_ids])
+    return fabric, mold, points, ids
