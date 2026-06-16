@@ -3,6 +3,7 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 from typing import Callable
+import scipy as sp
 
 from fe_jax.basis_quadrature import FiniteElementType
 
@@ -290,15 +291,22 @@ def contact_batch(
     if radius <= 0:
         raise ValueError("radius must be positive")
 
-    distinct_cells = distinct_fiber_fn(
-        points = points,
-        point_fiber_ids = point_fiber_ids,
-        radius = radius
-    )
-    self_cells = self_fiber_fn(
-        points = points,
-        point_fiber_ids = point_fiber_ids,
-        radius = radius,
-        adjacency_block = adjacency_block
-    )
-    return np.concatenate([distinct_cells, self_cells])
+    # distinct_cells = distinct_fiber_fn(
+    #     points = points,
+    #     point_fiber_ids = point_fiber_ids,
+    #     radius = radius
+    # )
+    # self_cells = self_fiber_fn(
+    #     points = points,
+    #     point_fiber_ids = point_fiber_ids,
+    #     radius = radius,
+    #     adjacency_block = adjacency_block
+    # )
+
+    kd_tree = sp.spatial.cKDTree(points)
+    pairs = np.array(list(kd_tree.query_pairs(r=0.2)))
+    distinct_cells = pairs[ids[pairs[:,0]] != ids[pairs[:,1]]]
+    self_cells = pairs[ids[pairs[:,0]] == ids[pairs[:,1]]]
+    self_cells = self_cells[self_cells[:,1]-self_cells[:,0]>adjacency_block]
+
+    return np.vstack([distinct_cells, self_cells])
