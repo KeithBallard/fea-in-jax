@@ -8,6 +8,15 @@ import scipy as sp
 from fe_jax.basis_quadrature import FiniteElementType
 
 @dataclass
+class ContactParams:
+    self_adjacency_block: int
+    contact_stiffness_model: Callable
+    D_stiffness_to_E_ratio: float # ratio between stiffness at the diameter distance to the stiffness of the truss elements (D/E) 
+    contact_search_radius: float # distance to first identify contacts, but stiffness should be very low  
+    M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
+    M_stiffness_to_E_ratio: float # ratio between stiffness at M to the stiffness of the truss elements (M/E) 
+
+@dataclass
 class ContactPreprocessConfig:
     vertices_fiber_ids: np.ndarray
     radius: float

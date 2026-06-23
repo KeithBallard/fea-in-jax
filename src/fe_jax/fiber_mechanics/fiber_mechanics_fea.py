@@ -24,14 +24,14 @@ def solve_fiber_mechanics_bvp(
     fabric: VTMSFabric,
     materials: list[VTMSFiberMaterial],
     boundary_conditions: list[DirichletBC | NeumannBC | PeriodicBC] | list[list[DirichletBC | NeumannBC| PeriodicBC]],
-    contact_search_radius: float,
     solver_options: SolverOptions,
-    contact_stiffness_model  = Callable,
     pseudotime_iters: int = 1,
     plot_convergence: bool = False,
     blow_up_threshold: float = jnp.inf,
     filename_base: str | None = None,
     rigid_mold: RigidMold | None = None,
+    pre_strain: float | None = None,
+    contact_options: ContactParams | None = None,
     # boundary_conditions_per_step: list[
     #     list[DirichletBC | NeumannBC | PeriodicBC]
     # ]
@@ -72,13 +72,20 @@ def solve_fiber_mechanics_bvp(
                 material_params[element_index] = params
                 element_index += 1
 
+    if pre_strain is not None:
+        internal_state = jnp.full((
+            connectivity_en.shape[0],
+            get_quadrature(fe_type=fe_type)[0].shape[0],
+            1
+        ),pre_strain)
     element_batches = [
         ElementBatch(
-            fe_type=fe_type,
-            n_dofs_per_basis=n_dofs_per_basis,
-            connectivity_en=connectivity_en,
-            constitutive_model=elastic_truss,
-            material_params=jnp.array(material_params),
+            fe_type            = fe_type,
+            n_dofs_per_basis   = n_dofs_per_basis,
+            connectivity_en    = connectivity_en,
+            constitutive_model = elastic_truss,
+            material_params    = jnp.array(material_params),
+            internal_state     = jnp.array(internal_state) if pre_strain is not None else None,
         )
     ]
 
@@ -110,16 +117,16 @@ def solve_fiber_mechanics_bvp(
     vertices_vd, fabric_n, mold_slice = assemble_vertices_vd(fabric,rigid_mold)
 
     contact_fe_type = fe_type
-    self_adjacency_block = 10000
-    contact_search_radius = contact_search_radius
+    self_adjacency_block = contact_options.self_adjacency_block
+    contact_search_radius = contact_options.contact_search_radius
     contact_params = jnp.array([
-        10. * np.max(material_params[:,0]),
+        contact_options.D_stiffness_to_E_ratio * np.max(material_params[:,0]),
         np.max(material_params[:,1]),
         contact_search_radius,
         fabric.get_diameter(0),
-        1.25*fabric.get_diameter(0),
-        (1./100.) * np.max(material_params[:,0]),
-    ])  # E_max, A, R
+        contact_options.M_to_D_ratio * fabric.get_diameter(0),
+        contact_options.M_stiffness_to_E_ratio * np.max(material_params[:,0]),
+    ])  # E_max, A, R, D, M, E_M
 
     def contact_pair_generator(u_ref) -> list[ElementBatch] | None:
         if u_ref is None:
@@ -189,7 +196,7 @@ def solve_fiber_mechanics_bvp(
             # element_residual_func=linear_truss_residual,
             element_residual_func=jax.tree_util.Partial(
                 linear_truss_residual,
-                contact_stiffness_model = contact_stiffness_model,
+                contact_stiffness_model = contact_options.contact_stiffness_model,
             ),
             vertices_vd=vertices_vd,
             u_0_g=None if i==0 else u_truss,
@@ -207,15 +214,16 @@ def solve_fiber_mechanics_bvp(
             temp_fab = deepcopy(fabric)
             temp_fab.points += np.array(u_truss.reshape((-1,temp_fab.points.shape[1]))[:fabric_n,:])
             temp_mold = deepcopy(rigid_mold)
-            temp_mold.points +=  np.array(u_truss.reshape((-1,temp_mold.points.shape[1]))[fabric_n:,:])
+            if rigid_mold is not None:
+                temp_mold.points +=  np.array(u_truss.reshape((-1,temp_mold.points.shape[1]))[fabric_n:,:])
             write_vtk(temp_fab,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
             write_fabric_mold_contact(
                 fabric = temp_fab,
                 mold = temp_mold,
                 filename = get_output(filename = f"{filename_base}_wireframe_{i+1}.vtk", subdir="contact"),
                 contact_params = {
-                    'self_adjacency_block': self_adjacency_block,
-                    'contact_search_radius': contact_search_radius,
+                    'self_adjacency_block': contact_options.self_adjacency_block,
+                    'contact_search_radius': contact_options.contact_search_radius,
                 }
             )
         if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()>blow_up_threshold:
