@@ -10,7 +10,9 @@ from .constraints import *
 from .constraint_system import *
 from .dof_enumeration import *
 from .boundary_conditions import *
+from .load_system import *
 from . import contact
+from .debug_outputs import *
 
 import jax.numpy as jnp
 import jax
@@ -184,12 +186,14 @@ def _calculate_jacobian_coo_terms_batch(
     return (J_ett, rows, cols)
 
 
+@partial(jax.jit, static_argnames="deb")
 def calculate_jacobian_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     precomputed_jacobian_nnz: int,
+    deb: DebugInfo,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -197,7 +201,7 @@ def calculate_jacobian_wo_constraints(
     # since that operation could be JIT compiled. Then you could loop over the batch level
     # and accumulate them into the global with one more batch-to-global transform.
 
-    J_ett, rows, cols = zip(
+    J_bett, rows, cols = zip(
         *[
             _calculate_jacobian_coo_terms_batch(
                 element_residual_func=element_residual_func,
@@ -214,9 +218,14 @@ def calculate_jacobian_wo_constraints(
             for i in range(ebc.B)
         ]
     )
-    J_ett = jnp.concatenate([x.ravel() for x in J_ett])
-    rows = jnp.concatenate([x.ravel() for x in rows])
-    cols = jnp.concatenate([x.ravel() for x in cols])
+
+    if deb.contains(DebugOutputQuantities.ELEMENT_JACOBIAN):
+        for i, J_ett in enumerate(J_bett):
+            deb.batch_output(DebugOutputQuantities.ELEMENT_JACOBIAN, i, J_bett[i])
+
+    J_ett = jnp.vstack(J_bett)
+    rows = jnp.vstack(rows)
+    cols = jnp.vstack(cols)
 
     # debug_print(J_ett)
     # debug_print(rows)
@@ -593,7 +602,8 @@ def solve_nonlinear_step(
     u_0_g: jnp.ndarray,
     constraints: ConstraintSystem,
     solver_options: SolverOptions,
-    f_ext,
+    f_ext: LoadSystem,
+    element_diagnostic_outputs: Callable | None = None,
 ):
     """
     Solve the linearized system of equations emerging from the governing equations.
@@ -675,6 +685,8 @@ def solve_nonlinear_step(
     R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_0_g)
     initial_R_f_norm = jnp.linalg.norm(R_f)
 
+    element_diagnostic_outputs()
+
     def while_cond(args) -> bool:
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         absolute_error = jnp.linalg.norm(R_f)
@@ -732,14 +744,9 @@ def solve_nonlinear_step(
         D = ebc.U[0]
         max_d = solver_options.max_linear_displacement
         # TODO this only words if delta_u ONLY consists of nodal values, if other global DOFs are present this, need to be update (both the norm and the reshape with D.
-        max_u = jnp.max(
-            jnp.linalg.norm(
-                delta_u.reshape((-1,D)),
-                axis=1
-            )
-        )
-        scale = jnp.minimum(1.0, max_d/jnp.maximum(1e-16,max_u))
-        delta_u = delta_u*scale
+        max_u = jnp.max(jnp.linalg.norm(delta_u.reshape((-1, D)), axis=1))
+        scale = jnp.minimum(1.0, max_d / jnp.maximum(1e-16, max_u))
+        delta_u = delta_u * scale
         u_f = u_f + delta_u
         R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
 
@@ -767,73 +774,6 @@ def solve_nonlinear_step(
     relative_error = absolute_error / initial_R_f_norm
 
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
-
-
-@dataclass
-class NeumannCondition:
-    """
-    Represents a force of value applied at DoF.
-    """
-
-    dep_dof: int
-    value: float
-
-
-def convert_boundary_conditions_to_external_load(
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
-    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
-    dof_enumeration: DofEnumeration,
-    n_solution_components: int,
-    global_values: List[int] | None = None,
-):
-    """
-    Searches the list of boundary conditions and converts the Neumann
-    conditions to data type NeumannCondition.
-    """
-    external_load = []
-    for bc in boundary_conditions:
-        if isinstance(bc, NeumannBC):
-            if bc.bc_type == BCType.NODE:
-                external_load.append(
-                    NeumannCondition(
-                        dep_dof=n_solution_components * bc.index + bc.component,
-                        value=bc.value,
-                    )
-                )
-    return external_load
-
-
-@struct.dataclass
-class LoadSystem:
-    dep_dofs: jnp.ndarray
-    loads: jnp.ndarray
-
-    @jax.jit
-    def apply_to_residual(self, R: jnp.ndarray):
-        return R.at[self.dep_dofs].set((R[self.dep_dofs] - self.loads))
-
-
-def convert_external_load_to_system(
-    external_load,
-):
-    n_loads = len(external_load)
-    if n_loads == 0:
-        return LoadSystem(
-            dep_dofs=jnp.array([], dtype=jnp.int32),
-            loads=jnp.array([], dtype=jnp.float32),
-        )
-
-    dep_dofs = np.empty(n_loads, dtype=np.int32)
-    loads = np.empty(n_loads, dtype=np.float32)
-
-    for i, el in enumerate(external_load):
-        dep_dofs[i] = el.dep_dof
-        loads[i] = el.value
-    return LoadSystem(
-        dep_dofs=jnp.array(dep_dofs, dtype=jnp.int32),
-        loads=jnp.array(loads, dtype=jnp.float32),
-    )
-
 
 def convert_boundary_conditions(
     boundary_conditions: List[DirichletBC | PeriodicBC],
@@ -910,7 +850,7 @@ def preprocess_bvp(
     n_total_dofs = V * U + sum(global_values)
 
     if contact_batch_generator is not None:
-        element_batches=[*element_batches, *contact_batch_generator(u_0_g)]
+        element_batches = [*element_batches, *contact_batch_generator(u_0_g)]
         # TODO print how many contact elements were discovered
 
     # Validate input
@@ -1006,6 +946,7 @@ def solve_bvp(
     plot_convergence: bool = False,
     profile_memory: bool = False,
     contact_batch_generator: Callable | None = None,
+    element_diagnostic_outputs: Callable | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
     """
     Solve a boundary value problem for static linear elasticity.
@@ -1046,7 +987,7 @@ def solve_bvp(
         constraint_system,
         jacobian_nnz,
         element_residual_func,
-        f_ext
+        f_ext,
     ) = preprocess_bvp(
         vertices_vd=vertices_vd,
         element_batches=element_batches,
@@ -1055,7 +996,7 @@ def solve_bvp(
         multipoint_constraints=multipoint_constraints,
         global_values=global_values,
         contact_batch_generator=contact_batch_generator,
-        u_0_g = u_0_g,
+        u_0_g=u_0_g,
     )
 
     n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
