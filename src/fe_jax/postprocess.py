@@ -66,8 +66,12 @@ def write_fabric_mold_contact(
             ]
         )
 
-    points = np.concatenate([fabric.points,mold.points])
-    cells = np.concatenate([fabric_cells,mold.connections+fabric.points.shape[0]])
+    if mold is not None:
+        points = np.concatenate([fabric.points,mold.points])
+        cells = np.concatenate([fabric_cells,mold.connections+fabric.points.shape[0]])
+    else:
+        points = fabric.points
+        cells = fabric_cells
     if contact_params:
         contact_cells = contact.contact_batch(
             points=points,

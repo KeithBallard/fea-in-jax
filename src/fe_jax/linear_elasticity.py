@@ -257,7 +257,13 @@ def linear_elasticity_residual(
     return R_nd, new_internal_state_qi
 
 @jax.jit
-def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd: jnp.ndarray):
+def elastic_truss(
+        eps_dd: jnp.ndarray,
+        material_params_m: jnp.ndarray,
+        internal_state_i: jnp.ndarray,
+        x_nd: jnp.ndarray,
+        u_nd: jnp.ndarray
+):
     """
     A constitive relation for a an elastic truss.
 
@@ -272,6 +278,8 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
     stress_dd  : stress tensor, ndarray[float, (D, D)]
     """
 
+    eps_pre = internal_state_i[...,0] if internal_state_i.size != 0 else 0
+
     E = material_params_m[..., 0]
     A = material_params_m[..., 1]
     # Assumes the node number puts the endpoints as first and last entries. 
@@ -280,7 +288,8 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
 
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    stress_dd = E*A*eps_a*P_dd
+    # jax.debug.print('eps_a = {eps_a}',eps_a=eps_a)
+    stress_dd = E*A*(eps_a-eps_pre)*P_dd
 
     return stress_dd, jnp.array([])  # no internal state
 
