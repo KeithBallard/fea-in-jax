@@ -4,30 +4,6 @@ import numpy as np
 from copy import deepcopy
 # jax.config.update("jax_disable_jit", True)
 
-
-def make_single_fiber(
-    n_elements: int,
-    x0: tuple,
-    xN: tuple,
-    fiber_id: int,
-    cell_shift: int
-):
-    points = np.vstack(
-        (
-            np.linspace(x0[0], xN[0], n_elements + 1),
-            np.linspace(x0[1], xN[1], n_elements + 1),
-            np.linspace(x0[2], xN[2], n_elements + 1),
-        )
-    ).T
-    cells = np.array(
-        [[i + cell_shift, i + cell_shift + 1] for i in range(len(points) - 1)],
-        dtype=np.uint64,
-    )
-    fiber_ids = np.array([[fiber_id]] * len(points))
-    cell_ids = np.array([[fiber_id]] * len(cells))
-    return points, cells, fiber_ids, cell_ids
-
-
 def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannForce):
     point_blocks = []
     cell_blocks = []
@@ -55,15 +31,6 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannF
             DirichletBC(bc_type=BCType.NODE, component=c, index=i, value=0.0)
             for c in (0, 1, 2)
             for i in (vertex_offset + 0, vertex_offset + n_el)
-        ]
-        bcs += [
-            NeumannBC(
-                bc_type=BCType.NODE,
-                component=1,
-                index=vertex_offset + int(n_el / 2) + s,
-                value=NeumannForce,
-            )
-            for s in (-1, 0, 1)
         ]
         vertex_offset += points_i.shape[0]
 
@@ -102,20 +69,28 @@ def run_threeFiberTow(
     n_elements: list[int],
     X0: list[tuple],
     XN: list[tuple],
-    contact_params: ContactParams,
     NeumannForce,
-    filename_base = 'PseudoTimeNeumann_in_y/incrementalLoad',
+    contact_params,
+    filename_base = None,
+    pre_strain: float | None = None,
 ):
     """ """
     fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
     dyn_bcs = []
+    f_n = lambda z,nf : nf*(np.exp(-(4*z)**2) - np.exp(-16))/(1-np.exp(-16))
     for nf in NeumannForce:
-        print(nf)
         temp_bcs =deepcopy(bcs)
-        for bc in temp_bcs:
-            if isinstance(bc,NeumannBC):
-                bc.value = nf
+        temp_bcs += [
+            NeumannBC(
+                bc_type   = BCType.NODE,
+                component = 1,
+                index     = fabric.fiber_offsets[2] + i + 1,
+                value     = -f_n(z,nf),
+            )
+            for i,z in enumerate(fabric.points[fabric.fiber_offsets[2]+1:fabric.fiber_offsets[3]-1,2])
+        ]
         dyn_bcs.append(temp_bcs)
+
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_dist = d[d.nonzero()].min()
@@ -127,7 +102,6 @@ def run_threeFiberTow(
         fabric=fabric,
         materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
         boundary_conditions=dyn_bcs,
-        contact_options=contact_params,
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
@@ -136,16 +110,18 @@ def run_threeFiberTow(
             linear_max_iter=500,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
+        contact_options=contact_params,
         plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
+        pre_strain=pre_strain,
     )
     u = u.reshape((-1,3))
     fabric.points = fabric.points + u
 
     D_D = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_d = D_D[D_D.nonzero()].min()
-    return u,fabric,min_d
+    return u,fabric,dyn_bcs
 
 # u,f = run_threeFiberTow(
 #     n_elements=[10, 10, 10],
@@ -156,24 +132,24 @@ def run_threeFiberTow(
 # )
 args = {
     'n_elements':[40]*3,
-    'X0':[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
-    'XN':[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-    'NeumannForce':[(i+1)*1e5 for i in range(10)],
+    'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
+    'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
+    'NeumannForce':[(i+1)*1e4 for i in range(10)],
     # 'NeumannForce':[i*1e4 for i in range(10,101)],
     # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
-    'filename_base': 'UpdatedContact/Exponential_Neumann',
+    'filename_base': 'ThreeFiberSpread/full_length_force',
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_stiffness_model = contact_stiffness_exponential,
         D_stiffness_to_E_ratio  = 0.25,
-        contact_search_radius   = 0.5,
+        contact_search_radius   = 0.2,
         M_to_D_ratio            = 1.25,
         M_stiffness_to_E_ratio  = 1.0/100.0
     ),
 }
 
 # args['contact_stiffness_model'] = contact_stiffness_linear
-ul,fl,dl = run_threeFiberTow(**args)
+# ul,fl,dl = run_threeFiberTow(**args)
 # args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
 # up,fp,dp = run_threeFiberTow(**args)
 # args['contact_stiffness_model'] = contact_stiffness_exponential
@@ -197,3 +173,33 @@ def get_mins(fabric):
 # get_mins(fl)
 # get_mins(fp)
 # get_mins(fe)
+
+def plot_horizontal_displacement(filename,max_range,min_range=0):
+    D = []
+    plt.figure(figsize=[12,8])
+    plt.subplot(121)
+    for i in range(0,max_range):
+        mesh = meshio.read(f"output/contact/ThreeFiberSpread/{filename}_wireframe_{i}.vtk")
+        center_index = np.abs(mesh.points[:,2])<0.01
+        P = mesh.points[center_index]
+        D.append(P)
+        p = P[:,[0,1]]
+        # p[:,1] -= P[2,1]
+        if i>=min_range: plt.scatter(*(p).T,label = f"t_i = {i}")
+    plt.grid()
+    plt.legend(loc = 'center left',bbox_to_anchor=(1.02,0.5))
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.gca().set_aspect('equal')
+
+    plt.subplot(122)
+    H_tic = np.array(D)
+    plt.plot(range(H_tic.shape[0]),H_tic[:,0,0]-H_tic[0,0,0],color='blue', label = 'node 0', marker = 'x')
+    plt.plot(range(H_tic.shape[0]),H_tic[:,1,0]-H_tic[0,1,0],color='gray', label = 'node 1', marker = 'x')
+    plt.plot(range(H_tic.shape[0]),H_tic[:,2,0]-H_tic[0,2,0],color='red',label = 'node 2', marker = 'x')
+    plt.xlabel('pseudo-time index')
+    plt.ylabel('displacement in the x direciton')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(get_output(f"contact/{filename}_horizontal_displacement.pdf"))
+    plt.close()

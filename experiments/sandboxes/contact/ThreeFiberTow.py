@@ -99,7 +99,8 @@ def run_threeFiberTow(
     X0: list[tuple],
     XN: list[tuple],
     contact_search_radius: float,
-    NeumannForce
+    NeumannForce,
+    filename_base: str | None = None,
 ):
     """ """
     fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
@@ -115,7 +116,14 @@ def run_threeFiberTow(
         fabric=fabric,
         materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
         boundary_conditions=bcs,
-        contact_search_radius=contact_search_radius,
+        contact_options= ContactParams(
+            self_adjacency_block    = 10000,
+            contact_stiffness_model = contact_stiffness_exponential,
+            D_stiffness_to_E_ratio  = 0.25,
+            contact_search_radius   = contact_search_radius,
+            M_to_D_ratio            = 1.25,
+            M_stiffness_to_E_ratio  = 1.0/100.0
+        ),
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
@@ -125,10 +133,9 @@ def run_threeFiberTow(
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
         plot_convergence=False,
+        filename_base=filename_base,
     )
     u = u.reshape((-1,3))
-    fabric.points = fabric.points + u
-    write_vtk(fabric,get_output(filename="threeFiberTow_post.vtk", subdir="contact"))
 
     return u,fabric
 
@@ -139,21 +146,3 @@ u,f = run_threeFiberTow(
     contact_search_radius=0.25,
     NeumannForce = 1E5
 )
-
-# from copy import deepcopy
-# def janky_vtk_iter(filename: str, n_iterations: int):
-#     f, _ = make_bundle(
-#         n_elements=[10, 10, 10],
-#         X0=[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
-#         XN=[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-#         NeumannForce = 1E4
-#     )
-#     f_copy = deepcopy(f)
-#     p = deepcopy(f_copy.points)
-#     write_vtk(f_copy,get_output(f"u_{0}.vtk",subdir = f"contact/{filename}"))
-
-#     for i in range(n_iterations+1):
-#         u = np.load(f"output/contact/u_blowup_NEW_iter{i}.npy")
-#         f_copy.points = p+u
-#         write_vtk(f_copy,get_output(f"u_{i+1}.vtk",subdir = f"contact/{filename}"))
-

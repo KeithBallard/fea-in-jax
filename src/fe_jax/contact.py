@@ -312,7 +312,7 @@ def contact_batch(
     #     adjacency_block = adjacency_block
     # )
     kd_tree = sp.spatial.cKDTree(points)
-    pairs = np.array(list(kd_tree.query_pairs(r=0.2)))
+    pairs = np.array(list(kd_tree.query_pairs(r=radius)))
     if pairs.shape[0] == 0 :
         return np.zeros((0,2),dtype = np.int32)
     distinct_cells = pairs[point_fiber_ids[pairs[:,0]] != point_fiber_ids[pairs[:,1]]]
