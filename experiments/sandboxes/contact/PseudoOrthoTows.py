@@ -69,11 +69,10 @@ def make_fabric(n_elements: list[int], X: list[tuple],DirichletBC_ends: list[tup
 def run_orthogonalTows(
     n_elements: list[int],
     X: list[tuple],
-    contact_search_radius: float,
     DirichletBC_ends: list[tuple],
     pseudoT:int,
     filename_base:str,
-    contact_stiffness_model: Callable,
+    contact_params: ContactParams,
 ):
     """ """
     fabric, bcs = make_fabric(n_elements=n_elements, X=X, DirichletBC_ends=DirichletBC_ends)
@@ -94,8 +93,7 @@ def run_orthogonalTows(
             VTMSFiberMaterial(id=int(fabric.get_material_id(i)), E=E, A=A) for i in range(fabric.get_n_bundles())
         ],
         boundary_conditions=dyn_bcs,
-        contact_search_radius=contact_search_radius,
-        contact_stiffness_model=contact_stiffness_model,
+        contact_options=contact_params,
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
@@ -125,10 +123,16 @@ args = {
         *[[-0.005,0,0]]*3,
         *[[ 0.005,0,0]]*3,
     ],
-    'contact_search_radius':0.5,
-    'pseudoT':80,
-    'filename_base':'UpdatedContact/Exponential_Dirichlet',
-    'contact_stiffness_model': contact_stiffness_exponential
+    'contact_params': ContactParams(
+        self_adjacency_block    = 10000,
+        contact_stiffness_model = contact_stiffness_exponential,
+        D_stiffness_to_E_ratio  = 0.25,
+        contact_search_radius   = 0.5,
+        M_to_D_ratio            = 1.25,
+        M_stiffness_to_E_ratio  = 1.0/100.0
+    ),
+    'pseudoT':5,
+    'filename_base':'TestContactParams/Exponential_Dirichlet',
 }
 
 

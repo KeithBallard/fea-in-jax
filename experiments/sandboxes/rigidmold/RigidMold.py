@@ -124,12 +124,11 @@ def run_mold(
     n_elements: list[int],
     X0: list[tuple],
     XN: list[tuple],
-    contact_search_radius: float,
+    contact_params: ContactParams,
     diameter:float,
     pseudoT:int,
     dir_step:float,
     filename_base =None,
-    contact_stiffness_model: Callable = contact_stiffness_exponential,
     rigid_mold_params: list | None = None,
 ):
     """ """
@@ -170,8 +169,7 @@ def run_mold(
         rigid_mold=rigid_mold,
         materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
         boundary_conditions=dyn_bcs,
-        contact_search_radius=contact_search_radius,
-        contact_stiffness_model=contact_stiffness_model,
+        contact_options=contact_params,
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
@@ -201,26 +199,38 @@ args = {
     'n_elements':[40]*3,
     'X0':[[-0.05, 0, -1], [0.05, 0, -1], [0, np.sqrt(3) / 2 * 0.1, -1]],
     'XN':[[-0.05, 0, 1],  [0.05, 0, 1], [0, np.sqrt(3) / 2 * 0.1, 1]],
-    'contact_search_radius':0.4,
     'filename_base': 'rigid_mold/pypardiso_NEW',
-    'contact_stiffness_model': contact_stiffness_piecewise_linear,
     'pseudoT': 5,
     'diameter': 0.1,
     'rigid_mold_params': ((-0.5,0),0.25,1.0,0.025),
     'dir_step':0.005,
+    'contact_params': ContactParams(
+        self_adjacency_block    = 10000,
+        contact_stiffness_model = contact_stiffness_exponential,
+        D_stiffness_to_E_ratio  = 0.25,
+        contact_search_radius   = 0.4,
+        M_to_D_ratio            = 1.25,
+        M_stiffness_to_E_ratio  = 1.0/100.0
+    ),
 }
 
 args31 = {
     'n_elements':[80]*31,
     'X0':[[i[0],i[1],2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
     'XN':[[i[0],i[1],-2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
-    'contact_search_radius':0.2,
     'filename_base': 'ThirtyOneFiberTow/ThirtyOneFiberTow_LessStiffContact',
-    'contact_stiffness_model': contact_stiffness_exponential,
     'pseudoT': 100,
     'diameter': 0.1,
     'rigid_mold_params': ((0.75, 0), 0.3, 4.0, 0.025),
     'dir_step':-0.005,
+    'contact_params': ContactParams(
+        self_adjacency_block    = 10000,
+        contact_stiffness_model = contact_stiffness_exponential,
+        D_stiffness_to_E_ratio  = 0.25,
+        contact_search_radius   = 0.2,
+        M_to_D_ratio            = 1.25,
+        M_stiffness_to_E_ratio  = 1.0/100.0
+    ),
 }
 # args['contact_stiffness_model'] = contact_stiffness_linear
 # ul,fl,dl = run_threeFiberTow(**args)
