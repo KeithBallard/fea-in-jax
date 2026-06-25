@@ -2,6 +2,7 @@ from fe_jax.helper import *
 import matplotlib.pyplot as plt
 import numpy as np
 from copy import deepcopy
+import scipy as sp
 # jax.config.update("jax_disable_jit", True)
 
 
@@ -112,12 +113,16 @@ def make_cyl_mold(yz_center,R,L,dx):
     Z = yz_center[1] + R*np.sin(theta[:-1])
     P =np.vstack([np.vstack([np.full((Y.shape[0],),x),Y,Z]).T for x in X])
 
-    d = P[:,None,:] - P[None,:,:]
-    dist = jnp.linalg.norm(d,axis=-1)
-    dist_mask = dist <= 1.1*dx
-    upper_mask = jnp.triu(jnp.ones((P.shape[0],P.shape[0]), dtype=bool),k=1)
-    mask = dist_mask & upper_mask
-    C = np.vstack(mask.nonzero()).T
+    kd_tree = sp.spatial.cKDTree(P)
+    C = np.array(list(kd_tree.query_pairs(r=1.1*dx)))
+    if C.shape[0] == 0:
+        C = np.zeros((0,2), dtype = np.int32)
+    # d = P[:,None,:] - P[None,:,:]
+    # dist = jnp.linalg.norm(d,axis=-1)
+    # dist_mask = dist <= 1.1*dx
+    # upper_mask = jnp.triu(jnp.ones((P.shape[0],P.shape[0]), dtype=bool),k=1)
+    # mask = dist_mask & upper_mask
+    # C = np.vstack(mask.nonzero()).T
     return P,C
 
 def run_mold(
