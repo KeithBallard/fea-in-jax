@@ -186,14 +186,14 @@ def _calculate_jacobian_coo_terms_batch(
     return (J_ett, rows, cols)
 
 
-@partial(jax.jit, static_argnames="deb")
+@partial(jax.jit, static_argnames=("debug_info","precomputed_jacobian_nnz"))
 def calculate_jacobian_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     precomputed_jacobian_nnz: int,
-    deb: DebugInfo,
+    debug_info: DebugInfo | NullDebugInfo,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -219,9 +219,9 @@ def calculate_jacobian_wo_constraints(
         ]
     )
 
-    if deb.contains(DebugOutputQuantities.ELEMENT_JACOBIAN):
+    if debug_info.contains(DebugOutputQuantities.ELEMENT_JACOBIAN):
         for i, J_ett in enumerate(J_bett):
-            deb.batch_output(DebugOutputQuantities.ELEMENT_JACOBIAN, i, J_bett[i])
+            debug_info.batch_output(DebugOutputQuantities.ELEMENT_JACOBIAN, i, J_bett[i])
 
     J_ett = jnp.vstack(J_bett)
     rows = jnp.vstack(rows)
@@ -603,6 +603,7 @@ def solve_nonlinear_step(
     constraints: ConstraintSystem,
     solver_options: SolverOptions,
     f_ext: LoadSystem,
+    debug_info: DebugInfo | NullDebugInfo,
     element_diagnostic_outputs: Callable | None = None,
 ):
     """
@@ -669,6 +670,7 @@ def solve_nonlinear_step(
             ebc=ebc,
             assembly_map_b=assembly_map_b,
             precomputed_jacobian_nnz=jacobian_nnz,
+            debug_info=debug_info,
         )
     )
 
@@ -685,7 +687,8 @@ def solve_nonlinear_step(
     R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_0_g)
     initial_R_f_norm = jnp.linalg.norm(R_f)
 
-    element_diagnostic_outputs()
+    if element_diagnostic_outputs is not None:
+        element_diagnostic_outputs()
 
     def while_cond(args) -> bool:
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
@@ -947,6 +950,7 @@ def solve_bvp(
     profile_memory: bool = False,
     contact_batch_generator: Callable | None = None,
     element_diagnostic_outputs: Callable | None = None,
+    debug_info: DebugInfo | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
     """
     Solve a boundary value problem for static linear elasticity.
@@ -980,6 +984,8 @@ def solve_bvp(
         multipoint_constraints = []
     if global_values is None:
         global_values = []
+
+    debug_info = NULL_DEBUG_INFO if debug_info is None else debug_info
 
     (
         ebc,
@@ -1029,6 +1035,8 @@ def solve_bvp(
         constraints=constraint_system,
         solver_options=solver_options,
         f_ext=f_ext,
+        element_diagnostic_outputs=element_diagnostic_outputs,
+        debug_info = debug_info,
     )
 
     # Update internal state variables for the element batches

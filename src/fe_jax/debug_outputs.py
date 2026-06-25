@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 import h5py
-
+from functools import partial
 
 class DebugOutputQuantities(Enum):
     NODE_RESIDUAL = auto()
@@ -24,7 +24,6 @@ class DebugOutputStage(Enum):
 type DebugFlags = list[tuple[DebugOutputQuantities, DebugOutputStage]]
 
 debug_active_groups: dict[DebugOutputQuantities, h5py.Group]
-
 
 def __begin_stage(
     flags: DebugFlags,
@@ -48,16 +47,29 @@ def __begin_stage(
                         f"ts_{time_step}/nl_{nonlinear_solve}/linear_{linear_solve}"
                     )
 
+@struct.dataclass
+class NullDebugInfo:
+    def contains(self, quantity: DebugOutputQuantities) -> bool:
+        return False
+
+    def begin_stage(self, *args, **kwargs):
+        return None
+
+    def batch_output(self, *args, **kwargs):
+        return None
+
+NULL_DEBUG_INFO = NullDebugInfo()
 
 @struct.dataclass
 class DebugInfo:
-    flags: DebugFlags
-    file: h5py.File
+    flags: DebugFlags = struct.field(pytree_node = False)
+    file: h5py.File   = struct.field(pytree_node = False)
 
     def contains(self, quantity: DebugOutputQuantities) -> bool:
         return any(f[0] == quantity for f in self.flags)
 
     @jax.jit
+    @partial(jax.jit, static_argnames=("current_stage",))
     def begin_stage(
         self,
         time_step: int,
