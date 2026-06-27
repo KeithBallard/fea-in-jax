@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental.buffer_callback import buffer_callback
+from jax.interpreters import ad, batching, mlir
 import ctypes as ct
 import cupy as cp
 from flax import struct
@@ -10,43 +11,344 @@ import petsc4py
 from jax._src.lib import xla_client
 from petsc4py import PETSc
 
-_OBJECT_STORE = {}
-_NEXT_ID = 0        #this maybe needs reworking so we can reuse IDS
+_SOLVER_STORE = {}
+_PRECOND_STORE = {}
+_MATRIX_STORE = {}
+_SOLVER_ID = 0        #this maybe needs reworking so we can reuse IDS
+_PRECOND_ID = 0
+_MATRIX_ID = 0
 
-def __store_object(obj):
-    global _NEXT_ID
-    uid = _NEXT_ID
-    _OBJECT_STORE[uid] = obj
-    _NEXT_ID += 1
+try:
+    from jax.extend import core as jax_core
+except ImportError:
+    from jax import core as jax_core
+
+try:
+    from jax import core as legacy_core
+except ImportError:
+    legacy_core = jax_core
+
+
+linear_solver_init_p = jax_core.Primitive("keith_linear_solver_init")
+linear_solver_cleanup_p = jax_core.Primitive("keith_linear_solver_cleanup")
+linear_matrix_init_p = jax_core.Primitive("keith_linear_matrix_init")
+linear_matrix_update_p = jax_core.Primitive("keith_linear_matrix_update")
+linear_matrix_cleanup_p = jax_core.Primitive("keith_linear_matrix_cleanup")
+linear_pc_init_p = jax_core.Primitive("keith_linear_pc_init")
+linear_pc_cleanup_p = jax_core.Primitive("keith_linear_pc_cleanup")
+linear_ksp_init_p = jax_core.Primitive("keith_linear_ksp_init")
+
+def __handle_to_int(uid):
+    try:
+        return int(uid)
+    except TypeError:
+        return int(cp.asarray(uid).item())
+
+def __store_KSP(obj, owns_operators=False):
+    global _SOLVER_ID
+    uid = _SOLVER_ID
+    _SOLVER_STORE[uid] = (obj, owns_operators)
+    _SOLVER_ID += 1
     return np.int64(uid)  # Return as a JAX-compatible type
 
-def __retrieve_object(uid):
-    return _OBJECT_STORE[int(uid)]
+def __retrieve_KSP(uid):
+    return _SOLVER_STORE[__handle_to_int(uid)][0]
 
-def __clear_object(uid):
-    _OBJECT_STORE.pop(int(uid))
+def __retrieve_KSP_record(uid):
+    return _SOLVER_STORE[__handle_to_int(uid)]
+
+def __CLEAR_KSP(uid):
+    _SOLVER_STORE.pop(__handle_to_int(uid))
+
+def __store_PC(obj):
+    global _PRECOND_ID
+    uid = _PRECOND_ID
+    _PRECOND_STORE[uid] = obj
+    _PRECOND_ID += 1
+    return np.int64(uid)  # Return as a JAX-compatible type
+
+def __retrieve_PC(uid):
+    return _PRECOND_STORE[__handle_to_int(uid)]
+
+def __CLEAR_PC(uid):
+    _PRECOND_STORE.pop(__handle_to_int(uid))
+
+def __store_MAT(obj):
+    global _MATRIX_ID
+    uid = _MATRIX_ID
+    _MATRIX_STORE[uid] = obj
+    _MATRIX_ID += 1
+    return np.int64(uid)
+
+def __retrieve_MAT(uid):
+    return _MATRIX_STORE[__handle_to_int(uid)]
+
+def __CLEAR_MAT(uid):
+    _MATRIX_STORE.pop(__handle_to_int(uid))
 
 @struct.dataclass
 class __CupyCtx:
     handle: jnp.ndarray
 
+
+def __mat_set_values_coo(mat, mat_vals):
+    lib = ct.CDLL(PETSc.__file__)
+    MatSetValuesCOO = lib.MatSetValuesCOO
+    MatSetValuesCOO.restype = ct.c_int
+    MatSetValuesCOO.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int]
+    err = MatSetValuesCOO(
+        ct.c_void_p(mat.handle),
+        ct.c_void_p(mat_vals.data.ptr),
+        PETSc.InsertMode.INSERT_VALUES,
+    )
+    if err:
+        raise RuntimeError(f"MatSetValuesCOO failed with PETSc error code {err}")
+
+def _zero_from_value(value):
+    if hasattr(ad.Zero, "from_primal_value"):
+        return ad.Zero.from_primal_value(value)
+    aval = jax.typeof(value) if hasattr(jax, "typeof") else legacy_core.get_aval(value)
+    return ad.Zero(aval)
+
+
 def linearSolverInit(jac, res=None, diag=None, x0=None, constructionOptions=None):
-    J = jac(x0)
+    x0_arg = jnp.array(0, dtype=jnp.int32) if x0 is None else x0
+    handle = linear_solver_init_p.bind(
+        x0_arg,
+        jac=jac,
+        res=res,
+        diag=diag,
+        x0_is_none=x0 is None,
+        constructionOptions=constructionOptions,
+    )
+    return __CupyCtx(handle=handle)
+
+
+def _linear_solver_init_impl(x0, *, jac, res, diag, x0_is_none, constructionOptions):
+    x0_value = None if x0_is_none else x0
+    J = jac(x0_value)
     if res is not None:
-        res(x0)
+        res(x0_value)
     if diag is not None:
-        diag(x0)
+        diag(x0_value)
 
-    return __petsc_init(J[0], J[1], J[2], J[3],constructionOptions)
+    return __petsc_KSP_init(J[0], J[1], J[2], J[3], constructionOptions).handle #so this is actually PETSc making a copy and consequently we must assure that the 2 versions of A match
 
 
-def __petsc_init_impl(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols,passedConstructionOptions):
+def _linear_solver_init_abstract_eval(x0_aval, *, jac, res, diag, x0_is_none, constructionOptions):
+    del x0_aval, jac, res, diag, x0_is_none, constructionOptions
+    shaped_array = getattr(jax_core, "ShapedArray", legacy_core.ShapedArray)
+    return shaped_array((), jnp.int64)
+
+
+def _linear_solver_init_jvp(primals, tangents, *, jac, res, diag, x0_is_none, constructionOptions):
+    del tangents
+    (x0,) = primals
+    handle = linear_solver_init_p.bind(
+        x0,
+        jac=jac,
+        res=res,
+        diag=diag,
+        x0_is_none=x0_is_none,
+        constructionOptions=constructionOptions,
+    )
+    return handle, _zero_from_value(handle)
+
+
+def _linear_solver_init_transpose(ct, x0, *, jac, res, diag, x0_is_none, constructionOptions):
+    del ct, x0, jac, res, diag, x0_is_none, constructionOptions
+    return (None,)
+
+
+def _linear_solver_init_batch(args, batch_dims, *, jac, res, diag, x0_is_none, constructionOptions):
+    del batch_dims
+    raise NotImplementedError("Batching over PETSc solver initialization is not supported")
+
+
+def __petsc_MAT_init_impl(ctx, out, jaxMatShape, jaxMatVals, jaxMatRows, jaxMatCols, passedConstructionOptions):
+    jacMatShape = cp.from_dlpack(jaxMatShape, copy=False)
+    jacMatVals = cp.from_dlpack(jaxMatVals, copy=False)
+    jacMatRows = jnp.asarray(jaxMatRows, dtype=jnp.int32)
+    jacMatCols = jnp.asarray(jaxMatCols, dtype=jnp.int32)
+
+    # TODO: Replace with actual construction options once the option object settles.
+    constructionOptions = [PETSc.Mat.Type.AIJCUSPARSE]
+
+    mat = PETSc.Mat().create(PETSc.COMM_WORLD)
+    mat.setSizes(jacMatShape)
+    mat.setType(constructionOptions[0])
+    mat.setPreallocationCOO(jacMatRows, jacMatCols)
+    __mat_set_values_coo(mat, jacMatVals)
+
+    cp.asarray(out)[...] = __store_MAT(mat)
+
+
+def __petsc_MAT_init(jacMatShape, jacMatVals, jacMatRows, jacMatCols, constructionOptions=None) -> __CupyCtx:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = buffer_callback(__petsc_MAT_init_impl, result_info, vmap_method="sequential")(
+        jacMatShape,
+        jacMatVals,
+        jacMatRows,
+        jacMatCols,
+        constructionOptions,
+    )
+    return __CupyCtx(handle=handle)
+
+
+def __petsc_MAT_update_impl(ctx, out, handle, jaxMatVals):
+    mat = __retrieve_MAT(cp.asarray(handle))
+    jacMatVals = cp.from_dlpack(jaxMatVals, copy=False)
+    __mat_set_values_coo(mat, jacMatVals)
+    cp.asarray(out)[...] = cp.asarray(handle)
+
+
+def __petsc_MAT_update(handle, jacMatVals) -> __CupyCtx:
+    raw_handle = getattr(handle, "handle", handle)
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    out_handle = buffer_callback(__petsc_MAT_update_impl, result_info, vmap_method="sequential")(
+        raw_handle,
+        jacMatVals,
+    )
+    return __CupyCtx(handle=out_handle)
+
+
+def __petsc_MAT_cleanup(handle):
+    mat = __retrieve_MAT(cp.asarray(handle))
+    mat.destroy()
+
+
+def __petsc_MAT_cleanup_impl(ctx, out, handle):
+    __petsc_MAT_cleanup(handle)
+    __CLEAR_MAT(handle)
+    cp.asarray(out)[...] = cp.asarray(handle)
+
+
+def __petsc_MAT_cleanup_callback(handle):
+    raw_handle = getattr(handle, "handle", handle)
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    out_handle = buffer_callback(__petsc_MAT_cleanup_impl, result_info, vmap_method="sequential")(raw_handle)
+    return __CupyCtx(handle=out_handle)
+
+
+def linearMatrixInit(jac, x0=None, constructionOptions=None):
+    x0_arg = jnp.array(0, dtype=jnp.int32) if x0 is None else x0
+    handle = linear_matrix_init_p.bind(
+        x0_arg,
+        jac=jac,
+        x0_is_none=x0 is None,
+        constructionOptions=constructionOptions,
+    )
+    return __CupyCtx(handle=handle)
+
+
+def linearMatrixUpdate(matrixHandle, vals):
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    handle = linear_matrix_update_p.bind(raw_handle, vals)
+    return __CupyCtx(handle=handle)
+
+
+def linearMatrixCleanup(matrixHandle):
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    linear_matrix_cleanup_p.bind(raw_handle)
+    return matrixHandle
+
+
+def __petsc_PC_init_impl(ctx, out, matrixHandle, passedConstructionOptions):
+    mat = __retrieve_MAT(cp.asarray(matrixHandle))
+
+    # TODO: Replace with actual construction options once the option object settles.
+    constructionOptions = ["jacobi"]
+
+    pc = PETSc.PC().create(PETSc.COMM_WORLD)
+    pc.setType(constructionOptions[0])
+    pc.setOperators(mat)
+    pc.setUp()
+
+    cp.asarray(out)[...] = __store_PC(pc)
+
+
+def __petsc_PC_init(matrixHandle, constructionOptions=None) -> __CupyCtx:
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = buffer_callback(__petsc_PC_init_impl, result_info, vmap_method="sequential")(
+        raw_handle,
+        constructionOptions,
+    )
+    return __CupyCtx(handle=handle)
+
+
+def __petsc_PC_cleanup(handle):
+    pc = __retrieve_PC(cp.asarray(handle))
+    pc.destroy()
+
+
+def __petsc_PC_cleanup_impl(ctx, out, handle):
+    __petsc_PC_cleanup(handle)
+    __CLEAR_PC(handle)
+    cp.asarray(out)[...] = cp.asarray(handle)
+
+
+def __petsc_PC_cleanup_callback(handle):
+    raw_handle = getattr(handle, "handle", handle)
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    out_handle = buffer_callback(__petsc_PC_cleanup_impl, result_info, vmap_method="sequential")(raw_handle)
+    return __CupyCtx(handle=out_handle)
+
+
+def linearPCInit(matrixHandle, constructionOptions=None):
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    handle = linear_pc_init_p.bind(raw_handle, constructionOptions=constructionOptions)
+    return __CupyCtx(handle=handle)
+
+
+def linearPCCleanup(pcHandle):
+    raw_handle = getattr(pcHandle, "handle", pcHandle)
+    linear_pc_cleanup_p.bind(raw_handle)
+    return pcHandle
+
+
+def __petsc_KSP_init_from_mat_impl(ctx, out, matrixHandle, passedConstructionOptions):
+    mat = __retrieve_MAT(cp.asarray(matrixHandle))
+
+    # TODO: Replace with actual construction options once the option object settles.
+    constructionOptions = ["lgmres"]
+
+    ksp = PETSc.KSP().create(PETSc.COMM_WORLD)
+    ksp.setOperators(mat)
+    ksp.setType(constructionOptions[0])
+    ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
+    ksp.setTolerances(1e-14, 1e-10, 100, 100000)
+    ksp.setConvergenceHistory(3)
+
+    cp.asarray(out)[...] = __store_KSP(ksp, owns_operators=False)
+
+
+def __petsc_KSP_init_from_mat(matrixHandle, constructionOptions=None) -> __CupyCtx:
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    handle = buffer_callback(__petsc_KSP_init_from_mat_impl, result_info, vmap_method="sequential")(
+        raw_handle,
+        constructionOptions,
+    )
+    return __CupyCtx(handle=handle)
+
+
+def linearKSPInit(matrixHandle, constructionOptions=None):
+    raw_handle = getattr(matrixHandle, "handle", matrixHandle)
+    handle = linear_ksp_init_p.bind(raw_handle, constructionOptions=constructionOptions)
+    return __CupyCtx(handle=handle)
+
+
+
+
+def __petsc_KSP_init_impl(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols,passedConstructionOptions):
     
     jacMatShape = cp.from_dlpack(jaxMatShape,copy=False)
     jacMatVals  = cp.from_dlpack(jaxMatVals,copy=False)
     jacMatRows  = jnp.asarray(jaxMatRows,dtype=jnp.int32)
     jacMatCols  = jnp.asarray(jaxMatCols,dtype=jnp.int32)
 
+    #TODO: Replace with an actual import since this is stupid
     constructionOptions = [PETSc.Mat.Type.AIJCUSPARSE,"lgmres","jacobi"] #this is just for testing
 
     mat = PETSc.Mat().create(PETSc.COMM_WORLD)
@@ -73,7 +375,7 @@ def __petsc_init_impl(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols,pass
     ksp.setConvergenceHistory()      # setting this option instead
     ksp.getPC().setType(constructionOptions[2])#"jacobi")    # of hardcoding it like this
 
-    cp.asarray(out)[...] = __store_object(ksp)
+
 
     ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
                       #rtol, atol, dtol, max_it
@@ -81,34 +383,345 @@ def __petsc_init_impl(ctx, out,jaxMatShape,jaxMatVals,jaxMatRows,jaxMatCols,pass
     n = 3 #constructionOptions
     ksp.setConvergenceHistory(n)
 
+    cp.asarray(out)[...] = __store_KSP(ksp, owns_operators=True)
 
-def __petsc_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols,constructionOptions) -> __CupyCtx:
+
+def __petsc_KSP_init(jacMatShape,jacMatVals,jacMatRows,jacMatCols,constructionOptions) -> __CupyCtx:
     result_info = jax.ShapeDtypeStruct((), jnp.int64)
     #handle = jax.pure_callback(__petsc_init_impl, result_info, coo_to_csr(A))
-    handle = buffer_callback(__petsc_init_impl, result_info, vmap_method="sequential")(jacMatShape,jacMatVals,jacMatRows,jacMatCols,constructionOptions)
+    handle = buffer_callback(__petsc_KSP_init_impl, result_info, vmap_method="sequential")(jacMatShape,jacMatVals,jacMatRows,jacMatCols,constructionOptions)
     return __CupyCtx(handle=handle)
     
 
 def __petsc_cleanup(handle):
 
-    ksp = __retrieve_object(cp.asarray(handle))
+    ksp, owns_operators = __retrieve_KSP_record(cp.asarray(handle))
 
-    A,P = ksp.getOperators()
-    A.destroy()
-    P.destroy()
-    ksp.getPC().destroy()
+    if owns_operators:
+        A, P = ksp.getOperators()
+        seen = set()
+        for obj in (A, P, ksp.getPC()):
+            obj_handle = getattr(obj, "handle", None)
+            if obj_handle not in seen:
+                obj.destroy()
+                seen.add(obj_handle)
+
     ksp.destroy() #quick and dirty memory management
 
 def __dictionary_cleanup(handle):
-    __clear_object(handle)
+    __CLEAR_KSP(handle)
 
+
+def __petsc_cleanup_impl(ctx, out, handle):
+    __petsc_cleanup(handle)
+    __dictionary_cleanup(handle)
+    cp.asarray(out)[...] = cp.asarray(handle)
+
+
+def __petsc_cleanup_callback(handle):
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    return buffer_callback(__petsc_cleanup_impl, result_info, vmap_method="sequential")(handle)
 
 
 def linearSolverCleanup(handle):
-    global _NEXT_ID
-
     raw_handle = getattr(handle, "handle", handle)
-    __petsc_cleanup(raw_handle)
-    __dictionary_cleanup(raw_handle)
-
+    linear_solver_cleanup_p.bind(raw_handle)
     return handle
+
+
+def _linear_solver_cleanup_impl(handle):
+    __petsc_cleanup(handle)
+    __dictionary_cleanup(handle)
+    return handle
+
+
+def _linear_solver_cleanup_abstract_eval(handle_aval):
+    return handle_aval
+
+
+def _linear_solver_init_lowering(ctx, x0, *, jac, res, diag, x0_is_none, constructionOptions):
+    def lowered_init(x0_value):
+        primal_x0 = None if x0_is_none else x0_value
+        J = jac(primal_x0)
+        if res is not None:
+            res(primal_x0)
+        if diag is not None:
+            diag(primal_x0)
+        return __petsc_KSP_init(J[0], J[1], J[2], J[3], constructionOptions).handle
+
+    return mlir.lower_fun(lowered_init, multiple_results=False)(ctx, x0)
+
+
+def _linear_solver_cleanup_jvp(primals, tangents):
+    del tangents
+    (handle,) = primals
+    out = linear_solver_cleanup_p.bind(handle)
+    return out, _zero_from_value(out)
+
+
+def _linear_solver_cleanup_transpose(ct, handle):
+    del ct, handle
+    return (None,)
+
+
+def _linear_solver_cleanup_batch(args, batch_dims):
+    del args, batch_dims
+    raise NotImplementedError("Batching over PETSc solver cleanup is not supported")
+
+
+def _linear_solver_cleanup_lowering(ctx, handle):
+    return mlir.lower_fun(__petsc_cleanup_callback, multiple_results=False)(ctx, handle)
+
+
+def _linear_matrix_init_impl(x0, *, jac, x0_is_none, constructionOptions):
+    x0_value = None if x0_is_none else x0
+    J = jac(x0_value)
+    return __petsc_MAT_init(J[0], J[1], J[2], J[3], constructionOptions).handle
+
+
+def _linear_matrix_init_abstract_eval(x0_aval, *, jac, x0_is_none, constructionOptions):
+    del x0_aval, jac, x0_is_none, constructionOptions
+    shaped_array = getattr(jax_core, "ShapedArray", legacy_core.ShapedArray)
+    return shaped_array((), jnp.int64)
+
+
+def _linear_matrix_init_jvp(primals, tangents, *, jac, x0_is_none, constructionOptions):
+    del tangents
+    (x0,) = primals
+    handle = linear_matrix_init_p.bind(
+        x0,
+        jac=jac,
+        x0_is_none=x0_is_none,
+        constructionOptions=constructionOptions,
+    )
+    return handle, _zero_from_value(handle)
+
+
+def _linear_matrix_init_transpose(ct, x0, *, jac, x0_is_none, constructionOptions):
+    del ct, x0, jac, x0_is_none, constructionOptions
+    return (None,)
+
+
+def _linear_matrix_init_batch(args, batch_dims, *, jac, x0_is_none, constructionOptions):
+    del args, batch_dims, jac, x0_is_none, constructionOptions
+    raise NotImplementedError("Batching over PETSc matrix initialization is not supported")
+
+
+def _linear_matrix_init_lowering(ctx, x0, *, jac, x0_is_none, constructionOptions):
+    def lowered_init(x0_value):
+        primal_x0 = None if x0_is_none else x0_value
+        J = jac(primal_x0)
+        return __petsc_MAT_init(J[0], J[1], J[2], J[3], constructionOptions).handle
+
+    return mlir.lower_fun(lowered_init, multiple_results=False)(ctx, x0)
+
+
+def _linear_matrix_update_impl(handle, vals):
+    return __petsc_MAT_update(handle, vals).handle
+
+
+def _linear_matrix_update_abstract_eval(handle_aval, vals_aval):
+    del vals_aval
+    return handle_aval
+
+
+def _linear_matrix_update_jvp(primals, tangents):
+    del tangents
+    handle, vals = primals
+    out = linear_matrix_update_p.bind(handle, vals)
+    return out, _zero_from_value(out)
+
+
+def _linear_matrix_update_transpose(ct, handle, vals):
+    del ct, handle
+    vals_bar = ad.Zero(vals.aval) if isinstance(vals, ad.UndefinedPrimal) else None
+    return None, vals_bar
+
+
+def _linear_matrix_update_batch(args, batch_dims):
+    del args, batch_dims
+    raise NotImplementedError("Batching over PETSc matrix updates is not supported")
+
+
+def _linear_matrix_update_lowering(ctx, handle, vals):
+    def lowered_update(handle_value, vals_value):
+        return __petsc_MAT_update(handle_value, vals_value).handle
+
+    return mlir.lower_fun(lowered_update, multiple_results=False)(ctx, handle, vals)
+
+
+def _linear_matrix_cleanup_impl(handle):
+    return __petsc_MAT_cleanup_callback(handle).handle
+
+
+def _linear_matrix_cleanup_abstract_eval(handle_aval):
+    return handle_aval
+
+
+def _linear_matrix_cleanup_jvp(primals, tangents):
+    del tangents
+    (handle,) = primals
+    out = linear_matrix_cleanup_p.bind(handle)
+    return out, _zero_from_value(out)
+
+
+def _linear_matrix_cleanup_transpose(ct, handle):
+    del ct, handle
+    return (None,)
+
+
+def _linear_matrix_cleanup_batch(args, batch_dims):
+    del args, batch_dims
+    raise NotImplementedError("Batching over PETSc matrix cleanup is not supported")
+
+
+def _linear_matrix_cleanup_lowering(ctx, handle):
+    return mlir.lower_fun(lambda h: __petsc_MAT_cleanup_callback(h).handle, multiple_results=False)(ctx, handle)
+
+
+def _linear_pc_init_impl(matrix_handle, *, constructionOptions):
+    return __petsc_PC_init(matrix_handle, constructionOptions).handle
+
+
+def _linear_pc_init_abstract_eval(matrix_handle_aval, *, constructionOptions):
+    del matrix_handle_aval, constructionOptions
+    shaped_array = getattr(jax_core, "ShapedArray", legacy_core.ShapedArray)
+    return shaped_array((), jnp.int64)
+
+
+def _linear_pc_init_jvp(primals, tangents, *, constructionOptions):
+    del tangents
+    (matrix_handle,) = primals
+    handle = linear_pc_init_p.bind(matrix_handle, constructionOptions=constructionOptions)
+    return handle, _zero_from_value(handle)
+
+
+def _linear_pc_init_transpose(ct, matrix_handle, *, constructionOptions):
+    del ct, matrix_handle, constructionOptions
+    return (None,)
+
+
+def _linear_pc_init_batch(args, batch_dims, *, constructionOptions):
+    del args, batch_dims, constructionOptions
+    raise NotImplementedError("Batching over PETSc PC initialization is not supported")
+
+
+def _linear_pc_init_lowering(ctx, matrix_handle, *, constructionOptions):
+    return mlir.lower_fun(lambda h: __petsc_PC_init(h, constructionOptions).handle, multiple_results=False)(ctx, matrix_handle)
+
+
+def _linear_pc_cleanup_impl(handle):
+    return __petsc_PC_cleanup_callback(handle).handle
+
+
+def _linear_pc_cleanup_abstract_eval(handle_aval):
+    return handle_aval
+
+
+def _linear_pc_cleanup_jvp(primals, tangents):
+    del tangents
+    (handle,) = primals
+    out = linear_pc_cleanup_p.bind(handle)
+    return out, _zero_from_value(out)
+
+
+def _linear_pc_cleanup_transpose(ct, handle):
+    del ct, handle
+    return (None,)
+
+
+def _linear_pc_cleanup_batch(args, batch_dims):
+    del args, batch_dims
+    raise NotImplementedError("Batching over PETSc PC cleanup is not supported")
+
+
+def _linear_pc_cleanup_lowering(ctx, handle):
+    return mlir.lower_fun(lambda h: __petsc_PC_cleanup_callback(h).handle, multiple_results=False)(ctx, handle)
+
+
+def _linear_ksp_init_impl(matrix_handle, *, constructionOptions):
+    return __petsc_KSP_init_from_mat(matrix_handle, constructionOptions).handle
+
+
+def _linear_ksp_init_abstract_eval(matrix_handle_aval, *, constructionOptions):
+    del matrix_handle_aval, constructionOptions
+    shaped_array = getattr(jax_core, "ShapedArray", legacy_core.ShapedArray)
+    return shaped_array((), jnp.int64)
+
+
+def _linear_ksp_init_jvp(primals, tangents, *, constructionOptions):
+    del tangents
+    (matrix_handle,) = primals
+    handle = linear_ksp_init_p.bind(matrix_handle, constructionOptions=constructionOptions)
+    return handle, _zero_from_value(handle)
+
+
+def _linear_ksp_init_transpose(ct, matrix_handle, *, constructionOptions):
+    del ct, matrix_handle, constructionOptions
+    return (None,)
+
+
+def _linear_ksp_init_batch(args, batch_dims, *, constructionOptions):
+    del args, batch_dims, constructionOptions
+    raise NotImplementedError("Batching over PETSc KSP initialization is not supported")
+
+
+def _linear_ksp_init_lowering(ctx, matrix_handle, *, constructionOptions):
+    return mlir.lower_fun(lambda h: __petsc_KSP_init_from_mat(h, constructionOptions).handle, multiple_results=False)(ctx, matrix_handle)
+
+
+linear_solver_init_p.def_impl(_linear_solver_init_impl)
+linear_solver_init_p.def_abstract_eval(_linear_solver_init_abstract_eval)
+mlir.register_lowering(linear_solver_init_p, _linear_solver_init_lowering)
+ad.primitive_jvps[linear_solver_init_p] = _linear_solver_init_jvp
+ad.primitive_transposes[linear_solver_init_p] = _linear_solver_init_transpose
+batching.primitive_batchers[linear_solver_init_p] = _linear_solver_init_batch
+
+linear_solver_cleanup_p.def_impl(_linear_solver_cleanup_impl)
+linear_solver_cleanup_p.def_abstract_eval(_linear_solver_cleanup_abstract_eval)
+mlir.register_lowering(linear_solver_cleanup_p, _linear_solver_cleanup_lowering)
+ad.primitive_jvps[linear_solver_cleanup_p] = _linear_solver_cleanup_jvp
+ad.primitive_transposes[linear_solver_cleanup_p] = _linear_solver_cleanup_transpose
+batching.primitive_batchers[linear_solver_cleanup_p] = _linear_solver_cleanup_batch
+
+linear_matrix_init_p.def_impl(_linear_matrix_init_impl)
+linear_matrix_init_p.def_abstract_eval(_linear_matrix_init_abstract_eval)
+mlir.register_lowering(linear_matrix_init_p, _linear_matrix_init_lowering)
+ad.primitive_jvps[linear_matrix_init_p] = _linear_matrix_init_jvp
+ad.primitive_transposes[linear_matrix_init_p] = _linear_matrix_init_transpose
+batching.primitive_batchers[linear_matrix_init_p] = _linear_matrix_init_batch
+
+linear_matrix_update_p.def_impl(_linear_matrix_update_impl)
+linear_matrix_update_p.def_abstract_eval(_linear_matrix_update_abstract_eval)
+mlir.register_lowering(linear_matrix_update_p, _linear_matrix_update_lowering)
+ad.primitive_jvps[linear_matrix_update_p] = _linear_matrix_update_jvp
+ad.primitive_transposes[linear_matrix_update_p] = _linear_matrix_update_transpose
+batching.primitive_batchers[linear_matrix_update_p] = _linear_matrix_update_batch
+
+linear_matrix_cleanup_p.def_impl(_linear_matrix_cleanup_impl)
+linear_matrix_cleanup_p.def_abstract_eval(_linear_matrix_cleanup_abstract_eval)
+mlir.register_lowering(linear_matrix_cleanup_p, _linear_matrix_cleanup_lowering)
+ad.primitive_jvps[linear_matrix_cleanup_p] = _linear_matrix_cleanup_jvp
+ad.primitive_transposes[linear_matrix_cleanup_p] = _linear_matrix_cleanup_transpose
+batching.primitive_batchers[linear_matrix_cleanup_p] = _linear_matrix_cleanup_batch
+
+linear_pc_init_p.def_impl(_linear_pc_init_impl)
+linear_pc_init_p.def_abstract_eval(_linear_pc_init_abstract_eval)
+mlir.register_lowering(linear_pc_init_p, _linear_pc_init_lowering)
+ad.primitive_jvps[linear_pc_init_p] = _linear_pc_init_jvp
+ad.primitive_transposes[linear_pc_init_p] = _linear_pc_init_transpose
+batching.primitive_batchers[linear_pc_init_p] = _linear_pc_init_batch
+
+linear_pc_cleanup_p.def_impl(_linear_pc_cleanup_impl)
+linear_pc_cleanup_p.def_abstract_eval(_linear_pc_cleanup_abstract_eval)
+mlir.register_lowering(linear_pc_cleanup_p, _linear_pc_cleanup_lowering)
+ad.primitive_jvps[linear_pc_cleanup_p] = _linear_pc_cleanup_jvp
+ad.primitive_transposes[linear_pc_cleanup_p] = _linear_pc_cleanup_transpose
+batching.primitive_batchers[linear_pc_cleanup_p] = _linear_pc_cleanup_batch
+
+linear_ksp_init_p.def_impl(_linear_ksp_init_impl)
+linear_ksp_init_p.def_abstract_eval(_linear_ksp_init_abstract_eval)
+mlir.register_lowering(linear_ksp_init_p, _linear_ksp_init_lowering)
+ad.primitive_jvps[linear_ksp_init_p] = _linear_ksp_init_jvp
+ad.primitive_transposes[linear_ksp_init_p] = _linear_ksp_init_transpose
+batching.primitive_batchers[linear_ksp_init_p] = _linear_ksp_init_batch

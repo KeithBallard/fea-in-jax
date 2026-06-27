@@ -12,7 +12,7 @@ from jax._src.lib import xla_client
 from petsc4py import PETSc
 
 def __petsc_print_impl(ctx,out,handle,b):
-    ksp = buildKSP.__retrieve_object(cp.asarray(handle))
+    ksp = buildKSP.__retrieve_KSP(cp.asarray(handle))
     ksp.view()
     cp.asarray(out)[...] = b
     
@@ -22,7 +22,7 @@ def printPETSC(ctx: buildKSP.__CupyCtx,b):
     x= buffer_callback(__petsc_print_impl, result_info, vmap_method="sequential")(ctx.handle,b)  #unsurprisingly this is where things clash between MPI and PETSc
     return x
 
-def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, pcHandle: jnp.ndarray, b: jnp.ndarray):
 
     GPUPointerArray = cp.from_dlpack(b,copy=False)
     
@@ -32,7 +32,9 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
 
 
-    ksp = buildKSP.__retrieve_object(cp.asarray(handle))
+    ksp = buildKSP.__retrieve_KSP(cp.asarray(handle))
+    pc = buildKSP.__retrieve_PC(cp.asarray(pcHandle))
+    ksp.setPC(pc)
     
     x_petsc = PETSc.Vec().create(PETSc.COMM_SELF)
     x_petsc.setType('cuda')         # true GPU vector
@@ -67,7 +69,7 @@ def __petsc_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 
     cp.asarray(out)[...] = x_gpu
 
-def __petsc_solve_impl_transpose(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
+def __petsc_solve_impl_transpose(ctx, out, handle: jnp.ndarray, pcHandle: jnp.ndarray, b: jnp.ndarray):
 
     GPUPointerArray = cp.from_dlpack(b,copy=False)
     
@@ -76,7 +78,9 @@ def __petsc_solve_impl_transpose(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
     
     b_petsc_1 = PETSc.Vec().createWithDLPack(GPUPointerArray, size=b.shape[0])
 
-    ksp = buildKSP.__retrieve_object(cp.asarray(handle))
+    ksp = buildKSP.__retrieve_KSP(cp.asarray(handle))
+    pc = buildKSP.__retrieve_PC(cp.asarray(pcHandle))
+    ksp.setPC(pc)
     
     x_petsc = PETSc.Vec().create(PETSc.COMM_SELF)
     x_petsc.setType('cuda')         # true GPU vector
@@ -113,19 +117,19 @@ def __petsc_solve_impl_transpose(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
 #______________________________________________________________________________________________
 
 @jax.jit
-def __petsc_solve(ctx: buildKSP.__CupyCtx, b: jnp.ndarray):
+def __petsc_solve(ctx: buildKSP.__CupyCtx, pcCtx: buildKSP.__CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    x= buffer_callback(__petsc_solve_impl, result_info, vmap_method="sequential")(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    x= buffer_callback(__petsc_solve_impl, result_info, vmap_method="sequential")(ctx.handle, pcCtx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
     return x
 
 @jax.jit
-def __petsc_solve_transpose(ctx: buildKSP.__CupyCtx, b: jnp.ndarray):
+def __petsc_solve_transpose(ctx: buildKSP.__CupyCtx, pcCtx: buildKSP.__CupyCtx, b: jnp.ndarray):
     result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-    x= buffer_callback(__petsc_solve_impl_transpose, result_info, vmap_method="sequential")(ctx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
+    x= buffer_callback(__petsc_solve_impl_transpose, result_info, vmap_method="sequential")(ctx.handle, pcCtx.handle, b)  #unsurprisingly this is where things clash between MPI and PETSc
     return x
 
 # Differentiation rules live in primitiveKSP.solver_differentiation.
 
     #static KSP object, numbers to use, RHS
-def linearSolverSolve(ID,A,b):
-    return __petsc_solve(ID, b)
+def linearSolverSolve(ID, PC, A, b):
+    return __petsc_solve(ID, PC, b)

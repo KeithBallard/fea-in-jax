@@ -20,24 +20,25 @@ def jac(_x0):
 
 
 def main():
+    shape, vals, rows, cols = jac(None)
+    matrix = buildKSP_Keith.linearMatrixInit(jac=jac, x0=None)
+    pc = buildKSP_Keith.linearPCInit(matrix)
+    ksp = buildKSP_Keith.linearKSPInit(matrix)
 
-    solver = buildKSP_Keith.linearSolverInit(
-        jac=jac,
-        res=None,
-        diag=None,
-        x0=None,
-        constructionOptions=None,
-    )
-    print("linearSolverInit returned:", solver)
-    print("solver handle:", solver.handle)
+    try:
+        print("matrix handle:", matrix.handle)
+        print("pc handle:", pc.handle)
+        print("ksp handle:", ksp.handle)
 
-    b = jnp.ones((8,), dtype=jnp.float64)
-    x = runKSP_Keith.__petsc_solve(solver, b)
-    print("solve rhs:", b)
-    print("solve result:", x)
-
-    buildKSP_Keith.linearSolverCleanup(solver)
-    print("linearSolverCleanup completed")
+        b = jnp.ones((8,), dtype=jnp.float64)
+        x = runKSP_Keith.__petsc_solve(ksp, pc, b)
+        print("solve rhs:", b)
+        print("solve result:", x)
+    finally:
+        buildKSP_Keith.linearSolverCleanup(ksp)
+        buildKSP_Keith.linearPCCleanup(pc)
+        buildKSP_Keith.linearMatrixCleanup(matrix)
+        print("linearSolverCleanup/linearPCCleanup/linearMatrixCleanup completed")
 
 
 if __name__ == "__main__":
