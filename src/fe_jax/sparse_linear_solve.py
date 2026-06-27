@@ -23,6 +23,14 @@ from .sparse_matrix import *
 from .constraint_system import ConstraintSystem
 from .solve_cg import cg as cg_w_info
 
+
+from .petsc_backend import (
+    PETScKSPOptions,
+    PETScKSPType,
+    PETScPCType,
+    nathan_callable_linear_solve_petsc_branch,
+)
+
 _logger = logging.getLogger(__name__)
 
 try:
