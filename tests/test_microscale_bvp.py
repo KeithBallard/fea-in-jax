@@ -166,6 +166,34 @@ def _build_problem(mesh_file):
     return mesh, points, element_batches, jnp.zeros(shape=(V * U)), dirichlet_bcs, dirichlet_values
 
 
+
+def _solve_bvp_residual(
+    points,
+    element_batches,
+    u0,
+    dirichlet_bcs,
+    dirichlet_values,
+    solver_type,
+    petsc_solver_type,
+    preconditioner,
+):
+    _, residual, _ = solve_bvp(
+        element_residual_func=linear_elasticity_residual,
+        vertices_vd=points,
+        element_batches=element_batches,
+        u_0_g=u0,
+        dirichlet_bcs=dirichlet_bcs,
+        dirichlet_values=dirichlet_values,
+        solver_options=SolverOptions(
+            linear_solve_type=LinearSolverType[solver_type],
+            linear_precond_type=PreconditionerType[preconditioner],
+            petsc_solve_type=petsc_solver_type,
+        ),
+        plot_convergence=False,
+    )
+    return residual
+
+
 def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
     _, points, element_batches, u0, dirichlet_bcs, dirichlet_values = _build_problem(mesh_file)
     petsc_precond = 0 if preconditioner == "JACOBI" else 1
@@ -238,6 +266,64 @@ def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
     print(f"JAX assembled CG w/info total: {jac_time + rhs_time + timings['JAX assembled CG w/info']['mean']:.6f} s")
     print(f"PETSc init+solve total: {jac_time + rhs_time + timings['PETSc init+solve']['mean']:.6f} s")
 
+    print("\nWarming full solve_bvp paths.")
+    _block(
+        _solve_bvp_residual(
+            points,
+            element_batches,
+            u0,
+            dirichlet_bcs,
+            dirichlet_values,
+            "CG_JAX_SCIPY_W_INFO",
+            petsc_solver_type,
+            preconditioner,
+        )
+    )
+    _block(
+        _solve_bvp_residual(
+            points,
+            element_batches,
+            u0,
+            dirichlet_bcs,
+            dirichlet_values,
+            "PETSC",
+            petsc_solver_type,
+            preconditioner,
+        )
+    )
+
+    full_timings = {}
+    print("\nTiming full solve_bvp paths.")
+    _, full_timings["full solve_bvp JAX w/info"] = _time_call(
+        "full solve_bvp JAX w/info",
+        repeats,
+        lambda: _solve_bvp_residual(
+            points,
+            element_batches,
+            u0,
+            dirichlet_bcs,
+            dirichlet_values,
+            "CG_JAX_SCIPY_W_INFO",
+            petsc_solver_type,
+            preconditioner,
+        ),
+    )
+    _, full_timings["full solve_bvp PETSc"] = _time_call(
+        "full solve_bvp PETSc",
+        repeats,
+        lambda: _solve_bvp_residual(
+            points,
+            element_batches,
+            u0,
+            dirichlet_bcs,
+            dirichlet_values,
+            "PETSC",
+            petsc_solver_type,
+            preconditioner,
+        ),
+    )
+    _print_timing_summary(full_timings)
+
 
 def _run_original(mesh_file, solver_type, petsc_solver_type, preconditioner):
     mesh, points, element_batches, u0, dirichlet_bcs, dirichlet_values = _build_problem(mesh_file)
@@ -277,3 +363,5 @@ if solverType == "COMPARE":
     _run_compare(meshFile, petscSolverType, preconditioner, repeats)
 else:
     _run_original(meshFile, solverType, petscSolverType, preconditioner)
+
+
