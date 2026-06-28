@@ -196,75 +196,9 @@ def _solve_bvp_residual(
 
 def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
     _, points, element_batches, u0, dirichlet_bcs, dirichlet_values = _build_problem(mesh_file)
-    petsc_precond = 0 if preconditioner == "JACOBI" else 1
 
-    print("\nAssembling real microscale matrix/RHS once.")
-    start = time.perf_counter()
-    J = assembleJacobian(
-        element_residual_func=linear_elasticity_residual,
-        vertices_vd=points,
-        element_batches=element_batches,
-        u_0_g=u0,
-        dirichlet_bcs=dirichlet_bcs,
-        dirichlet_values=dirichlet_values,
-    )
-    _block(J.data)
-    jac_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    rhs = -assembleRHS(
-        element_residual_func=linear_elasticity_residual,
-        vertices_vd=points,
-        element_batches=element_batches,
-        u_0_g=u0,
-        dirichlet_bcs=dirichlet_bcs,
-        dirichlet_values=dirichlet_values,
-    )
-    _block(rhs)
-    rhs_time = time.perf_counter() - start
-
-    diag = _diag_from_coo(J)
-    print("nnz:", J.nse)
-    print(f"Jacobian construction: {jac_time:.6f} s")
-    print(f"RHS construction: {rhs_time:.6f} s")
-
-    print("\nWarming solve paths.")
-    x_jax_info_warm, jax_iters_warm = _block(_jax_assembled_cg_with_info(J, rhs, diag))
-    _block(_jax_scipy_assembled_cg(J, rhs, diag))
-    _block(_petsc_init_solve(J, rhs, petsc_solver_type, petsc_precond))
-    print("JAX w/info warmup iterations:", int(jax_iters_warm))
-
-    timings = {}
-    print("\nTiming solve paths on the same assembled matrix/RHS.")
-    (x_jax_info, jax_iters), timings["JAX assembled CG w/info"] = _time_call(
-        "JAX assembled CG w/info",
-        repeats,
-        lambda: _jax_assembled_cg_with_info(J, rhs, diag),
-    )
-    x_jax_scipy, timings["JAX scipy assembled CG"] = _time_call(
-        "JAX scipy assembled CG",
-        repeats,
-        lambda: _jax_scipy_assembled_cg(J, rhs, diag),
-    )
-    x_petsc, timings["PETSc init+solve"] = _time_call(
-        "PETSc init+solve",
-        repeats,
-        lambda: _petsc_init_solve(J, rhs, petsc_solver_type, petsc_precond),
-    )
-
-    print("\nResiduals against assembled system")
-    print("JAX w/info iterations:", int(jax_iters))
-    print("JAX w/info ||Ax-b||:", _residual_norm(J, x_jax_info, rhs))
-    print("JAX scipy ||Ax-b||:", _residual_norm(J, x_jax_scipy, rhs))
-    print("PETSc ||Ax-b||:", _residual_norm(J, x_petsc, rhs))
-    print("||PETSc - JAX w/info||:", float(jnp.linalg.norm(x_petsc - x_jax_info)))
-
-    _print_timing_summary(timings)
-    print("\nConstruction-inclusive summary")
-    print(f"Jacobian construction: {jac_time:.6f} s")
-    print(f"RHS construction: {rhs_time:.6f} s")
-    print(f"JAX assembled CG w/info total: {jac_time + rhs_time + timings['JAX assembled CG w/info']['mean']:.6f} s")
-    print(f"PETSc init+solve total: {jac_time + rhs_time + timings['PETSc init+solve']['mean']:.6f} s")
+    print("\nCOMPARE mode: timing full solve_bvp paths.")
+    print("This avoids the standalone assembleRHS wrapper on this branch, which is not wired the same way as solve_bvp.")
 
     print("\nWarming full solve_bvp paths.")
     _block(
@@ -292,9 +226,9 @@ def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
         )
     )
 
-    full_timings = {}
+    timings = {}
     print("\nTiming full solve_bvp paths.")
-    _, full_timings["full solve_bvp JAX w/info"] = _time_call(
+    _, timings["full solve_bvp JAX w/info"] = _time_call(
         "full solve_bvp JAX w/info",
         repeats,
         lambda: _solve_bvp_residual(
@@ -308,7 +242,7 @@ def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
             preconditioner,
         ),
     )
-    _, full_timings["full solve_bvp PETSc"] = _time_call(
+    _, timings["full solve_bvp PETSc"] = _time_call(
         "full solve_bvp PETSc",
         repeats,
         lambda: _solve_bvp_residual(
@@ -322,8 +256,10 @@ def _run_compare(mesh_file, petsc_solver_type, preconditioner, repeats):
             preconditioner,
         ),
     )
-    _print_timing_summary(full_timings)
+    _print_timing_summary(timings)
 
+    ratio = timings["full solve_bvp PETSc"]["mean"] / timings["full solve_bvp JAX w/info"]["mean"]
+    print(f"\nFull solve_bvp PETSc / JAX mean ratio: {ratio:.3f}x")
 
 def _run_original(mesh_file, solver_type, petsc_solver_type, preconditioner):
     mesh, points, element_batches, u0, dirichlet_bcs, dirichlet_values = _build_problem(mesh_file)
@@ -363,5 +299,6 @@ if solverType == "COMPARE":
     _run_compare(meshFile, petscSolverType, preconditioner, repeats)
 else:
     _run_original(meshFile, solverType, petscSolverType, preconditioner)
+
 
 
