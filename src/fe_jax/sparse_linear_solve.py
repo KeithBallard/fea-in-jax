@@ -31,6 +31,7 @@ from .petsc_backend import (
     nathan_callable_linear_solve_petsc_branch,
 )
 
+
 _logger = logging.getLogger(__name__)
 
 try:
@@ -110,6 +111,7 @@ class LinearSolverType(Enum):
     # TODO MINRES_CUPY : https://docs.cupy.dev/en/latest/reference/generated/cupyx.scipy.sparse.linalg.minres.html
     AMGX = auto()
     SPSOLVE_PYPARDISO = auto()
+    PETSC = auto()
 
 
 @dataclass(eq=True, frozen=True)
@@ -123,6 +125,7 @@ class SolverOptions:
     nonlinear_relative_tol: float = 1e-10
     nonlinear_absolute_tol: float = 1e-8
     max_linear_displacement: float = jnp.inf
+    petsc_options: PETScKSPOptions = PETScKSPOptions()
 
     def __post_init__(self):
         # Validate that the selected preconditioner is available
@@ -588,6 +591,22 @@ def linear_solve(
             # print(f"saved to {saved_path}\n\n")
 
             delta_x = __pypardiso_solve(J_sparse, -R_0)
+
+        ##########################################################################################
+        # PETSc solvers
+        case LinearSolverType.PETSC:
+            delta_x = nathan_callable_linear_solve_petsc_branch(
+                residual,
+                jacobian,
+                jacobian_diagonal,
+                constraints,
+                x_0,
+                f_ext,
+                *args,
+                options=solver_options.petsc_options,
+                apply_dirichlet_lhs_fn=apply_dirichlet_bcs_lhs,
+                **kwargs,
+            )
 
         case _:
             raise Exception(
