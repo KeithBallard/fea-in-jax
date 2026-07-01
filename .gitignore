@@ -20,3 +20,4 @@ prof/
 src/__pycache__/
 tests/output/
 tests/__pycache__/
+jax-trace
