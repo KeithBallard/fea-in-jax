@@ -240,6 +240,11 @@ def calculate_jacobian_wo_constraints(
         J_sparse_ff, result_length=precomputed_jacobian_nnz
     )
 
+    if debug_info.contains(DebugOutputQuantities.GLOBAL_JACOBIAN_COO):
+        debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "data_wo_constraints", J_sparse_ff.data)
+        debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "rows_wo_constraints", J_sparse_ff.row)
+        debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "cols_wo_constraints", J_sparse_ff.col)
+
     return J_sparse_ff
 
 
@@ -505,7 +510,7 @@ def calculate_residual_wo_constraints(
 
     if debug_info.contains(DebugOutputQuantities.ELEMENT_RESIDUAL):
         for i, res in enumerate(result):
-            debug_info.output(DebugOutputQuantities.ELEMENT_RESIDUAL, f"batch_{i}", res[0])
+            debug_info.output(DebugOutputQuantities.ELEMENT_RESIDUAL, f"batch_{i}_wo_constraints", res[0])
 
     R_f = jnp.zeros_like(u_f)
     for i in range(ebc.B):
@@ -790,6 +795,9 @@ def solve_nonlinear_step(
 
         if debug_info.contains(DebugOutputQuantities.NODE_RESIDUAL):
             debug_info.output(DebugOutputQuantities.NODE_RESIDUAL, "residual", R_f.reshape(-1,D))
+
+        if debug_info.contains(DebugOutputQuantities.GLOBAL_JACOBIAN_COO):
+            jacobian_func_wo_constraints(u_f)
 
         return (
             nl_iteration + 1,

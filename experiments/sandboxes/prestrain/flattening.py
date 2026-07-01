@@ -80,8 +80,9 @@ args = {
     'debug_info':make_debug_info(
         flags = [
             (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+            (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
         ],
-        filename = 'prestrain/flattening_negative_prestrain.h5'
+        filename = 'prestrain/test_global_jac_coo.h5'
     )
 }
 
