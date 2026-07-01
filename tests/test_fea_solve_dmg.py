@@ -32,7 +32,7 @@ def test_fea_solve_dmg():
     os.makedirs(args['vtk_dir'], exist_ok=True)
 
     # Read in the mesh (IGFEM)
-    mesh     = pv.read('tests/output/1fib_t500/History.0.vtk')
+    mesh     = pv.read('tests/meshes/IGFEM_1fib.vtk')
     vtk_mesh = mesh.copy()
     vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{0}.vtk")
 

@@ -19,5 +19,6 @@ prof/
 *.egg-info/
 src/__pycache__/
 tests/output/
+tests/IGFEM_ref/
 tests/__pycache__/
 jax-trace
