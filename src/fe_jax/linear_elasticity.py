@@ -335,8 +335,9 @@ def contact_stiffness_exponential(
 ) -> float:
     E_c= material_params_m[..., 0] # stiffness at physical contact (defined by fiber diameter)
     dmtr = material_params_m[..., 3] # diameter
-    c_r = material_params_m[..., 4] # contact_radius
-    E_min = material_params_m[..., 5] # contact_radius
+    c_r = material_params_m[..., 4] # radius to "turn on" stiffness
+    E_min = material_params_m[..., 5] # stiffness at c_r
+
     alpha =  jnp.exp((dmtr*jnp.log(E_min) - c_r*jnp.log(E_c))/(dmtr-c_r))
     r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
     return alpha*jnp.exp(-r*d)
@@ -376,6 +377,12 @@ def elastic_contact_truss(
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
     stress_dd = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*A*eps_a*P_dd
+    # jax.debug.print(
+    #     'x_nd = {x}, d = {d}, E = {E}\n',
+    #     x = x_nd,
+    #     d = jnp.linalg.norm(dx_d),
+    #     E = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)
+    # )
 
     return stress_dd, jnp.array([])  # no internal state
 
@@ -459,8 +466,6 @@ def linear_truss_residual(
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
 
-    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nR_nd = \n{}\n',x_nd,u_nd,R_nd)
-    # jax.debug.print('x_nd = \n{}\n',x_nd)
     return R_nd, new_internal_state_qi
 
 def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):

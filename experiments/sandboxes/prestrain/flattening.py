@@ -4,49 +4,13 @@ import numpy as np
 # jax.config.update("jax_disable_jit", True)
 
 
-def make_single_fiber(
-    n_elements: int, x0: tuple, xN: tuple, cell_shift: int
-):
-    points = np.vstack(
-        [
-            np.linspace(x0[i], xN[i], n_elements + 1) for i in range(len(x0))
-        ]
-    ).T
-    cells = np.array(
-        [[i + cell_shift, i + cell_shift + 1] for i in range(len(points) - 1)],
-        dtype=np.uint64,
-    )
-    return points, cells
+def make_fabric(n_elements: int):
+    x = np.linspace(0,1,n_elements+1)
+    y = x*(1-x)/2.5
 
+    points = np.vstack([x,y]).T
+    fiber_offsets = np.concatenate([[0],np.cumsum([points.shape[0]])])
 
-def make_fabric(n_elements: list[int], X: list[tuple]):
-    point_blocks = []
-    cell_blocks = []
-
-    vertex_offset = 0
-
-    for (n_el, x) in zip(n_elements, X):
-        points_i, cells_i = make_single_fiber(
-            n_elements=n_el,
-            x0=x[0],
-            xN=x[1],
-            cell_shift=vertex_offset,
-        )
-
-        point_blocks.append(points_i)
-        cell_blocks.append(cells_i)
-
-        vertex_offset += points_i.shape[0]
-
-    points = np.vstack(point_blocks)
-
-    fiber_offsets = np.concatenate(
-        [
-            [0],
-            np.cumsum([b.shape[0] for b in point_blocks])
-        ]
-    )
-    # fiber_offsets = np.cumsum([b.shape[0] for b in point_blocks])
     fabric = VTMSFabric(
         name="test",
         material_ids=np.array([0]),
@@ -57,17 +21,22 @@ def make_fabric(n_elements: list[int], X: list[tuple]):
     )
     return fabric
 
-def run_1D(
+def run_2D_flattening(
     n_elements: list[int],
-    X: list[tuple],
     pseudoT:int,
     filename_base:str,
     contact_params: ContactParams,
     pre_strain:float,
+    debug_info: DebugInfo | NullDebugInfo = NullDebugInfo
 ):
     """ """
-    fabric = make_fabric(n_elements=n_elements, X=X)
-    dyn_bcs = [[DirichletBC(index=0, component=0, value=0, bc_type=BCType.NODE)]]
+    fabric = make_fabric(n_elements=n_elements)
+    dyn_bcs = [[
+        DirichletBC(index=0,          component=0, value=0, bc_type=BCType.NODE),
+        DirichletBC(index=0,          component=1, value=0, bc_type=BCType.NODE),
+        DirichletBC(index=n_elements, component=0, value=0, bc_type=BCType.NODE),
+        DirichletBC(index=n_elements, component=1, value=0, bc_type=BCType.NODE),
+    ]]
 
     E = 1e9
     A = 1
@@ -82,7 +51,7 @@ def run_1D(
             linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             # linear_precond_type=PreconditionerType.JACOBI,
-            nonlinear_max_iter=20,
+            nonlinear_max_iter=9,
             linear_max_iter=500,
             # max_linear_displacement=min(min_dist/2,fabric.diameters[0]/2),
         ),
@@ -91,12 +60,13 @@ def run_1D(
         blow_up_threshold=1e6,
         plot_convergence=False,
         pre_strain=pre_strain,
+        debug_info=debug_info,
     )
-    return u,fabric
+    if not isinstance(debug_info, NullDebugInfo): debug_info.file.close()
+    return u,fabric,dyn_bcs
 
 args = {
-    'n_elements':[1],
-    'X':[[[0],[1]]],
+    'n_elements':10,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_stiffness_model = contact_stiffness_exponential,
@@ -107,4 +77,16 @@ args = {
     ),
     'pseudoT':1,
     'filename_base':None,
+    'debug_info':make_debug_info(
+        flags = [
+            (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+        ],
+        filename = 'prestrain/flattening_negative_prestrain.h5'
+    )
 }
+
+def plot_nodes(fabric,file):
+    plt.plot(*fabric.points.T,marker='x',label = 'nl_0')
+    for k in list(file['ts_0'].keys())[1:]:
+        plt.plot(*(fabric.points + file['ts_0'][k]['NODE_SOLUTION']['u'][:,:]).T,marker = 'x', label = k)
+    plt.legend()

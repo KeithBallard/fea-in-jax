@@ -221,7 +221,7 @@ def calculate_jacobian_wo_constraints(
 
     if debug_info.contains(DebugOutputQuantities.ELEMENT_JACOBIAN):
         for i, J_ett in enumerate(J_bett):
-            debug_info.batch_output(DebugOutputQuantities.ELEMENT_JACOBIAN, i, J_bett[i])
+            debug_info.output(DebugOutputQuantities.ELEMENT_JACOBIAN, f"batch_{i}", J_bett[i])
 
     J_ett = jnp.vstack(J_bett)
     rows = jnp.vstack(rows)
@@ -463,6 +463,7 @@ def calculate_residual_wo_constraints(
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
     u_f: jnp.ndarray,
+    debug_info: DebugInfo | NullDebugInfo,
 ):
     """
     Calculates the residual and updated internal state variables without any modification
@@ -501,6 +502,10 @@ def calculate_residual_wo_constraints(
         )
         for i in range(ebc.B)
     ]  # for each item, 0: R_end, 1: internal_state
+
+    if debug_info.contains(DebugOutputQuantities.ELEMENT_RESIDUAL):
+        for i, res in enumerate(result):
+            debug_info.output(DebugOutputQuantities.ELEMENT_RESIDUAL, f"batch_{i}", res[0])
 
     R_f = jnp.zeros_like(u_f)
     for i in range(ebc.B):
@@ -546,6 +551,7 @@ def calculate_residual_w_constraints(
     assembly_map_b: list[jsparse.BCSR],
     constraints: ConstraintSystem,
     f_ext,
+    debug_info: DebugInfo | NullDebugInfo,
 ):
     """
     Compute the residual vector and updated internal state variables given the current
@@ -577,6 +583,7 @@ def calculate_residual_w_constraints(
         ebc=ebc,
         assembly_map_b=assembly_map_b,
         u_f=u_f_w_constraints,
+        debug_info = debug_info,
     )
 
     # Zero out terms corresponding to Dirichlet BCs and add (solution - what it should be) for those constrained DoFs.
@@ -605,6 +612,7 @@ def solve_nonlinear_step(
     f_ext: LoadSystem,
     debug_info: DebugInfo | NullDebugInfo,
     element_diagnostic_outputs: Callable | None = None,
+    time_step: int = 0,
 ):
     """
     Solve the linearized system of equations emerging from the governing equations.
@@ -645,6 +653,13 @@ def solve_nonlinear_step(
     #     )
     # """
 
+    debug_info.begin_stage(
+        time_step=time_step,
+        nonlinear_solve=0,
+        linear_solve=0,
+        current_stage=DebugOutputStage.NONLINEAR_SOLVE,
+    )
+
     # Function that produces (R(u), ISVs)
     residual_isv_func_w_constraints = jax.jit(
         partial(
@@ -654,6 +669,7 @@ def solve_nonlinear_step(
             assembly_map_b=assembly_map_b,
             constraints=constraints,
             f_ext=f_ext,
+            debug_info=debug_info,
         )
     )
 
@@ -723,6 +739,13 @@ def solve_nonlinear_step(
     ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo]:
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
 
+        debug_info.begin_stage(
+            time_step=time_step,
+            nonlinear_solve=nl_iteration+1,
+            linear_solve=0,
+            current_stage=DebugOutputStage.LINEAR_SOLVE,
+        )
+
         delta_u, info = linear_solve(
             residual=Residual(
                 function=jax.tree_util.Partial(residual_func_w_constraints),
@@ -744,6 +767,15 @@ def solve_nonlinear_step(
             f_ext=f_ext,
         )
 
+        debug_info.begin_stage(
+            time_step=time_step,
+            nonlinear_solve=nl_iteration+1,
+            linear_solve=0,
+            current_stage=DebugOutputStage.NONLINEAR_SOLVE,
+        )
+
+
+
         D = ebc.U[0]
         max_d = solver_options.max_linear_displacement
         # TODO this only words if delta_u ONLY consists of nodal values, if other global DOFs are present this, need to be update (both the norm and the reshape with D.
@@ -752,6 +784,12 @@ def solve_nonlinear_step(
         delta_u = delta_u * scale
         u_f = u_f + delta_u
         R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
+
+        if debug_info.contains(DebugOutputQuantities.NODE_SOLUTION):
+            debug_info.output(DebugOutputQuantities.NODE_SOLUTION, "u", u_f.reshape(-1,D))
+
+        if debug_info.contains(DebugOutputQuantities.NODE_RESIDUAL):
+            debug_info.output(DebugOutputQuantities.NODE_RESIDUAL, "residual", R_f.reshape(-1,D))
 
         return (
             nl_iteration + 1,
@@ -951,6 +989,7 @@ def solve_bvp(
     contact_batch_generator: Callable | None = None,
     element_diagnostic_outputs: Callable | None = None,
     debug_info: DebugInfo | None = None,
+    time_step: int = 0,
 ) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
     """
     Solve a boundary value problem for static linear elasticity.
@@ -1037,6 +1076,7 @@ def solve_bvp(
         f_ext=f_ext,
         element_diagnostic_outputs=element_diagnostic_outputs,
         debug_info = debug_info,
+        time_step = time_step,
     )
 
     # Update internal state variables for the element batches
