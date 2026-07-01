@@ -871,8 +871,11 @@ def calculate_jacobian_diag_wo_constraints(
             for i in range(ebc.B)
         ]
     )
-    diag_J_et = jnp.vstack(diag_J_et).ravel()
-    indices = jnp.vstack(indices).ravel()
+    # diag_J_et = jnp.vstack(diag_J_et).ravel()
+    # indices = jnp.vstack(indices).ravel()
+    diag_J_et = jnp.concatenate([x.ravel() for x in diag_J_et])
+    indices = jnp.concatenate([x.ravel() for x in indices])
+
 
     # debug_print(diag_J_et)
     # debug_print(indices)
@@ -1106,15 +1109,15 @@ def solve_nonlinear_step(
     # """
     print(f"Global dimensionality : {ebc.D}")
     print(f"# of batches : {ebc.B}")
-    for i in range(ebc.B):
-        print(
-            f"For batch {i}:\n\t",
-            f"Number of elements : {ebc.E[i]}\n\t",
-            f"Number of nodes / element : {ebc.N[i]}\n\t",
-            f"Number of quadrature points : {ebc.Q[i]}\n\t",
-            f"Parametric dimensionality: {ebc.P[i]}\n\t",
-            f"Number of material parameters per quad point: {ebc.M[i]}",
-        )
+    # for i in range(ebc.B):
+    #     print(
+    #         f"For batch {i}:\n\t",
+    #         f"Number of elements : {ebc.E[i]}\n\t",
+    #         f"Number of nodes / element : {ebc.N[i]}\n\t",
+    #         f"Number of quadrature points : {ebc.Q[i]}\n\t",
+    #         f"Parametric dimensionality: {ebc.P[i]}\n\t",
+    #         f"Number of material parameters per quad point: {ebc.M[i]}",
+    #     )
     # """
 
     # Function that produces (R(u), ISVs)
@@ -1210,7 +1213,7 @@ def solve_nonlinear_step(
 
         u_f = u_f + delta_u
         # u_f = constraints.apply_to_solution(u_f)
-        R_f = residual_isv_func_w_constraints(u_f=u_f)[0]
+        R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
 
         return (
             nl_iteration + 1,
@@ -1500,14 +1503,14 @@ def solve_bvp(
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
-    inner_solve = solve_nonlinear_step
-    if ebc.is_homogeneous:
-        print("Batches are homogeneous, using JIT compilation for solve_linear_step")
-        inner_solve = jax.jit(
-            solve_nonlinear_step,
-            # donate_argnames="internal_state_beqi",
-            static_argnames=["solver_options", "jacobian_nnz"],
-        )
+    # inner_solve = solve_nonlinear_step
+    # if ebc.is_homogeneous:
+    #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
+    inner_solve = jax.jit(
+        solve_nonlinear_step,
+        # donate_argnames="internal_state_beqi",
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
 
     # capture memory usage before
     if profile_memory:
@@ -1527,7 +1530,12 @@ def solve_bvp(
     # Update internal state variables for the element batches
     # TODO need to update
     # for i, b in enumerate(element_batches):
-    #    b.internal_state = internal_state_beqi[i]
+    # #    b.internal_state = internal_state_beqi[i]
+    #    b = b.replace(internal_state=internal_state_beqi[i])
+
+    # What Chennie did for last summer, it worked but not well tested
+    for i in range(len(element_batches)):
+        element_batches[i] = element_batches[i].replace(internal_state=internal_state_beqi[i])
 
     # capture memory usage after and analyze
     if profile_memory:
