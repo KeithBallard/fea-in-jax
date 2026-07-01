@@ -1,6 +1,7 @@
 from .vtms_structs import *
 from .vtk_exporter import *
-from ..postprocess import get_output, write_fabric_mold_contact
+from ..postprocess import write_fabric_mold_contact
+from ..paths import get_output
 from ..fea import *
 from ..contact import *
 from ..linear_elasticity import *
@@ -32,11 +33,14 @@ def solve_fiber_mechanics_bvp(
     rigid_mold: RigidMold | None = None,
     pre_strain: float | None = None,
     contact_options: ContactParams | None = None,
+    debug_info: DebugInfo | None = None,
     # boundary_conditions_per_step: list[
     #     list[DirichletBC | NeumannBC | PeriodicBC]
     # ]
     # | None = None,
 ):
+    if debug_info is None:
+        debug_info = NULL_DEBUG_INFO
     """
     TODO document
     """
@@ -49,7 +53,7 @@ def solve_fiber_mechanics_bvp(
         quadrature_degree=2,
     )
 
-    n_dofs_per_basis = 3
+    n_dofs_per_basis = fabric.points.shape[1]
 
     print(f"fabric.get_n_elements(): {fabric.get_n_elements()}")
     connectivity_en = np.zeros((fabric.get_n_elements(), 2), dtype=np.uint64)
@@ -71,6 +75,8 @@ def solve_fiber_mechanics_bvp(
             for e_i in range(fabric.get_fiber_n_elements(b_i, f_i)):
                 material_params[element_index] = params
                 element_index += 1
+
+    print(f"\nconnections -> \n{connectivity_en}\n")
 
     if pre_strain is not None:
         internal_state = jnp.full((
@@ -137,6 +143,7 @@ def solve_fiber_mechanics_bvp(
             adjacency_block=self_adjacency_block,
             radius=contact_search_radius,
         )
+        print(f"\ncontact -> \n{contact_cells}\n")
         if contact_cells.shape[0] == 0: return []
         return [
             ElementBatch(
@@ -149,11 +156,11 @@ def solve_fiber_mechanics_bvp(
         ]
 
     if filename_base is not None:
-        write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk", subdir="contact"))
+        write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk"))
         write_fabric_mold_contact(
             fabric = fabric,
             mold = rigid_mold,
-            filename = get_output(filename = f"{filename_base}_wireframe_0.vtk", subdir="contact"),
+            filename = get_output(filename = f"{filename_base}_wireframe_0.vtk"),
             contact_params = {
                 'self_adjacency_block': self_adjacency_block,
                 'contact_search_radius': contact_search_radius,
@@ -192,6 +199,13 @@ def solve_fiber_mechanics_bvp(
         #     if boundary_conditions_per_step is not None
         #     else boundary_conditions
         # )
+        debug_info.begin_stage(
+            time_step=i,
+            nonlinear_solve=0,
+            linear_solve=0,
+            current_stage=DebugOutputStage.TIME_STEP,
+        )
+
         u_truss, residual_truss, element_batches_truss = solve_bvp(
             # element_residual_func=linear_truss_residual,
             element_residual_func=jax.tree_util.Partial(
@@ -205,7 +219,29 @@ def solve_fiber_mechanics_bvp(
             solver_options=solver_options,
             plot_convergence=plot_convergence,
             contact_batch_generator=contact_pair_generator,
+            debug_info=debug_info,
+            time_step = i,
         )
+        debug_info.begin_stage(
+            time_step=i+1,
+            nonlinear_solve=0,
+            linear_solve=0,
+            current_stage=DebugOutputStage.TIME_STEP,
+        )
+
+        if debug_info.contains(DebugOutputQuantities.NODE_SOLUTION):
+            debug_info.output(
+                DebugOutputQuantities.NODE_SOLUTION,
+                "u",
+                u_truss.reshape((-1,fabric.points.shape[1]))
+            )
+        if debug_info.contains(DebugOutputQuantities.NODE_RESIDUAL):
+            debug_info.output(
+                DebugOutputQuantities.NODE_RESIDUAL,
+                "residual",
+                residual_truss.reshape((-1,fabric.points.shape[1]))
+            )
+
         # u_truss = u_truss.reshape((-1,fabric.points.shape[1]))
         print(f"\nmax(||u||) = {np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()}\n")
         # fabric.points = fabric.points + np.array(u_truss)
@@ -216,11 +252,11 @@ def solve_fiber_mechanics_bvp(
             temp_mold = deepcopy(rigid_mold)
             if rigid_mold is not None:
                 temp_mold.points +=  np.array(u_truss.reshape((-1,temp_mold.points.shape[1]))[fabric_n:,:])
-            write_vtk(temp_fab,get_output(filename=f"{filename_base}_{i+1}.vtk", subdir="contact"))
+            write_vtk(temp_fab,get_output(filename=f"{filename_base}_{i+1}.vtk"))
             write_fabric_mold_contact(
                 fabric = temp_fab,
                 mold = temp_mold,
-                filename = get_output(filename = f"{filename_base}_wireframe_{i+1}.vtk", subdir="contact"),
+                filename = get_output(filename = f"{filename_base}_wireframe_{i+1}.vtk"),
                 contact_params = {
                     'self_adjacency_block': contact_options.self_adjacency_block,
                     'contact_search_radius': contact_options.contact_search_radius,

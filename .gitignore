@@ -21,3 +21,4 @@ prof/
 tests/output/
 tests/__pycache__/
 output/
+debug/

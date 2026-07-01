@@ -139,6 +139,15 @@ def run_threeFiberTow(
         plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
+        debug_info=make_debug_info(
+            flags = [
+                (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.TIME_STEP),
+                (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.TIME_STEP),
+                (DebugOutputQuantities.ELEMENT_JACOBIAN,DebugOutputStage.NONLINEAR_SOLVE),
+                (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+            ],
+            filename = 'test_hdf5/PseudoThreeFiberTow.h5'
+        )
     )
     u = u.reshape((-1,3))
     fabric.points = fabric.points + u

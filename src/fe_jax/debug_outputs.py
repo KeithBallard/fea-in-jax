@@ -6,6 +6,8 @@ import jax.numpy as jnp
 from flax import struct
 import h5py
 
+from .paths import get_debug_output
+
 class DebugOutputQuantities(Enum):
     NODE_RESIDUAL = auto()
     NODE_SOLUTION = auto()
@@ -14,16 +16,32 @@ class DebugOutputQuantities(Enum):
     ELEMENT_RESIDUAL = auto()
     QUAD_ISVS = auto()
 
-
 class DebugOutputStage(Enum):
     TIME_STEP = auto()
     NONLINEAR_SOLVE = auto()
     LINEAR_SOLVE = auto()
 
-
 type DebugFlags = list[tuple[DebugOutputQuantities, DebugOutputStage]]
 
-debug_active_groups: dict[DebugOutputQuantities, h5py.Group] = {}
+_active_groups: dict[DebugOutputQuantities, h5py.Group] = {}
+_active_stage: DebugOutputStage | None = None
+
+def _stage_group_name(
+    time_step: int,
+    nonlinear_solve: int,
+    linear_solve: int,
+    current_stage: DebugOutputStage,
+) -> str:
+    match current_stage:
+        case DebugOutputStage.TIME_STEP:
+            return f"ts_{time_step}"
+        case DebugOutputStage.NONLINEAR_SOLVE:
+            return  f"ts_{time_step}/nl_{nonlinear_solve}"
+        case DebugOutputStage.LINEAR_SOLVE:
+            # raise NotImplementedError("LINEAR_SOLVE debug staging is not implement yet.")
+            return f"ts_{time_step}/nl_{nonlinear_solve}/linear_{linear_solve}"
+        case _:
+            raise ValueError(f"Unknown debug output stage: {current_stage!r}")
 
 def _begin_stage(
     flags: DebugFlags,
@@ -33,42 +51,68 @@ def _begin_stage(
     linear_solve: int,
     current_stage: int,
 ):
-    current_stage = DebugOutputStage(int(current_stage))
-    match current_stage:
-        case DebugOutputStage.TIME_STEP:
-            group = file.create_group(f"ts_{time_step}")
-        case DebugOutputStage.NONLINEAR_SOLVE:
-            group = file.create_group(
-                f"ts_{time_step}/nl_{nonlinear_solve}"
-            )
-        case _:
-            group = file.create_group(
-                f"ts_{time_step}/nl_{nonlinear_solve}/linear_{linear_solve}"
-            )
-    for quantity, stage in flags:
-        if stage == current_stage:
-            debug_active_groups[quantity] = group
+    global _active_stage
+    _active_groups.clear()
+    _active_stage = DebugOutputStage(int(current_stage))
 
-def _batch_output(
+    jax.debug.print("active stage = {x}", x = _active_stage)
+    if not any(stage == _active_stage for _, stage in flags):
+        return
+
+    group = file.require_group(_stage_group_name(time_step, nonlinear_solve, linear_solve, _active_stage))
+    for quantity, stage in flags:
+        if stage == _active_stage:
+            _active_groups[quantity] = group
+
+def _quantity_group(
     quantity: DebugOutputQuantities,
-    i: int,
-    arr: jnp.ndarray
+    stage_group: h5py.Group
+) -> h5py.Group:
+    return stage_group.require_group(quantity.name)
+
+def _write_dataset(
+    quantity: DebugOutputQuantities,
+    stage_group: h5py.Group,
+    name: str,
+    value: jnp.ndarray,
 ):
-    debug_active_groups[quantity].create_dataset(
-        f"{quantity.name.lower()}_batch_{i}",
-        data=arr
-    )
+    qgroup = _quantity_group(quantity, stage_group)
+    qgroup.create_dataset(name, data=value)
     return None
+
+def _output(
+    quantity: DebugOutputQuantities,
+    name: str,
+    arr: jnp.ndarray,
+):
+    if _active_stage is None:
+        return None
+    if quantity not in _active_groups:
+        return None
+        # raise RuntimeError(
+        #     f"Debug out quantity {quantity.name} was not activated for the current stage. "
+        #     "Did you call begin_stage(), and is this quantity enabled in flags?"
+        #     f"\nActive groups: {_active_groups}"
+        # )
+    return _write_dataset(
+        quantity,
+        _active_groups[quantity],
+        name,
+        arr,
+    )
 
 @struct.dataclass
 class NullDebugInfo:
     def contains(self, quantity: DebugOutputQuantities) -> bool:
         return False
 
+    def stage_enabled(self, current_stage: DebugOutputStage) -> bool:
+        return False
+
     def begin_stage(self, *args, **kwargs):
         return None
 
-    def batch_output(self, *args, **kwargs):
+    def output(self, *args, **kwargs):
         return None
 
 NULL_DEBUG_INFO = NullDebugInfo()
@@ -79,7 +123,10 @@ class DebugInfo:
     file: h5py.File   = struct.field(pytree_node = False)
 
     def contains(self, quantity: DebugOutputQuantities) -> bool:
-        return any(f[0] == quantity for f in self.flags)
+        return any(q == quantity for q,_ in self.flags)
+
+    def stage_enabled(self, current_stage: DebugOutputStage) -> bool:
+        return any(stage == current_stage for _, stage in self.flags)
 
     @partial(jax.jit, static_argnames=("current_stage",))
     def begin_stage(
@@ -89,6 +136,7 @@ class DebugInfo:
         linear_solve: int,
         current_stage: DebugOutputStage,
     ):
+
         jax.experimental.io_callback(
             lambda t, n, l, stage: _begin_stage(self.flags, self.file, t, n, l, stage),
             (),
@@ -98,21 +146,18 @@ class DebugInfo:
             jnp.asarray(current_stage.value, dtype = jnp.int32),
             ordered=True,
         )
-        # jax.debug.callback(
-        #     lambda t, n, l, stage: _begin_stage(self.flags, self.file, t, n, l, stage),
-        #     time_step,
-        #     nonlinear_solve,
-        #     linear_solve,
-        #     jnp.asarray(current_stage.value, dtype = jnp.int32),
-        #     ordered=True,
-        # )
 
-    @partial(jax.jit, static_argnames=("quantity",))
-    def batch_output(self, quantity: DebugOutputQuantities, i: int, arr: jnp.ndarray):
+    # @partial(jax.jit, static_argnames=("quantity","name"))
+    def output(self, quantity: DebugOutputQuantities, name: str, arr: jnp.ndarray):
         jax.experimental.io_callback(
-            lambda i, arr: _batch_output(quantity, i, arr),
+            lambda value: _output(quantity, name, value),
             (),
-            i,
             arr,
-            ordered=False,
+            ordered = True,
         )
+
+def make_debug_info(
+    flags: DebugFlags,
+    filename: str,
+) -> DebugInfo:
+    return DebugInfo(flags = flags, file = h5py.File(get_debug_output(filename),"w"))

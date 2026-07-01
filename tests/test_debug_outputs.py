@@ -18,7 +18,7 @@ deb.begin_stage(
     time_step=0,
     nonlinear_solve=0,
     linear_solve=0,
-    current_stage=DebugOutputStage.TIME_STEP,
+    current_stage=DebugOutputStage.LINEAR_SOLVE,
 )
 
 jax.effects_barrier()
@@ -28,11 +28,11 @@ assert deb.contains(DebugOutputQuantities.ELEMENT_RESIDUAL) == True
 
 # Simulate two batches
 for i in range (2):
-    deb.batch_output(
-        quantity=DebugOutputQuantities.ELEMENT_JACOBIAN, i=i, arr=i * jnp.ones((2, 2))
+    deb.output(
+        quantity=DebugOutputQuantities.ELEMENT_JACOBIAN, name=f"b_{i}", arr=i * jnp.ones((2, 2))
     )
-    deb.batch_output(
-        quantity=DebugOutputQuantities.ELEMENT_RESIDUAL, i=i, arr=(-i-1) * jnp.ones((2, 2))
+    deb.output(
+        quantity=DebugOutputQuantities.ELEMENT_RESIDUAL, name=f"b_{i}", arr=(-i-1) * jnp.ones((2, 2))
     )
 
 
