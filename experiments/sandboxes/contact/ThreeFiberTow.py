@@ -104,7 +104,7 @@ def run_threeFiberTow(
 ):
     """ """
     fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
-    write_vtk(fabric,get_output(filename="threeFiberTow_pre.vtk", subdir="contact"))
+    write_vtk(fabric,get_output(filename="contact/threeFiberTow_pre.vtk"))
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_dist = d[d.nonzero()].min()

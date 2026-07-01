@@ -1,25 +1,8 @@
-import os
-from itertools import chain
-from pathlib import Path
-
-import math
-import matplotlib.pyplot as plt
 import meshio
 import numpy as np
 from . import contact
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-def get_output(
-    filename: str,
-    subdir: str = ""
-):
-    output_path = _REPO_ROOT / "output" / subdir / filename
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    return str(output_path)
-    # output_dir = _REPO_ROOT / "output" / subdir
-    # output_dir.mkdir(parents = True, exist_ok=True)
-    # return str(output_dir/filename)
+import h5py
+import re
 
 def write_fabric_mold_contact(
     fabric,
@@ -102,3 +85,47 @@ def write_fabric_mold_contact(
     )
 
     mesh.write(filename)
+
+def _natural_key(name: str):
+    parts = re.split(r"(\d+)", name)
+    return [int(p) if p.isdigit() else p for p in parts]
+
+def print_h5_tree(obj, prefix="", is_last=True, show_shape=False, show_dtype=False):
+    if isinstance(obj, h5py.File):
+        items = sorted(obj.items(), key=lambda kv: _natural_key(kv[0]))
+        for idx, (key, child) in enumerate(items):
+            last_child = idx == len(items) - 1
+            print_h5_tree(
+                child,
+                prefix="",
+                is_last=last_child,
+                show_shape=show_shape,
+                show_dtype=show_dtype,
+            )
+        return
+
+    name = obj.name.rsplit("/", 1)[-1]
+
+    if isinstance(obj, h5py.Group):
+        connector = "└── " if is_last else "├── "
+        print(f"{prefix}{connector}{name}/")
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        items = sorted(obj.items(), key=lambda kv: _natural_key(kv[0]))
+        for idx, (key, child) in enumerate(items):
+            last_child = idx == len(items) - 1
+            print_h5_tree(
+                child,
+                prefix=child_prefix,
+                is_last=last_child,
+                show_shape=show_shape,
+                show_dtype=show_dtype,
+            )
+    else:
+        connector = "└── " if is_last else "├── "
+        extras = []
+        if show_shape:
+            extras.append(f"-- shape={obj.shape}")
+        if show_dtype:
+            extras.append(f"-- dtype={obj.dtype}")
+        suffix = f" {' '.join(extras)}" if extras else ""
+        print(f"{prefix}{connector}{name}{suffix}")
