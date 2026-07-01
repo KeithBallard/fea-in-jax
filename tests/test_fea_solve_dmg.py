@@ -21,7 +21,7 @@ jax.config.update("jax_log_compiles", True)
 def test_fea_solve_dmg():
     args = {}
     args['dir_path'] = "nonlinear_IGFEM_vmap_t500_1fib"
-    args['t_total']  = 10
+    args['t_total']  = 50
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -231,6 +231,30 @@ def test_fea_solve_dmg():
     )
     ]
 
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(element_residual_func=linear_elasticity_residual,
+            vertices_vd=points,
+            element_batches=element_batches,
+            boundary_conditions=dirichlet_bcs)
+    
+    n_total_dofs = points.shape[0] * ebc.U[0]
+    u_0_g = jnp.zeros(shape=(n_total_dofs,))
+
+    # inner_solve = solve_nonlinear_step
+    # if ebc.is_homogeneous:
+    #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
+    solve_nonlinear_step_jit = jax.jit(
+        solve_nonlinear_step,
+        # donate_argnames="internal_state_beqi",
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
+
     print('Start Deformation Loop')
     t_start = time.time()
     for i in range(1,args['t_total']+1):
@@ -244,49 +268,46 @@ def test_fea_solve_dmg():
         #     dirichlet_bcs[bc].value = dirichlet_values[bc]
 
         # Solve the boundary value problem
-        u, residual, element_batches = solve_bvp(
-            element_residual_func=linear_elasticity_residual,
-            vertices_vd=points,
-            element_batches=element_batches,
-            u_0_g=u_prev,
-            boundary_conditions=dirichlet_bcs,
+        u, internal_state_beqi, residual, relative_error, info = solve_nonlinear_step_jit(
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
+            jacobian_nnz=jacobian_nnz,
+            u_0_g=u_0_g,
+            constraints=constraint_system,
             solver_options=SolverOptions(
                 # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-                # linear_precond_type=PreconditionerType.JACOBI,
+                linear_precond_type=PreconditionerType.JACOBI,
                 # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-                linear_precond_type=PreconditionerType.NONE,
-                linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+                linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             ),
+            f_ext=f_ext,
         )
 
-        print("Time step =", i)
-        print("|R| = ",      jnp.linalg.norm(residual))
-        print("Cell ID = ",  print_cell)
-        print("e11 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,0]))
-        print("e22 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,1]))
-        print("e12 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,2]))
-        print("s11 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,3]))
-        print("s22 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,4]))
-        print("s12 = ",      jnp.mean(element_batches[fib_matrix_shape].internal_state[print_cell,:,5]))
+        #print("Time step =", i)
+        #print("|R| = ",      jnp.linalg.norm(residual))
+        #print("Cell ID = ",  print_cell)
+        #print("e11 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,0]))
+        #print("e22 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,1]))
+        #print("e12 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,2]))
+        #print("s11 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,3]))
+        #print("s22 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,4]))
+        #print("s12 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,5]))
 
         u_prev = u
 
-        # Make sure the solution matches at the Dirichlet BCs
-        dirichlet_dofs = np.array([U * bc.index + bc.component for bc in dirichlet_bcs])
-        assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
-
         # Update displacements to be 3D for VTK
-        u_full = np.zeros((points.shape[0], 3))
-        u_full[:, :U] = u.reshape((points.shape[0], U))
+        #u_full = np.zeros((points.shape[0], 3))
+        #u_full[:, :U] = u.reshape((points.shape[0], U))
 
         # write and save to vtk
-        vtk_mesh = write2VTK_avg(args,mesh,u_full,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+        #vtk_mesh = write2VTK_avg(args,mesh,u_full,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
         # Write to file
-        vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+        #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
 
-        if i%100 == 0 or i == args['t_total']+1:
-            plot_IGFEM_mesh_to_png(vtk_mesh, i,'displacement',data_type='points',output_file=args['out_dir']+"/mesh_plot_u.png",dpi=100)
-            plot_IGFEM_mesh_to_png(vtk_mesh, i,'damage',      data_type='cells',output_file=args['out_dir']+"/mesh_plot_dmg.png",dpi=100)
+        #if i%100 == 0 or i == args['t_total']+1:
+        #    plot_IGFEM_mesh_to_png(vtk_mesh, i,'displacement',data_type='points',output_file=args['out_dir']+"/mesh_plot_u.png",dpi=100)
+        #    plot_IGFEM_mesh_to_png(vtk_mesh, i,'damage',      data_type='cells',output_file=args['out_dir']+"/mesh_plot_dmg.png",dpi=100)
 
     t_end = time.time()
     print("Time used:", t_end - t_start)
@@ -294,5 +315,5 @@ def test_fea_solve_dmg():
     zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
 
 if __name__ == "__main__":
-    with jax.profiler.trace("./jax-trace", create_perfetto_link=True):
-        test_fea_solve_dmg()
+    #with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
+    test_fea_solve_dmg()

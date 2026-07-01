@@ -675,10 +675,10 @@ def _calculate_jacobian_coo_terms_batch(
 
 
 def calculate_jacobian_wo_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
-    u_f: jnp.ndarray,
     precomputed_jacobian_nnz: int,
 ):
 
@@ -704,9 +704,9 @@ def calculate_jacobian_wo_constraints(
             for i in range(ebc.B)
         ]
     )
-    J_ett = jnp.vstack(J_ett)
-    rows = jnp.vstack(rows)
-    cols = jnp.vstack(cols)
+    J_ett = jnp.concatenate([x.ravel() for x in J_ett])
+    rows = jnp.concatenate([x.ravel() for x in rows])
+    cols = jnp.concatenate([x.ravel() for x in cols])
 
     # debug_print(J_ett)
     # debug_print(rows)
@@ -843,10 +843,10 @@ def _calculate_jacobian_diag_coo_terms_batch(
 
 
 def calculate_jacobian_diag_wo_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
-    u_f: jnp.ndarray,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -875,7 +875,6 @@ def calculate_jacobian_diag_wo_constraints(
     # indices = jnp.vstack(indices).ravel()
     diag_J_et = jnp.concatenate([x.ravel() for x in diag_J_et])
     indices = jnp.concatenate([x.ravel() for x in indices])
-
 
     # debug_print(diag_J_et)
     # debug_print(indices)
@@ -1022,12 +1021,12 @@ def calculate_residual_wo_constraints(
 
 
 def calculate_residual_w_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[jsparse.BCSR],
-    u_f: jnp.ndarray,
     constraints: ConstraintSystem,
-    f_ext
+    f_ext,
 ):
     """
     Compute the residual vector and updated internal state variables given the current
@@ -1069,6 +1068,11 @@ def calculate_residual_w_constraints(
     # debug_print(R_f)
 
     return R_f, new_internal_state_beqi
+
+
+def __extract_first_element(func, u_f):
+    """Executes the function and extracts the first element of the returned tuple."""
+    return func(u_f=u_f)[0]
 
 
 def solve_nonlinear_step(
@@ -1121,36 +1125,40 @@ def solve_nonlinear_step(
     # """
 
     # Function that produces (R(u), ISVs)
-    residual_isv_func_w_constraints = lambda u_f: calculate_residual_w_constraints(
-        element_residual_func=element_residual_func,
-        ebc=ebc,
-        assembly_map_b=assembly_map_b,
-        u_f=u_f,
-        constraints=constraints,
-        f_ext=f_ext
-    )
-
-    # Function that produces R(u)
-    residual_func_w_constraints = lambda u_f: residual_isv_func_w_constraints(u_f=u_f)[
-        0
-    ]
-
-    # Function that produces J(u) without Dirichlet BCs and MPCs applied
-    jacobian_func_wo_constraints = lambda u_f: calculate_jacobian_wo_constraints(
-        element_residual_func=element_residual_func,
-        ebc=ebc,
-        assembly_map_b=assembly_map_b,
-        u_f=u_f,
-        precomputed_jacobian_nnz=jacobian_nnz,
-    )
-
-    # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
-    jacobian_diag_func_wo_constraints = (
-        lambda u_f: calculate_jacobian_diag_wo_constraints(
+    residual_isv_func_w_constraints = jax.jit(
+        partial(
+            calculate_residual_w_constraints,
             element_residual_func=element_residual_func,
             ebc=ebc,
             assembly_map_b=assembly_map_b,
-            u_f=u_f,
+            constraints=constraints,
+            f_ext=f_ext,
+        )
+    )
+
+    # Function that produces R(u)
+    residual_func_w_constraints = jax.jit(
+        partial(__extract_first_element, residual_isv_func_w_constraints)
+    )
+
+    # Function that produces J(u) without Dirichlet BCs and MPCs applied
+    jacobian_func_wo_constraints = jax.jit(
+        partial(
+            calculate_jacobian_wo_constraints,
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
+            precomputed_jacobian_nnz=jacobian_nnz,
+        )
+    )
+
+    # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
+    jacobian_diag_func_wo_constraints = jax.jit(
+        partial(
+            calculate_jacobian_diag_wo_constraints,
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
         )
     )
 
@@ -1208,7 +1216,7 @@ def solve_nonlinear_step(
             solver_info_0=info,
             check_consistency=False,
             x_0=u_f,
-            f_ext = f_ext,
+            f_ext=f_ext,
         )
 
         u_f = u_f + delta_u
@@ -1222,6 +1230,7 @@ def solve_nonlinear_step(
             new_internal_state_beqi,
             info.increment_nl_iteration(),
         )
+
     _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
         cond_fun=while_cond,
         body_fun=while_body,
@@ -1238,6 +1247,7 @@ def solve_nonlinear_step(
     relative_error = absolute_error / initial_R_f_norm
 
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
+
 
 @dataclass
 class NeumannCondition:
@@ -1303,6 +1313,50 @@ def convert_external_load_to_system(
         dep_dofs=jnp.array(dep_dofs, dtype=jnp.int32),
         loads=jnp.array(loads, dtype=jnp.float32),
     )
+
+
+def convert_boundary_conditions(
+    boundary_conditions: List[DirichletBC | PeriodicBC],
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    dof_enumeration: DofEnumeration,
+    n_solution_components: int,
+    global_values: List[int] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+):
+    fixed_point_constraints, boundary_multipoint_constraints = (
+        convert_boundary_conditions_to_constraints(
+            boundary_conditions=boundary_conditions,
+            vertices_vd=vertices_vd,
+            dof_enumeration=dof_enumeration,
+            n_solution_components=n_solution_components,
+            global_values=global_values,
+        )
+    )
+    multipoint_constraints = consolidate_multipoint_constraints(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=[
+            *boundary_multipoint_constraints,
+            *multipoint_constraints,
+        ],
+    )
+
+    constraint_system = convert_constraints_to_system(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=multipoint_constraints,
+        n_total_dofs=dof_enumeration.n_local_dofs(),
+    )
+
+    external_load = convert_boundary_conditions_to_external_load(
+        boundary_conditions=boundary_conditions,
+        vertices_vd=vertices_vd,
+        dof_enumeration=dof_enumeration,
+        n_solution_components=n_solution_components,
+        global_values=global_values,
+    )
+
+    f_ext = convert_external_load_to_system(external_load)
+
+    return (constraint_system, f_ext)
 
 
 def preprocess_bvp(
@@ -1396,38 +1450,14 @@ def preprocess_bvp(
     # NOTE: we need a concrete value to specialize for JIT of other functions
     jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
 
-    fixed_point_constraints, boundary_multipoint_constraints = (
-        convert_boundary_conditions_to_constraints(
-            boundary_conditions=boundary_conditions,
-            vertices_vd=vertices_vd,
-            dof_enumeration=dof_enumeration,
-            n_solution_components=ebc.U[0],
-            global_values=global_values,
-        )
-    )
-    multipoint_constraints = consolidate_multipoint_constraints(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=[
-            *boundary_multipoint_constraints,
-            *multipoint_constraints,
-        ],
-    )
-
-    constraint_system = convert_constraints_to_system(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=multipoint_constraints,
-        n_total_dofs=n_total_dofs,
-    )
-
-    external_load = convert_boundary_conditions_to_external_load(
+    constraint_system, f_ext = convert_boundary_conditions(
         boundary_conditions=boundary_conditions,
         vertices_vd=vertices_vd,
         dof_enumeration=dof_enumeration,
         n_solution_components=ebc.U[0],
         global_values=global_values,
+        multipoint_constraints=multipoint_constraints,
     )
-
-    f_ext = convert_external_load_to_system(external_load)
 
     return (
         ebc,
@@ -1484,15 +1514,20 @@ def solve_bvp(
     if global_values is None:
         global_values = []
 
-    ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func, f_ext = (
-        preprocess_bvp(
-            vertices_vd=vertices_vd,
-            element_batches=element_batches,
-            element_residual_func=element_residual_func,
-            boundary_conditions=boundary_conditions,
-            multipoint_constraints=multipoint_constraints,
-            global_values=global_values,
-        )
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
     )
 
     n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
@@ -1535,7 +1570,9 @@ def solve_bvp(
 
     # What Chennie did for last summer, it worked but not well tested
     for i in range(len(element_batches)):
-        element_batches[i] = element_batches[i].replace(internal_state=internal_state_beqi[i])
+        element_batches[i] = element_batches[i].replace(
+            internal_state=internal_state_beqi[i]
+        )
 
     # capture memory usage after and analyze
     if profile_memory:
