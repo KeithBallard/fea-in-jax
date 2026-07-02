@@ -149,7 +149,7 @@ def calculate_residual(
     W_q: jnp.ndarray,
     mat_params_eqp: jnp.ndarray,
     cells_en: np.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_gn: jnp.ndarray,
     dirichlet_elimination_gn: jnp.ndarray,
     dims: Dimensions,

@@ -214,6 +214,20 @@ def get_n_cells_per_vert(
     """
     return jnp.array(get_n_cells_per_vert_helper(vertices, cells))
 
+@struct.dataclass
+class AssemblyMap:
+    """
+    Container for the information required to perform EN-V and V-EN transformations via indexing rather than sparse matmul.
+
+    Fields
+    ---------
+    indices: Array of shape (EN,) whose entries are the indices from a vertex-based array corresponding to each element-node. 
+        Equal to the row_indices array of the sparse array approach, with entries sorted in EN order (such that the col_indices array would be exactly jnp.arange(EN))
+    shape: tuple with entries (V,EN), equal to the shape of a sparse array whose matmuls produce the desired transformations
+    """
+
+    indices: jnp.ndarray
+    shape: tuple[int] = struct.field(pytree_node=False)  
 
 @partial(jax.jit,static_argnames = "n_vertices")
 def mesh_to_sparse_assembly_map(
@@ -221,51 +235,31 @@ def mesh_to_sparse_assembly_map(
     cells: jnp.ndarray,
 ):
     """
-    Builds a compressed sparse row (CSR) matrix that serves as a map between two representations
-    for vectors on a patch: 1) assembled format and 2) element-node format.
-
-    Takes advantage of the fact that the assembly map has exactly one entry in each column, so the COO representation has a convenient structure.
-    """      
-    nse = np.prod(cells.shape)
-    coo_data = jnp.ones(nse)
-    # Search breaks if the padding is over 50%, so ensure the padding is maxed now.
-    coo_rowindices = jnp.searchsorted(
+    Generates an array of indices to convert between vertex-labeled values and element-node-labeled values
+    """
+    VtoEN_indices = jnp.searchsorted(
         jnp.arange(n_vertices),
-        cells.flatten(),
+        cells,
         method="scan_unrolled",
     )
-    coo_colindices = jnp.arange(nse)
-
-    return jsparse.BCOO(
-        (
-            coo_data,
-            jnp.stack((coo_rowindices, coo_colindices)).T,
-        ),
-        shape=(n_vertices, nse),
-    )
+    return AssemblyMap(indices=VtoEN_indices, shape=(n_vertices, np.prod(cells.shape)))
 
 
 @partial(jax.jit, static_argnames=["E"])
 def transform_global_to_element_node(
-    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int
+    assembly_map: AssemblyMap, v_g: jnp.ndarray, E: int
 ):
     """
     Transforms a vector that represents a global assembled vector into the element-node representation.
 
     TODO: change this to transform into batches (keep batch info in Dimensions)
     """
-    U = v_g.shape[1]
-    N = assembly_map.shape[1]//E    
-    return jsparse.bcoo_dot_general(
-        assembly_map,
-        v_g,
-        dimension_numbers=(((0,), (0,)), ((), ())),
-    ).reshape(E, N, U)
+    return v_g.at[assembly_map.indices, :].get(mode="drop", fill_value=0)
 
 
 @partial(jax.jit, static_argnames=["E"])
 def transform_global_unraveled_to_element_node(
-    assembly_map: jsparse.BCOO, v_g: jnp.ndarray, E: int
+    assembly_map: AssemblyMap, v_g: jnp.ndarray, E: int
 ):
     """
     Transforms a vector that represents a global assembled vector that is unraveled into the
@@ -275,80 +269,57 @@ def transform_global_unraveled_to_element_node(
     """
     V = assembly_map.shape[0]
     U = v_g.shape[0] // V
-    N = assembly_map.shape[1] // E
-    return jsparse.bcoo_dot_general(
-        assembly_map,
-        v_g.reshape(V, U),
-        dimension_numbers=(((0,), (0,)), ((), ())),
-    ).reshape(E, N, U)
-
-
-def transform_element_node_to_global_unraveled_nosum(
-    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
-):
-    """
-    TODO document
-    """
-    n_cell_per_vert = jsparse.bcoo_dot_general(
-        assembly_map,
-        jnp.ones(v_en.shape[0] * v_en.shape[1]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
+    return (
+        v_g.reshape((V, U)).at[assembly_map.indices, :].get(mode="drop", fill_value=0)
     )
-    v_g = jsparse.bcoo_dot_general(
-        assembly_map,
-        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
-    )
-    return (v_g / n_cell_per_vert[:, jnp.newaxis]).reshape(
-        np.prod(v_g.shape)
-    )
-
 
 @jax.jit
-def transform_element_node_to_global_unraveled_sum(
-    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
+def transform_element_node_to_global_unraveled_nosum(
+    assembly_map: AssemblyMap, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    v_g = jsparse.bcoo_dot_general(
-        assembly_map,
-        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
-    )
+    U = v_en.shape[2]
+    V, EN = assembly_map.shape
+    v_g = jnp.zeros((V, U)).at[assembly_map.indices, ...].set(v_en, mode="drop")
     return v_g.reshape(np.prod(v_g.shape))
 
 
 @jax.jit
-def transform_element_node_to_global_sum(
-    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
+def transform_element_node_to_global_unraveled_sum(
+    assembly_map: AssemblyMap, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    v_g = jsparse.bcoo_dot_general(
-        assembly_map,
-        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
-    )
-    return v_g.reshape(np.prod(v_g.shape) // v_en.shape[2], v_en.shape[2])
+    U = v_en.shape[2]
+    V, EN = assembly_map.shape
+    v_g = jnp.zeros((V, U)).at[assembly_map.indices, ...].add(v_en, mode="drop")
+    return v_g.flatten()
+
+
+@jax.jit
+def transform_element_node_to_global_sum(
+    assembly_map: AssemblyMap, v_en: jnp.ndarray
+):
+    """
+    TODO document
+    """
+    U = v_en.shape[2]
+    V, EN = assembly_map.shape
+    v_g = jnp.empty((V, U)).at[assembly_map.indices, ...].add(v_en, mode="drop")
+    return v_g
 
 
 @jax.jit
 def transform_element_node_to_global_nosum(
-    assembly_map: jsparse.BCOO, v_en: jnp.ndarray
+    assembly_map: AssemblyMap, v_en: jnp.ndarray
 ):
     """
     TODO document
     """
-    n_cell_per_vert = jsparse.bcoo_dot_general(
-        assembly_map,
-        jnp.ones(v_en.shape[0] * v_en.shape[1]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
-    )
-    v_g = jsparse.bcoo_dot_general(
-        assembly_map,
-        v_en.reshape(v_en.shape[0] * v_en.shape[1], v_en.shape[2]),
-        dimension_numbers=(((1,), (0,)), ((), ())),
-    )
-    return (v_g / n_cell_per_vert[:, jnp.newaxis]).reshape(np.prod(v_g.shape)//v_en.shape[2],v_en.shape[2])
+    U = v_en.shape[2]
+    V, EN = assembly_map.shape
+    v_g = jnp.zeros((V, U)).at[assembly_map.indices, ...].set(v_en, mode="drop")
+    return v_g

@@ -672,7 +672,7 @@ def _calculate_jacobian_coo_terms_batch(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     dof_map_enu: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
@@ -703,7 +703,7 @@ def _calculate_jacobian_coo_terms_batch(
 def calculate_jacobian_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
     precomputed_jacobian_nnz: int,
 ):
@@ -843,7 +843,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     dof_map_enu: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
@@ -871,7 +871,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
 def calculate_jacobian_diag_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
 ):
 
@@ -918,7 +918,7 @@ def _calculate_residual_wo_constraints_batch(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     # Extract shape constants needed for args
@@ -966,7 +966,7 @@ def _calculate_residual_wo_constraints_batch(
 def calculate_residual_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
 ):
     """
@@ -1047,7 +1047,7 @@ def calculate_residual_wo_constraints(
 def calculate_residual_w_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
     constraints: ConstraintSystem,
     f_ext
@@ -1097,7 +1097,7 @@ def calculate_residual_w_constraints(
 def solve_nonlinear_step(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     jacobian_nnz: int,
     u_0_g: jnp.ndarray,
     constraints: ConstraintSystem,
