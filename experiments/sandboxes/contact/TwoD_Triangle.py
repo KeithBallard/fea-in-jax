@@ -24,8 +24,8 @@ def run_2D_triangle(
             [0.5,-2.],
             [0.5,0.],
         ]),
-        fiber_offsets = np.array([0,1,5]),
-        bundle_offsets = np.array([0,2])
+        fiber_offsets = np.array([0,1,2,4,5]),
+        bundle_offsets = np.array([0,4])
     )
 
     dyn_bcs = [[
@@ -49,13 +49,13 @@ def run_2D_triangle(
         boundary_conditions=dyn_bcs,
         contact_options=contact_params,
         solver_options=SolverOptions(
-            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             # linear_precond_type=PreconditionerType.JACOBI,
             nonlinear_max_iter=200,
             linear_max_iter=500,
             # max_linear_displacement=min(min_dist/2,fabric.diameters[0]/2),
-            max_linear_displacement=0.05,
+            max_linear_displacement=0.2,
         ),
         pseudotime_iters=pseudoT,
         filename_base=filename_base,
@@ -63,7 +63,9 @@ def run_2D_triangle(
         plot_convergence=False,
         debug_info=debug_info,
     )
-    if not isinstance(debug_info, NullDebugInfo): debug_info.file.close()
+    if not isinstance(debug_info, NullDebugInfo):
+        print('close debug HDF5 file')
+        debug_info.file.close()
     return u.reshape(-1,fabric.points.shape[1]),fabric,dyn_bcs
 
 args = {
@@ -77,12 +79,13 @@ args = {
     ),
     'pseudoT':1,
     'filename_base':None,
-    'debug_info':NULL_DEBUG_INFO,
-    # 'debug_info':make_debug_info(
-    # 'debug_info':make_debug_info(
-    #     flags = [
-    #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
-    #     ],
-    #     filename = 'prestrain/flattening_negative_prestrain.h5'
-    # )
+    # 'debug_info':NULL_DEBUG_INFO,
+    'debug_info':make_debug_info(
+        flags = [
+            (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+            (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+            (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+        ],
+        filename = 'contact/twoD_triangle.h5'
+    )
 }

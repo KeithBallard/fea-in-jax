@@ -76,7 +76,6 @@ def solve_fiber_mechanics_bvp(
                 material_params[element_index] = params
                 element_index += 1
 
-    print(f"\nconnections -> \n{connectivity_en}\n")
 
     if pre_strain is not None:
         internal_state = jnp.full((
@@ -143,7 +142,6 @@ def solve_fiber_mechanics_bvp(
             adjacency_block=self_adjacency_block,
             radius=contact_search_radius,
         )
-        print(f"\ncontact -> \n{contact_cells}\n")
         if contact_cells.shape[0] == 0: return []
         return [
             ElementBatch(

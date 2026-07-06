@@ -292,7 +292,6 @@ def elastic_truss(
 
     P_dd = jnp.outer(l_d,l_d)
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    # jax.debug.print('eps_a = {eps_a}',eps_a=eps_a)
     stress_dd = E*A*(eps_a-eps_pre)*P_dd
 
     return stress_dd, jnp.array([])  # no internal state
@@ -306,6 +305,14 @@ def contact_stiffness_linear(
     radius = material_params_m[..., 2]
     E = jnp.where(d<radius,E_max - E_max/radius*d,0)
     return E
+
+@jax.jit
+def contact_stiffness_constant(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_max = material_params_m[..., 0]
+    return E_max
 
 @jax.jit
 def contact_stiffness_piecewise_linear(
@@ -378,10 +385,11 @@ def elastic_contact_truss(
     eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
     stress_dd = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*A*eps_a*P_dd
     # jax.debug.print(
-    #     'x_nd = {x}, d = {d}, E = {E}\n',
+    #     'x_nd = {x}\nd = {d}, E = {E}, E*eps_a = {EA}\n',
     #     x = x_nd,
     #     d = jnp.linalg.norm(dx_d),
-    #     E = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)
+    #     E = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m),
+    #     EA = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*eps_a
     # )
 
     return stress_dd, jnp.array([])  # no internal state
@@ -557,11 +565,8 @@ def stiffness_residual(
     #K_direct = stiff_matrix(material_params_m=material_params,x_nd=x_nd)
 
     #assert jnp.isclose(K_direct,K_global).all(), "Computing stiffness matrix from T^T K T and direct element-by-element implementation do not match."
-    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nK_global = \n{}\n',x_nd,u_nd,K_global)
     R_nd = jnp.einsum("dk,k->d",K_global,u_nd.reshape((-1))).reshape((-1,x_nd.shape[1]))
 
-    # jax.debug.print('x_nd = \n{}\nu_nd = \n{}\nR_nd = \n{}\n',x_nd,u_nd,R_nd)
-    # jax.debug.print('x_nd = \n{}\n',x_nd)
     new_internal_state_qi = internal_state_qi
     return R_nd, new_internal_state_qi
 

@@ -222,6 +222,11 @@ def calculate_jacobian_wo_constraints(
     if debug_info.contains(DebugOutputQuantities.ELEMENT_JACOBIAN):
         for i, J_ett in enumerate(J_bett):
             debug_info.output(DebugOutputQuantities.ELEMENT_JACOBIAN, f"batch_{i}", J_bett[i])
+            debug_info.output(
+                DebugOutputQuantities.ELEMENT_JACOBIAN,
+                f"batch_{i}_connectivity",
+                ebc.get_connectivity(i)
+            )
 
     J_ett = jnp.vstack(J_bett)
     rows = jnp.vstack(rows)
@@ -510,7 +515,16 @@ def calculate_residual_wo_constraints(
 
     if debug_info.contains(DebugOutputQuantities.ELEMENT_RESIDUAL):
         for i, res in enumerate(result):
-            debug_info.output(DebugOutputQuantities.ELEMENT_RESIDUAL, f"batch_{i}_wo_constraints", res[0])
+            debug_info.output(
+                DebugOutputQuantities.ELEMENT_RESIDUAL,
+                f"batch_{i}_residual_wo_constraints",
+                res[0]
+            )
+            debug_info.output(
+                DebugOutputQuantities.ELEMENT_RESIDUAL,
+                f"batch_{i}_connectivity",
+                ebc.get_connectivity(i)
+            )
 
     R_f = jnp.zeros_like(u_f)
     for i in range(ebc.B):
