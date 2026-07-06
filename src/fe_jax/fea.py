@@ -41,18 +41,14 @@ def __get_jacobian_indices(
     return jnp.vstack([rows.ravel(), cols.ravel()]).T
 
 
-# @partial(jax.jit, static_argnames="n_vertices")
 @jax.jit
 def _calculate_jacobian_unique_nnz(
-    # n_vertices: int,
     ebc: ElementBatchCollection,
 ):
     """
     Returns the number of non-zeros in the Jacobian for a collection of batches of elements,
     ignoring any effect of constraints on the sparsity pattern.
     """
-    # node_nnz_count = jnp.zeros((n_vertices,), dtype=jnp.int64)
-
     non_zero_indices = jnp.vstack(
         [
             __get_jacobian_indices(
