@@ -6,6 +6,7 @@ from typing import Callable
 from .utils import rank2_tensor_to_voigt, rank2_voigt_to_tensor
 
 
+@jax.tree_util.Partial
 @jax.jit
 def st_venant_kirchhoff(F_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
     """
@@ -53,6 +54,7 @@ def st_venant_kirchhoff(F_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
     return stress_qdd
 
 
+@jax.tree_util.Partial
 @jax.jit
 def mooney_rivlin(F_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
     """
@@ -90,6 +92,7 @@ def mooney_rivlin(F_qdd: jnp.ndarray, material_params_qm: jnp.ndarray):
         raise RuntimeError("Deformation Gradient must be at most 3D")
     return stress_qdd
 
+@jax.tree_util.Partial
 @jax.jit
 def hyperelasticity_residual(
     u_nd: jnp.ndarray,
