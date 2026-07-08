@@ -1314,6 +1314,49 @@ def convert_external_load_to_system(
         loads=jnp.array(loads, dtype=jnp.float32),
     )
 
+def convert_boundary_conditions(
+    boundary_conditions: List[DirichletBC | PeriodicBC],
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    dof_enumeration: DofEnumeration,
+    n_solution_components: int,
+    global_values: List[int] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+):
+    fixed_point_constraints, boundary_multipoint_constraints = (
+        convert_boundary_conditions_to_constraints(
+            boundary_conditions=boundary_conditions,
+            vertices_vd=vertices_vd,
+            dof_enumeration=dof_enumeration,
+            n_solution_components=n_solution_components,
+            global_values=global_values,
+        )
+    )
+    multipoint_constraints = consolidate_multipoint_constraints(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=[
+            *boundary_multipoint_constraints,
+            *multipoint_constraints,
+        ],
+    )
+
+    constraint_system = convert_constraints_to_system(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=multipoint_constraints,
+        n_total_dofs=dof_enumeration.n_local_dofs(),
+    )
+
+    external_load = convert_boundary_conditions_to_external_load(
+        boundary_conditions=boundary_conditions,
+        vertices_vd=vertices_vd,
+        dof_enumeration=dof_enumeration,
+        n_solution_components=n_solution_components,
+        global_values=global_values,
+    )
+
+    f_ext = convert_external_load_to_system(external_load)
+
+    return (constraint_system, f_ext)
+
 
 def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],

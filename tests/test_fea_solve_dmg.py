@@ -18,7 +18,7 @@ from fe_jax.fea import convert_boundary_conditions
 
 def test_fea_solve_dmg():
     args = {}
-    args['dir_path'] = "nonlinear_IGFEM_vmap_t500_4fib_keith"
+    args['dir_path'] = "nonlinear_IGFEM_vmap_t500_1fib_keith"
     args['t_total']  = 500
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
@@ -30,7 +30,7 @@ def test_fea_solve_dmg():
     os.makedirs(args['vtk_dir'], exist_ok=True)
 
     # Read in the mesh (IGFEM)
-    mesh     = pv.read('tests/meshes/IGFEM_4fib.vtk')
+    mesh     = pv.read('tests/meshes/IGFEM_1fib.vtk')
     vtk_mesh = mesh.copy()
     vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{0}.vtk")
 
