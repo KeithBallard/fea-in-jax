@@ -1,5 +1,6 @@
 from .setup import *
 from .utils import *
+from .element_batch_collection import *
 from .solve_cg import cg as cg_w_info
 from .sparse_matrix import *
 from .sparse_linear_solve import *
@@ -19,563 +20,43 @@ from typing import Callable, Any
 from flax import struct
 
 
-@struct.dataclass
-class ElementBatch:
-    """
-    Describes a batch of elements. Passed into solve_bvp()
-    """
-
-    # Defines the type of finite element formulation (basis functions and quadrature) for the
-    # elements in this batch.
-    fe_type: FiniteElementType
-    # Number of degrees of freedom per basis function (typically also per a node)
-    n_dofs_per_basis: int
-    # List of vertex indices for each element (refers to list of vertices passed to solve_bvp(),
-    # not internal batch numbering)
-    connectivity_en: np.ndarray[Any, np.dtype[np.uint64]]
-    # A callable constitutive model for the batch of elements, which is passed along to the residual
-    # function as an argument to perform the residual calculation.
-    constitutive_model: Callable
-    # Array can 1, 2, or 3 dimensions depending on whether parameters are defined 1) the same
-    # for all quad points / elements in the batch [shape should be (M,)], 2) the same for all quad points
-    # but varying across elements [shape should be (E, M)], or 3) varying across each quad point /
-    # element in the batch [shape should be (E, Q, M)], respectively.
-    material_params: jnp.ndarray
-    # Array can 2 or 3 dimensions depending on whether state variables are defined 1) the same for
-    # all quad points but varying across elements [shape should be (E, I)], or 3) varying across
-    # each quad point / element in the batch [shape should be (E, Q, I)], respectively.
-    internal_state: jnp.ndarray | None = None
-
-    def __post_init__(self):
-        Q = get_quadrature(fe_type=self.fe_type)[0].shape[0]
-        if len(self.material_params.shape) == 2:
-            # Dimensions should be (E, M)
-            assert (
-                self.material_params.shape[0] == self.connectivity_en.shape[0]
-            ), f"`material_params` had dimension 2, which means the shape should be (E, M). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `material_params.shape[0]` ({self.material_params.shape[0]})"
-        elif len(self.material_params.shape) == 3:
-            # Dimensions should be (E, Q, M)
-            assert (
-                self.material_params.shape[0] == self.connectivity_en.shape[0]
-            ), f"`material_params` had dimension 3, which means the shape should be (E, Q, M). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `material_params.shape[0]` ({self.material_params.shape[0]})"
-            assert (
-                self.material_params.shape[1] == Q
-            ), f"`material_params` had dimension 3, which means the shape should be (E, Q, M). However, `fe_type` results in Q = {Q}, which did not match `material_params.shape[1]` ({self.material_params.shape[1]})"
-        if self.internal_state is not None:
-            if len(self.internal_state.shape) == 2:
-                # Dimensions should be (E, I)
-                assert (
-                    self.internal_state.shape[0] == self.connectivity_en.shape[0]
-                ), f"`internal_state` had dimension 2, which means the shape should be (E, I). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `internal_state.shape[0]` ({self.internal_state.shape[0]})"
-            elif len(self.internal_state.shape) == 3:
-                # Dimensions should be (E, Q, M)
-                assert (
-                    self.internal_state.shape[0] == self.connectivity_en.shape[0]
-                ), f"`internal_state` had dimension 3, which means the shape should be (E, Q, I). However, `connectivity_en.shape[0]` ({self.connectivity_en.shape[0]}) did not match `internal_state.shape[0]` ({self.internal_state.shape[0]})"
-                assert (
-                    self.internal_state.shape[1] == Q
-                ), f"`internal_state` had dimension 3, which means the shape should be (E, Q, I). However, `fe_type` results in Q = {Q}, which did not match `internal_state.shape[1]` ({self.internal_state.shape[1]})"
-
-
-class MaterialPropertyArrayType(Enum):
-    EQM = 3  # Unique set per quad point in each element
-    EM = 2  # Unique set per element
-    M = 1  # Same set for the entire element batch
-
-
-class QuadratureArrayType(Enum):
-    EQ = 2  # Unique quadrature per element
-    Q = 1  # Same quadrature for the entire element batch
-
-
-@struct.dataclass
-class ElementBatchCollection:
-    """
-    Holds information about a collection of batches of elements in a form that is ameniable to JIT.
-    """
-
-    # --- Batch shape information (numpy / static to support JIT) ---
-
-    # Dimensionality of mesh (1D, 2D, or 3D)
-    # Note: static, not traced
-    D: int = struct.field(pytree_node=False)
-    # Number of batches
-    # Note: static, not traced
-    B: int = struct.field(pytree_node=False)
-    # Number of elements for each batch
-    # Note: static, not traced
-    E: tuple[int, ...] = struct.field(pytree_node=False)
-    # Number of nodes per element for each batch
-    # Note: static, not traced
-    N: tuple[int, ...] = struct.field(pytree_node=False)
-    # Number of degrees of freedom (unknowns) per a node for each batch
-    # Note: static, not traced
-    U: tuple[int, ...] = struct.field(pytree_node=False)
-    # Number of quadrature points per an element for each batch
-    # Note: static, not traced
-    Q: tuple[int, ...] = struct.field(pytree_node=False)
-    # Dimensionality of parametric coordinate system for each batch
-    # Note: static, not traced
-    P: tuple[int, ...] = struct.field(pytree_node=False)
-    # Number of material parameters required for each batch (at a point)
-    # Note: static, not traced
-    M: tuple[int, ...] = struct.field(pytree_node=False)
-    # Number of internal state variables required for each batch (at a point)
-    # Note: static, not traced
-    I: tuple[int, ...] = struct.field(pytree_node=False)
-
-    # --- Mesh / property / state information ---
-
-    # Unravelled coordinates of all nodes for all elements across all batches, shape=(sum(E*N*D),)
-    x: jnp.ndarray
-    # Unravelled indices of nodes for all elements across all batches, shape=(sum(E*N),)
-    connectivity: jnp.ndarray
-    # Unravelled material parameters for all batches, shape depends on types for each batch
-    material_params: jnp.ndarray
-    # Unravelled internal state variables (ISV) for all batches, shape=(sum(E*Q*I),)
-    internal_state: jnp.ndarray
-
-    # --- Quadrature and basis function information ---
-
-    # Unravelled quadrature point coordinates for all batches, shape depends on types
-    xi: jnp.ndarray
-    # Unravelled quadrature point weights for all batches, shape depends on types
-    weights: jnp.ndarray
-    # Unravelled basis functions evaluated at quad points for all batches, shape depends on types
-    phi: jnp.ndarray
-    # Unravelled derivative of basis functions (w.r.t. parametric coordinates) evaluated at quad
-    # points for all batches, shape depends on types
-    dphi_dxi: jnp.ndarray
-
-    # --- Degree of freedom enumeration ---
-
-    # Key information for degree-of-freedom numbering (enumeration)
-    dof_enumeration: DofEnumeration
-    # Unravelled rank DoF map for each element for all batches, length depends on the element types
-    # for each batch.
-    # NOTE: not needed at this time since DoF enumeration is simply tied to node numbers (until
-    # XFEM is implemented).
-    # element_to_rank_maps: jnp.ndarray
-    # Offset for each batch into `element_to_rank_maps`, shape=(B+1,)
-    # NOTE: not needed at this time since DoF enumeration is simply tied to node numbers (until
-    # XFEM is implemented).
-    # element_to_rank_offsets: jnp.ndarray
-
-    # --- Callable functions ---
-
-    # Constitutive model for each batch, length=B
-    # Note: static, not traced
-    constitutive_models: tuple[jax.tree_util.Partial, ...] = struct.field(
-        pytree_node=False
-    )
-
-    # --- Offsets / sizes into expanded arrays for slicing ---
-
-    # Element-node offset for each batch (used to index into `x` and `connectivity`), shape=(B+1,)
-    EN_offsets: jnp.ndarray
-    # Type of material_params for each batch. For each batch, the shape of an array can
-    #  be one of three type:
-    # 1) (E*Q*M,) if every quad point in every element has a unique set of material parameters
-    # 2) (E*M,) if every element has a unique set of material parameters
-    # 3) (M,) if each batch has a unique set of material parameters
-    # Note: static, not traced
-    material_params_types: list[MaterialPropertyArrayType] = struct.field(
-        pytree_node=False
-    )
-    # Offset for each batch into `material_params`, shape=(B+1,)
-    material_params_offsets: jnp.ndarray
-    # Size of each batch stored in `material_params`, shape=(B,)
-    material_params_sizes: tuple[int, ...] = struct.field(pytree_node=False)
-    # Offset for each batch into `internal_state`, shape=(B+1,)
-    internal_state_offsets: jnp.ndarray
-    # Size of each batch stored in `internal_state`, shape=(B,)
-    internal_state_sizes: tuple[int, ...] = struct.field(pytree_node=False)
-
-    # Type of quadrature / basis for each batch, which can be either same quadrature / basis
-    # for the entire batch or a different set of quad points / basis for each element.
-    # Note: static, not traced
-    quadrature_types: tuple[QuadratureArrayType, ...] = struct.field(pytree_node=False)
-    # Offset for each batch into `xi`, shape=(B+1,)
-    xi_offsets: jnp.ndarray
-    # Offset for each batch into `weights`, shape=(B+1,)
-    weights_offsets: jnp.ndarray
-    # Offset for each batch into `phi`, shape=(B+1,)
-    phi_offsets: jnp.ndarray
-    # Offset for each batch into `dphi_dxi`, shape=(B+1,)
-    dphi_dxi_offsets: jnp.ndarray
-
-    @partial(jax.jit, static_argnames="i")
-    def get_connectivity(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `connectivity` array for batch i
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, N)
-        """
-        return jax.lax.dynamic_slice(
-            self.connectivity,
-            start_indices=(self.EN_offsets[i],),
-            slice_sizes=(self.E[i] * self.N[i],),
-        ).reshape((self.E[i], self.N[i]))
-
-    @partial(jax.jit, static_argnames="i")
-    def get_material_params(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `material_parameters` array for batch i
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, Q, M), (E, M), or (M,) depending on material
-                properties array type
-        """
-        match self.material_params_types[i]:
-            case MaterialPropertyArrayType.EQM:
-                return jax.lax.dynamic_slice(
-                    self.material_params,
-                    start_indices=(self.material_params_offsets[i],),
-                    slice_sizes=(self.E[i] * self.Q[i] * self.M[i],),
-                ).reshape((self.E[i], self.Q[i], self.M[i]))
-            case MaterialPropertyArrayType.EM:
-                return jax.lax.dynamic_slice(
-                    self.material_params,
-                    start_indices=(self.material_params_offsets[i],),
-                    slice_sizes=(self.E[i] * self.M[i],),
-                ).reshape((self.E[i], self.M[i]))
-            case _:  # M
-                return jax.lax.dynamic_slice(
-                    self.material_params,
-                    start_indices=(self.material_params_offsets[i],),
-                    slice_sizes=(self.M[i],),
-                ).reshape((self.M[i],))
-
-    @partial(jax.jit, static_argnames="i")
-    def get_internal_state(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `internal_state` array for batch
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, Q, I)
-        """
-        return jax.lax.dynamic_slice(
-            self.internal_state,
-            start_indices=(self.internal_state_offsets[i],),
-            slice_sizes=(self.E[i] * self.Q[i] * self.I[i],),
-        ).reshape((self.E[i], self.Q[i], self.I[i]))
-
-    @partial(jax.jit, static_argnames="i")
-    def get_x(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `x` array for batch i
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, N, D)
-        """
-        return jax.lax.dynamic_slice(
-            self.x,
-            start_indices=(self.D * self.EN_offsets[i],),
-            slice_sizes=(self.E[i] * self.N[i] * self.D,),
-        ).reshape((self.E[i], self.N[i], self.D))
-
-    @partial(jax.jit, static_argnames="i")
-    def get_weights(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `weights` array for batch i
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E,) or (1,) depending on quadrature array type
-
-        """
-        match self.quadrature_types[i]:
-            case QuadratureArrayType.EQ:
-                return jax.lax.dynamic_slice(
-                    self.weights,
-                    start_indices=(self.weights_offsets[i],),
-                    slice_sizes=(self.E[i]*self.Q[i],),
-                ).reshape((self.E[i],self.Q[i]))
-            case _:  # Q
-                return jax.lax.dynamic_slice(
-                    self.weights,
-                    start_indices=(self.weights_offsets[i],),
-                    slice_sizes=(self.Q[i],),
-                )
-
-    @partial(jax.jit, static_argnames="i")
-    def get_dphi_dxi(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `dphi_dxi` array for batch i.
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, Q, N, P) or (Q, N, P) depending on quadrature
-                array type
-        """
-        match self.quadrature_types[i]:
-            case QuadratureArrayType.EQ:
-                return jax.lax.dynamic_slice(
-                    self.dphi_dxi,
-                    start_indices=(self.dphi_dxi_offsets[i],),
-                    slice_sizes=(self.E[i] * self.Q[i] * self.N[i] * self.P[i],),
-                ).reshape(self.E[i], self.Q[i], self.N[i], self.P[i])
-            case _:  # Q
-                return jax.lax.dynamic_slice(
-                    self.dphi_dxi,
-                    start_indices=(self.dphi_dxi_offsets[i],),
-                    slice_sizes=(self.Q[i] * self.N[i] * self.P[i],),
-                ).reshape(self.Q[i], self.N[i], self.P[i])
-
-    @partial(jax.jit, static_argnames="i")
-    def get_phi(self, i: int) -> jnp.ndarray:
-        """
-        Retrieves the (reshaped) `dphi_dxi` array for batch i.
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of floats with shape (E, Q, N, P) or (Q, N, P) depending on quadrature
-                array type
-        """
-        match self.quadrature_types[i]:
-            case QuadratureArrayType.EQ:
-                return jax.lax.dynamic_slice(
-                    self.phi,
-                    start_indices=(self.phi_offsets[i],),
-                    slice_sizes=(self.E[i] * self.Q[i] * self.N[i],),
-                ).reshape(self.E[i], self.Q[i], self.N[i])
-            case _:  # Q
-                return jax.lax.dynamic_slice(
-                    self.phi,
-                    start_indices=(self.dphi_dxi_offsets[i],),
-                    slice_sizes=(self.Q[i] * self.N[i],),
-                ).reshape(self.Q[i], self.N[i])
-
-    @partial(jax.jit, static_argnames="i")
-    def get_dof_map(self, i: int) -> jnp.ndarray:
-        """
-        Returns the element degree of freedom map, which maps from a vector for the element to
-        the DoF numbering.
-
-        NOTE: if distributed computing is introduced (via MPI), we will need to distinguish
-        between `rank` and `global` enumerations.
-
-        Args:
-            i: Batch index
-
-        Returns:
-            out: Array of integers with shape (E, N * U)
-        """
-        connectivity_en = self.get_connectivity(i)
-        # Assumes each node has `U` number of DoFs and DoFs are enumerated following node numbering
-        return jnp.vstack(
-            [(self.U[i] * connectivity_en + j).ravel() for j in range(self.U[i])],
-            dtype=jnp.int64,
-        ).T.reshape((self.E[i], self.N[i] * self.U[i]))
-
-    @property
-    def is_homogeneous(self) -> bool:
-        """
-        Returns True if all batches in the collection have the same shape/type properties
-        (N, U, Q, P, M, I, and material/quadrature types).
-        """
-        if self.B <= 1:
-            return True
-
-        # Check integer tuples
-        check_attrs = ["N", "U", "Q", "P", "M", "I"]
-        for attr in check_attrs:
-            val = getattr(self, attr)
-            if not all(v == val[0] for v in val):
-                return False
-
-        # Check type lists/tuples
-        if not all(t == self.quadrature_types[0] for t in self.quadrature_types):
-            return False
-
-        if not all(
-            t == self.material_params_types[0] for t in self.material_params_types
-        ):
-            return False
-
-        return True
-
-
-def batch_to_collection(
-    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
-    element_batches: list[ElementBatch],
-    dof_enumeration: DofEnumeration,
-) -> ElementBatchCollection:
-    """
-    Converts a list of ElementBatch's to a BatchCollection, which is ameniable to JIT operations.
-    """
-    E = tuple((b.connectivity_en.shape[0] for b in element_batches))
-    N = tuple((b.connectivity_en.shape[1] for b in element_batches))
-    U = tuple((b.n_dofs_per_basis for b in element_batches))
-    Q = tuple((get_quadrature(fe_type=b.fe_type)[0].shape[0] for b in element_batches))
-    M = tuple((b.material_params.shape[-1] for b in element_batches))
-    I = tuple(
-        (
-            b.internal_state.shape[-1] if b.internal_state is not None else 0
-            for b in element_batches
-        )
-    )
-
-    xi_bqp, W_bq = zip(*[get_quadrature(fe_type=b.fe_type) for b in element_batches])
-    phi_bqn, dphi_dxi_bqnp = zip(
-        *[
-            eval_basis_and_derivatives(fe_type=b.fe_type, xi_qp=xi_bqp[i])
-            for i, b in enumerate(element_batches)
-        ]
-    )
-
-    x_bend = [
-        mesh_to_jax(vertices=vertices_vd, cells=b.connectivity_en).ravel()
-        for b in element_batches
-    ]
-
-    return ElementBatchCollection(
-        # --- Batch shape information (numpy / static to support JIT) ---
-        D=vertices_vd.shape[1],
-        B=len(element_batches),
+@partial(jax.jit, static_argnames=["i", "E", "N", "U"])
+def __get_jacobian_indices(
+    i: int,
+    E: tuple[int, ...],
+    N: tuple[int, ...],
+    U: tuple[int, ...],
+    connectivity: jnp.ndarray,
+    EN_offsets: jnp.ndarray,
+):
+    dof_map = ebc_get_dof_map(
+        i=i,
         E=E,
         N=N,
         U=U,
-        Q=Q,
-        M=M,
-        P=tuple([xi_qp.shape[-1] for xi_qp in xi_bqp]),
-        I=I,
-        # --- Mesh / property / state information ---
-        x=jnp.hstack([x_end.ravel() for x_end in x_bend]),
-        connectivity=jnp.hstack(
-            [b.connectivity_en.ravel() for b in element_batches], dtype=jnp.int64
-        ),
-        material_params=jnp.hstack(
-            [b.material_params.ravel() for b in element_batches]
-        ),
-        internal_state=jnp.hstack(
-            [
-                (
-                    b.internal_state.ravel()
-                    if b.internal_state is not None
-                    else jnp.zeros(shape=(E[i], Q[i], I[i])).ravel()
-                )
-                for i, b in enumerate(element_batches)
-            ]
-        ),
-        # --- Quadrature and basis function information ---
-        xi=jnp.hstack([xi_qp.ravel() for xi_qp in xi_bqp]),
-        weights=jnp.hstack([W_q.ravel() for W_q in W_bq]),
-        phi=jnp.hstack([phi_qn.ravel() for phi_qn in phi_bqn]),
-        dphi_dxi=jnp.hstack([dphi_dxi_qnp.ravel() for dphi_dxi_qnp in dphi_dxi_bqnp]),
-        # --- Degree of freedom enumeration ---
-        dof_enumeration=dof_enumeration,
-        # --- Callable functions ---
-        constitutive_models=tuple(
-            [jax.tree_util.Partial(b.constitutive_model) for b in element_batches]
-        ),
-        # --- Offsets / sizes into expanded arrays for slicing ---
-        EN_offsets=jnp.hstack(
-            [jnp.array([0]), jnp.cumsum(jnp.array(E) * jnp.array(N))]
-        ),
-        material_params_types=[
-            MaterialPropertyArrayType(len(b.material_params.shape))
-            for b in element_batches
-        ],
-        material_params_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(
-                    jnp.array([b.material_params.size for b in element_batches])
-                ),
-            ]
-        ),
-        material_params_sizes=tuple([b.material_params.size for b in element_batches]),
-        internal_state_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(
-                    jnp.array(
-                        [
-                            (
-                                b.internal_state.size
-                                if b.internal_state is not None
-                                else 0
-                            )
-                            for b in element_batches
-                        ]
-                    )
-                ),
-            ]
-        ),
-        internal_state_sizes=tuple(
-            [
-                b.internal_state.size if b.internal_state is not None else 0
-                for b in element_batches
-            ]
-        ),
-        quadrature_types=tuple([QuadratureArrayType.Q for b in element_batches]),
-        xi_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(jnp.array([xi_qp.size for xi_qp in xi_bqp])),
-            ]
-        ),
-        weights_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(jnp.array([W_q.size for W_q in W_bq])),
-            ]
-        ),
-        phi_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(jnp.array([phi_qn.size for phi_qn in phi_bqn])),
-            ]
-        ),
-        dphi_dxi_offsets=jnp.hstack(
-            [
-                jnp.array([0]),
-                jnp.cumsum(
-                    jnp.array([dphi_dxi_qnp.size for dphi_dxi_qnp in dphi_dxi_bqnp])
-                ),
-            ]
-        ),
+        connectivity=connectivity,
+        EN_offsets=EN_offsets,
     )
+    cols, rows = jax.vmap(jnp.meshgrid)(dof_map, dof_map)
+    return jnp.vstack([rows.ravel(), cols.ravel()]).T
 
 
-@partial(jax.jit, static_argnames="n_vertices")
+@jax.jit
 def _calculate_jacobian_unique_nnz(
-    n_vertices: int,
     ebc: ElementBatchCollection,
 ):
     """
     Returns the number of non-zeros in the Jacobian for a collection of batches of elements,
     ignoring any effect of constraints on the sparsity pattern.
     """
-    node_nnz_count = jnp.zeros((n_vertices,), dtype=jnp.int64)
-
-    @partial(jax.jit, static_argnames="i")
-    def jacobian_indices(i: int):
-        dof_map = ebc.get_dof_map(i)
-        cols, rows = jax.vmap(jnp.meshgrid)(dof_map, dof_map)
-        return jnp.vstack([rows.ravel(), cols.ravel()]).T
-
-    non_zero_indices = jnp.vstack([jacobian_indices(i) for i in range(ebc.B)])
+    non_zero_indices = jnp.vstack(
+        [
+            __get_jacobian_indices(
+                i, ebc.E, ebc.N, ebc.U, ebc.connectivity, ebc.EN_offsets
+            )
+            for i in range(ebc.B)
+        ]
+    )
     # Get the permutation that sorts the non-zero entries (sorted by row then col)
     perm = jnp.lexsort((non_zero_indices[:, 1], non_zero_indices[:, 0]))
     # Sort the non-zero indices
@@ -701,6 +182,7 @@ def _calculate_jacobian_coo_terms_batch(
 
 
 def calculate_jacobian_wo_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
@@ -730,9 +212,9 @@ def calculate_jacobian_wo_constraints(
             for i in range(ebc.B)
         ]
     )
-    J_ett = jnp.vstack(J_ett)
-    rows = jnp.vstack(rows)
-    cols = jnp.vstack(cols)
+    J_ett = jnp.concatenate([x.ravel() for x in J_ett])
+    rows = jnp.concatenate([x.ravel() for x in rows])
+    cols = jnp.concatenate([x.ravel() for x in cols])
 
     # debug_print(J_ett)
     # debug_print(rows)
@@ -869,6 +351,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
 
 
 def calculate_jacobian_diag_wo_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
@@ -897,8 +380,10 @@ def calculate_jacobian_diag_wo_constraints(
             for i in range(ebc.B)
         ]
     )
-    diag_J_et = jnp.vstack(diag_J_et).ravel()
-    indices = jnp.vstack(indices).ravel()
+    # diag_J_et = jnp.vstack(diag_J_et).ravel()
+    # indices = jnp.vstack(indices).ravel()
+    diag_J_et = jnp.concatenate([x.ravel() for x in diag_J_et])
+    indices = jnp.concatenate([x.ravel() for x in indices])
 
     # debug_print(diag_J_et)
     # debug_print(indices)
@@ -1045,12 +530,13 @@ def calculate_residual_wo_constraints(
 
 
 def calculate_residual_w_constraints(
+    u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
     constraints: ConstraintSystem,
-    f_ext
+    f_ext,
 ):
     """
     Compute the residual vector and updated internal state variables given the current
@@ -1073,7 +559,7 @@ def calculate_residual_w_constraints(
     # Note: this is neccessary to ensure the Jacobian is symmetric. Without this,
     # the autodiff would result in 0's on rows (except on the diagonal) for entries
     # corresponding to Dirichlet BC's, but the columns would be non-zero.
-    # debug_print(u_f)
+    # debug_print(u_f)_calculate_jacobian_unique_nnz
     u_f_w_constraints = constraints.apply_to_solution(u_f)
     # debug_print(u_f_w_constraints)
 
@@ -1092,6 +578,11 @@ def calculate_residual_w_constraints(
     # debug_print(R_f)
 
     return R_f, new_internal_state_beqi
+
+
+def __extract_first_element(func, u_f):
+    """Executes the function and extracts the first element of the returned tuple."""
+    return func(u_f=u_f)[0]
 
 
 def solve_nonlinear_step(
@@ -1132,48 +623,52 @@ def solve_nonlinear_step(
     # """
     print(f"Global dimensionality : {ebc.D}")
     print(f"# of batches : {ebc.B}")
-    for i in range(ebc.B):
-        print(
-            f"For batch {i}:\n\t",
-            f"Number of elements : {ebc.E[i]}\n\t",
-            f"Number of nodes / element : {ebc.N[i]}\n\t",
-            f"Number of quadrature points : {ebc.Q[i]}\n\t",
-            f"Parametric dimensionality: {ebc.P[i]}\n\t",
-            f"Number of material parameters per quad point: {ebc.M[i]}",
-        )
+    # for i in range(ebc.B):
+    #     print(
+    #         f"For batch {i}:\n\t",
+    #         f"Number of elements : {ebc.E[i]}\n\t",
+    #         f"Number of nodes / element : {ebc.N[i]}\n\t",
+    #         f"Number of quadrature points : {ebc.Q[i]}\n\t",
+    #         f"Parametric dimensionality: {ebc.P[i]}\n\t",
+    #         f"Number of material parameters per quad point: {ebc.M[i]}",
+    #     )
     # """
 
     # Function that produces (R(u), ISVs)
-    residual_isv_func_w_constraints = lambda u_f: calculate_residual_w_constraints(
-        element_residual_func=element_residual_func,
-        ebc=ebc,
-        assembly_map_b=assembly_map_b,
-        u_f=u_f,
-        constraints=constraints,
-        f_ext=f_ext
-    )
-
-    # Function that produces R(u)
-    residual_func_w_constraints = lambda u_f: residual_isv_func_w_constraints(u_f=u_f)[
-        0
-    ]
-
-    # Function that produces J(u) without Dirichlet BCs and MPCs applied
-    jacobian_func_wo_constraints = lambda u_f: calculate_jacobian_wo_constraints(
-        element_residual_func=element_residual_func,
-        ebc=ebc,
-        assembly_map_b=assembly_map_b,
-        u_f=u_f,
-        precomputed_jacobian_nnz=jacobian_nnz,
-    )
-
-    # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
-    jacobian_diag_func_wo_constraints = (
-        lambda u_f: calculate_jacobian_diag_wo_constraints(
+    residual_isv_func_w_constraints = jax.jit(
+        partial(
+            calculate_residual_w_constraints,
             element_residual_func=element_residual_func,
             ebc=ebc,
             assembly_map_b=assembly_map_b,
-            u_f=u_f,
+            constraints=constraints,
+            f_ext=f_ext,
+        )
+    )
+
+    # Function that produces R(u)
+    residual_func_w_constraints = jax.jit(
+        partial(__extract_first_element, residual_isv_func_w_constraints)
+    )
+
+    # Function that produces J(u) without Dirichlet BCs and MPCs applied
+    jacobian_func_wo_constraints = jax.jit(
+        partial(
+            calculate_jacobian_wo_constraints,
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
+            precomputed_jacobian_nnz=jacobian_nnz,
+        )
+    )
+
+    # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
+    jacobian_diag_func_wo_constraints = jax.jit(
+        partial(
+            calculate_jacobian_diag_wo_constraints,
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
         )
     )
 
@@ -1231,12 +726,12 @@ def solve_nonlinear_step(
             solver_info_0=info,
             check_consistency=False,
             x_0=u_f,
-            f_ext = f_ext,
+            f_ext=f_ext,
         )
 
         u_f = u_f + delta_u
         # u_f = constraints.apply_to_solution(u_f)
-        R_f = residual_isv_func_w_constraints(u_f=u_f)[0]
+        R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
 
         return (
             nl_iteration + 1,
@@ -1245,6 +740,7 @@ def solve_nonlinear_step(
             new_internal_state_beqi,
             info.increment_nl_iteration(),
         )
+
     _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
         cond_fun=while_cond,
         body_fun=while_body,
@@ -1261,6 +757,7 @@ def solve_nonlinear_step(
     relative_error = absolute_error / initial_R_f_norm
 
     return (u_f, new_internal_state_beqi, R_f, relative_error, info)
+
 
 @dataclass
 class NeumannCondition:
@@ -1328,10 +825,54 @@ def convert_external_load_to_system(
     )
 
 
+def convert_boundary_conditions(
+    boundary_conditions: List[DirichletBC | PeriodicBC],
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    dof_enumeration: DofEnumeration,
+    n_solution_components: int,
+    global_values: List[int] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+):
+    fixed_point_constraints, boundary_multipoint_constraints = (
+        convert_boundary_conditions_to_constraints(
+            boundary_conditions=boundary_conditions,
+            vertices_vd=vertices_vd,
+            dof_enumeration=dof_enumeration,
+            n_solution_components=n_solution_components,
+            global_values=global_values,
+        )
+    )
+    multipoint_constraints = consolidate_multipoint_constraints(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=[
+            *boundary_multipoint_constraints,
+            *multipoint_constraints,
+        ],
+    )
+
+    constraint_system = convert_constraints_to_system(
+        fixed_point_constraints=fixed_point_constraints,
+        multipoint_constraints=multipoint_constraints,
+        n_total_dofs=dof_enumeration.n_local_dofs(),
+    )
+
+    external_load = convert_boundary_conditions_to_external_load(
+        boundary_conditions=boundary_conditions,
+        vertices_vd=vertices_vd,
+        dof_enumeration=dof_enumeration,
+        n_solution_components=n_solution_components,
+        global_values=global_values,
+    )
+
+    f_ext = convert_external_load_to_system(external_load)
+
+    return (constraint_system, f_ext)
+
+
 def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
-    element_residual_func: Callable,
+    element_residual_func: jax.tree_util.Partial,
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
@@ -1365,9 +906,6 @@ def preprocess_bvp(
         assert (
             b.n_dofs_per_basis == element_batches[0].n_dofs_per_basis
         ), "The current DoF enumeration algorithm requires that the number of DoFs per a basis support point be constant across batches."
-
-    # Wrap the provided callable to be compatible with jit
-    element_residual_func = jax.tree_util.Partial(element_residual_func)
 
     # Structures for mapping between cell-level arrays and global arrays
     assembly_map_b = [
@@ -1417,40 +955,18 @@ def preprocess_bvp(
     # Compute the anticipated number of non-zeros for the assembled Jacobian, which
     # is only needed for solvers that actually form the Jacobian in memory.
     # NOTE: we need a concrete value to specialize for JIT of other functions
-    jacobian_nnz = int(_calculate_jacobian_unique_nnz(n_vertices=V, ebc=ebc))
+    jacobian_nnz = int(
+        _calculate_jacobian_unique_nnz(ebc=ebc)
+    )  # n_vertices=V, ebc=ebc))
 
-    fixed_point_constraints, boundary_multipoint_constraints = (
-        convert_boundary_conditions_to_constraints(
-            boundary_conditions=boundary_conditions,
-            vertices_vd=vertices_vd,
-            dof_enumeration=dof_enumeration,
-            n_solution_components=ebc.U[0],
-            global_values=global_values,
-        )
-    )
-    multipoint_constraints = consolidate_multipoint_constraints(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=[
-            *boundary_multipoint_constraints,
-            *multipoint_constraints,
-        ],
-    )
-
-    constraint_system = convert_constraints_to_system(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=multipoint_constraints,
-        n_total_dofs=n_total_dofs,
-    )
-
-    external_load = convert_boundary_conditions_to_external_load(
+    constraint_system, f_ext = convert_boundary_conditions(
         boundary_conditions=boundary_conditions,
         vertices_vd=vertices_vd,
         dof_enumeration=dof_enumeration,
         n_solution_components=ebc.U[0],
         global_values=global_values,
+        multipoint_constraints=multipoint_constraints,
     )
-
-    f_ext = convert_external_load_to_system(external_load)
 
     return (
         ebc,
@@ -1465,7 +981,7 @@ def preprocess_bvp(
 def solve_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
-    element_residual_func: Callable,
+    element_residual_func: jax.tree_util.Partial,
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
@@ -1507,15 +1023,20 @@ def solve_bvp(
     if global_values is None:
         global_values = []
 
-    ebc, assembly_map_b, constraint_system, jacobian_nnz, element_residual_func, f_ext = (
-        preprocess_bvp(
-            vertices_vd=vertices_vd,
-            element_batches=element_batches,
-            element_residual_func=element_residual_func,
-            boundary_conditions=boundary_conditions,
-            multipoint_constraints=multipoint_constraints,
-            global_values=global_values,
-        )
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
     )
 
     n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
@@ -1526,14 +1047,14 @@ def solve_bvp(
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
-    inner_solve = solve_nonlinear_step
-    if ebc.is_homogeneous:
-        print("Batches are homogeneous, using JIT compilation for solve_linear_step")
-        inner_solve = jax.jit(
-            solve_nonlinear_step,
-            # donate_argnames="internal_state_beqi",
-            static_argnames=["solver_options", "jacobian_nnz"],
-        )
+    # inner_solve = solve_nonlinear_step
+    # if ebc.is_homogeneous:
+    #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
+    inner_solve = jax.jit(
+        solve_nonlinear_step,
+        # donate_argnames="internal_state_beqi",
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
 
     # capture memory usage before
     if profile_memory:
@@ -1553,7 +1074,14 @@ def solve_bvp(
     # Update internal state variables for the element batches
     # TODO need to update
     # for i, b in enumerate(element_batches):
-    #    b.internal_state = internal_state_beqi[i]
+    # #    b.internal_state = internal_state_beqi[i]
+    #    b = b.replace(internal_state=internal_state_beqi[i])
+
+    # What Chennie did for last summer, it worked but not well tested
+    for i in range(len(element_batches)):
+        element_batches[i] = element_batches[i].replace(
+            internal_state=internal_state_beqi[i]
+        )
 
     # capture memory usage after and analyze
     if profile_memory:
