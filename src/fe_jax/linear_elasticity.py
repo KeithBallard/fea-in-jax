@@ -11,6 +11,7 @@ from .utils import (
 )
 
 
+@jax.tree_util.Partial
 @jax.jit
 def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     """
@@ -78,6 +79,7 @@ def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     return stress_dd, jnp.array([])  # no internal state
 
 
+@jax.tree_util.Partial
 @jax.jit
 def elastic_orthotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     """
@@ -183,6 +185,7 @@ def elastic_orthotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
     return stress_dd, jnp.array([])  # no internal state
 
 
+@jax.tree_util.Partial
 @jax.jit
 def linear_elasticity_residual(
     u_nd: jnp.ndarray,
@@ -256,6 +259,7 @@ def linear_elasticity_residual(
 
     return R_nd, new_internal_state_qi
 
+@jax.tree_util.Partial
 @jax.jit
 def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp.ndarray, u_nd=jnp.ndarray):
     """
@@ -313,7 +317,7 @@ def elastic_truss(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray, x_nd: jnp
     return stress_dd, jnp.array([])  # no internal state
 
 
-
+@jax.tree_util.Partial
 @jax.jit
 def linear_truss_residual(
     u_nd: jnp.ndarray,
@@ -440,6 +444,7 @@ def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
     return K_global
 
 
+@jax.tree_util.Partial
 @jax.jit
 def stiffness_residual(
     u_nd: jnp.ndarray,

@@ -8,6 +8,7 @@
 .DS_Store
 
 __pycache__/
+__jax_cache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
@@ -18,7 +19,6 @@ doc/
 install/
 prof/
 *.egg-info/
-src/__pycache__/
 tests/output/
 tests/IGFEM_ref/
 tests/__pycache__/
