@@ -6,7 +6,7 @@ from typing import Callable
 from .utils import rank2_tensor_to_voigt, rank2_voigt_to_tensor, is_required
 from .dmg_eqs_vmap import *
 
-
+@jax.tree_util.Partial
 @jax.jit
 def update_one_q(eps_dd, state_i, mat_param_m, C_ss):
         # Extract state
@@ -50,6 +50,7 @@ def update_one_q(eps_dd, state_i, mat_param_m, C_ss):
 
         return stress_dd, update_state_i
 
+@jax.tree_util.Partial
 @jax.jit
 def damage_elastic_isotropic_vmap(eps_qdd: jnp.ndarray, material_params: jnp.ndarray, internal_state_qi: jnp.ndarray):
     """
@@ -117,6 +118,7 @@ def damage_elastic_isotropic_vmap(eps_qdd: jnp.ndarray, material_params: jnp.nda
     return update_stress_qdd, update_internal_state_qi
 
 
+@jax.tree_util.Partial
 @jax.jit
 def elastic_orthotropic(
     eps_qdd: jnp.ndarray, material_params: jnp.ndarray, internal_state_qi: jnp.ndarray
@@ -240,6 +242,7 @@ def elastic_orthotropic(
     return stress_qdd, update_internal_state_qi
 
 
+@jax.tree_util.Partial
 @jax.jit
 def linear_elasticity_residual(
     u_nd: jnp.ndarray,

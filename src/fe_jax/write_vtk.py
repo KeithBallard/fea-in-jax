@@ -2,13 +2,13 @@ import pyvista as pv
 import jax.numpy as jnp
 import numpy as np
 
-def write2VTK_avg(args,vtk_mesh,u_full,internal_state,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id):
+def write2VTK_avg(args,vtk_mesh,u_full,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id):
     '''This is the version that uses only all quadrature for saving and average value of all quadratures'''
     # Displacement
     vtk_mesh['displacement'] = u_full
     for idx, id in enumerate([matrix_tri_id,matrix_quad_id,fiber_tri_id,fiber_quad_id]):
         # internal_state[idx] has shape (num_elements, num_quad_points, num_state_vars)
-        state_q = np.array(internal_state[idx])
+        state_q = np.array(element_batches[idx].internal_state)
         
         # Strains are at 0:3, Stresses are at 3:6, Damage is at 6
         strain_q = state_q[:, :, 0:3]

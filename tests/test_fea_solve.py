@@ -2,7 +2,7 @@ import meshio
 
 import numpy as np
 
-import fea_traditional as test
+# import fea_traditional as test
 from helper import *
 
 def test_fea_solve_on_polygon_mesh():
