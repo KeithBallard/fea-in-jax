@@ -1,5 +1,4 @@
 import meshio
-
 import numpy as np
 
 import fea_traditional as test
@@ -12,16 +11,15 @@ import time
 from fe_jax.post_pred import *
 from fe_jax.write_vtk import *
 from fe_jax.linear_elasticity_dmg import *
+from fe_jax.fea import convert_boundary_conditions
 # jax.config.update("jax_disable_jit", True)
-jax.config.update("jax_log_compiles", True)
- 
-
+# jax.config.update("jax_log_compiles", True)
  
 
 def test_fea_solve_dmg():
     args = {}
-    args['dir_path'] = "nonlinear_IGFEM_vmap_t500_1fib"
-    args['t_total']  = 50
+    args['dir_path'] = "nonlinear_IGFEM_vmap_t500_4fib_keith"
+    args['t_total']  = 500
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -32,7 +30,7 @@ def test_fea_solve_dmg():
     os.makedirs(args['vtk_dir'], exist_ok=True)
 
     # Read in the mesh (IGFEM)
-    mesh     = pv.read('tests/meshes/IGFEM_1fib.vtk')
+    mesh     = pv.read('tests/meshes/IGFEM_4fib.vtk')
     vtk_mesh = mesh.copy()
     vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{0}.vtk")
 
@@ -115,7 +113,7 @@ def test_fea_solve_dmg():
     RHS = np.where(points[:,0]==np.max(points[:,0]))[0]
     boundary_points = np.concatenate((LHS,RHS))
     dirichlet_values_init = np.zeros((boundary_points.shape[0], 2))
-    n_rhs = len(RHS)
+    n_LHS = len(LHS)
     n_vals = dirichlet_values_init.shape[0]
     dirichlet_values = np.empty(2 * n_vals)
     dirichlet_values[:n_vals] = dirichlet_values_init[:, 0]
@@ -140,7 +138,6 @@ def test_fea_solve_dmg():
     '''    
 
     # Set material properties
-    # @jax.jit(static_argnames=('Q'))
     @partial(jax.jit, static_argnames=('Q',))
     def get_properties(matrix_cells,fiber_cells,Q: int):
         # Neat 5220 Epoxy
@@ -181,7 +178,7 @@ def test_fea_solve_dmg():
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,6]  .set(0)    # D
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,7]  .set(0)    # Y
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,8]  .set(0)    # tau0
-        matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,9]  .set(0)  # vM0
+        matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,9]  .set(0)    # vM0
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,10] .set(dt)   # dt
         
         fiber_internal_state_eqi = jnp.zeros(shape=(fiber_cells.shape[0], Q, 7))
@@ -194,41 +191,39 @@ def test_fea_solve_dmg():
     internal_state_tri_eqi  = init_ISV(matrix_tri_cells,fiber_tri_cells,Q_tri)
     internal_state_quad_eqi = init_ISV(matrix_quad_cells,fiber_quad_cells,Q_quad)
 
-    u_prev = jnp.reshape(vtk_mesh['displacement'][:,:2],-1).astype(jnp.float64)
-
     element_batches = [
-    ElementBatch(
-        fe_type=fe_type_tri,
-        connectivity_en=matrix_tri_cells,
-        constitutive_model=damage_elastic_isotropic_vmap,
-        material_params=matrix_tri_mat_params_eqm,
-        internal_state=internal_state_tri_eqi[0],
-        n_dofs_per_basis=2,
-    ),
-    ElementBatch(
-        fe_type=fe_type_quad,
-        connectivity_en=matrix_quad_cells,
-        constitutive_model=damage_elastic_isotropic_vmap,
-        material_params=matrix_quad_mat_params_eqm,
-        internal_state=internal_state_quad_eqi[0],
-        n_dofs_per_basis=2,
-    ),
-    ElementBatch(
-        fe_type=fe_type_tri,
-        connectivity_en=fiber_tri_cells,
-        constitutive_model=elastic_orthotropic,
-        material_params=fiber_tri_mat_params_eqm,
-        internal_state=internal_state_tri_eqi[1],
-        n_dofs_per_basis=2,
-    ),
-    ElementBatch(
-        fe_type=fe_type_quad,
-        connectivity_en=fiber_quad_cells,
-        constitutive_model=elastic_orthotropic,
-        material_params=fiber_quad_mat_params_eqm,
-        internal_state=internal_state_quad_eqi[1],
-        n_dofs_per_basis=2,
-    )
+        ElementBatch(
+            fe_type=fe_type_tri,
+            connectivity_en=matrix_tri_cells,
+            constitutive_model=damage_elastic_isotropic_vmap,
+            material_params=matrix_tri_mat_params_eqm,
+            internal_state=internal_state_tri_eqi[0],
+            n_dofs_per_basis=2,
+        ),
+        ElementBatch(
+            fe_type=fe_type_quad,
+            connectivity_en=matrix_quad_cells,
+            constitutive_model=damage_elastic_isotropic_vmap,
+            material_params=matrix_quad_mat_params_eqm,
+            internal_state=internal_state_quad_eqi[0],
+            n_dofs_per_basis=2,
+        ),
+        ElementBatch(
+            fe_type=fe_type_tri,
+            connectivity_en=fiber_tri_cells,
+            constitutive_model=elastic_orthotropic,
+            material_params=fiber_tri_mat_params_eqm,
+            internal_state=internal_state_tri_eqi[1],
+            n_dofs_per_basis=2,
+        ),
+        ElementBatch(
+            fe_type=fe_type_quad,
+            connectivity_en=fiber_quad_cells,
+            constitutive_model=elastic_orthotropic,
+            material_params=fiber_quad_mat_params_eqm,
+            internal_state=internal_state_quad_eqi[1],
+            n_dofs_per_basis=2,
+        )
     ]
 
     (
@@ -238,34 +233,23 @@ def test_fea_solve_dmg():
         jacobian_nnz,
         element_residual_func,
         f_ext,
+        solve_nonlinear_step_jit
     ) = preprocess_bvp(element_residual_func=linear_elasticity_residual,
             vertices_vd=points,
             element_batches=element_batches,
             boundary_conditions=dirichlet_bcs)
     
     n_total_dofs = points.shape[0] * ebc.U[0]
-    u_0_g = jnp.zeros(shape=(n_total_dofs,))
-
-    # inner_solve = solve_nonlinear_step
-    # if ebc.is_homogeneous:
-    #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
-    solve_nonlinear_step_jit = jax.jit(
-        solve_nonlinear_step,
-        # donate_argnames="internal_state_beqi",
-        static_argnames=["solver_options", "jacobian_nnz"],
-    )
+    u_prev = jnp.zeros(shape=(n_total_dofs,))
 
     print('Start Deformation Loop')
-    t_start = time.time()
     for i in range(1,args['t_total']+1):
-        dirichlet_values[len(LHS):n_vals] = strain_increment * i
-        for bc, val in zip(dirichlet_bcs, dirichlet_values):
-            bc.value = val
-
-        # dirichlet_values_init[len(RHS):,0] = args['strain_max'] * length / args['t_total'] * i
-        # dirichlet_values = np.concatenate((dirichlet_values_init[:,0],dirichlet_values_init[:,1]))
-        # for bc in range(len(dirichlet_bcs)):
-        #     dirichlet_bcs[bc].value = dirichlet_values[bc]
+        dirichlet_values[n_LHS:n_vals] = strain_increment * i
+        # Update the constraint system's g vector directly to avoid slow CPU overhead 
+        # of reconstructing the boundary conditions every iteration.
+        constraint_system = constraint_system.replace(
+            g=jnp.array(dirichlet_values, dtype=jnp.float32)
+        )
 
         # Solve the boundary value problem
         u, internal_state_beqi, residual, relative_error, info = solve_nonlinear_step_jit(
@@ -273,47 +257,37 @@ def test_fea_solve_dmg():
             ebc=ebc,
             assembly_map_b=assembly_map_b,
             jacobian_nnz=jacobian_nnz,
-            u_0_g=u_0_g,
+            u_0_g=u_prev,
             constraints=constraint_system,
             solver_options=SolverOptions(
+                # linear_precond_type=PreconditionerType.JACOBI,
                 # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-                linear_precond_type=PreconditionerType.JACOBI,
                 # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-                linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+                linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
             ),
             f_ext=f_ext,
         )
 
-        #print("Time step =", i)
-        #print("|R| = ",      jnp.linalg.norm(residual))
-        #print("Cell ID = ",  print_cell)
-        #print("e11 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,0]))
-        #print("e22 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,1]))
-        #print("e12 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,2]))
-        #print("s11 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,3]))
-        #print("s22 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,4]))
-        #print("s12 = ",      jnp.mean(internal_state_beqi[fib_matrix_shape][print_cell,:,5]))
-
         u_prev = u
 
-        # Update displacements to be 3D for VTK
-        #u_full = np.zeros((points.shape[0], 3))
-        #u_full[:, :U] = u.reshape((points.shape[0], U))
+        # Update the internal state variables in the element batch collection for the next time step
+        ebc = ebc.replace(internal_state=jnp.hstack([isv.ravel() for isv in internal_state_beqi]))
+
+        print("Time step =", i)
+        # Update displacements to be 3D for VTK on GPU, then transfer once to host
+        u_full = np.array(jnp.zeros((points.shape[0], 3)).at[:, :U].set(u.reshape(-1, U)))
 
         # write and save to vtk
-        #vtk_mesh = write2VTK_avg(args,mesh,u_full,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+        vtk_mesh = write2VTK_avg(args,mesh,u_full,internal_state_beqi,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
         # Write to file
-        #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+        vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+    # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
 
-        #if i%100 == 0 or i == args['t_total']+1:
-        #    plot_IGFEM_mesh_to_png(vtk_mesh, i,'displacement',data_type='points',output_file=args['out_dir']+"/mesh_plot_u.png",dpi=100)
-        #    plot_IGFEM_mesh_to_png(vtk_mesh, i,'damage',      data_type='cells',output_file=args['out_dir']+"/mesh_plot_dmg.png",dpi=100)
+if __name__ == "__main__":
+    t_start = time.time()
+
+    # with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
+    test_fea_solve_dmg()
 
     t_end = time.time()
     print("Time used:", t_end - t_start)
-    # Example usage
-    zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
-
-if __name__ == "__main__":
-    #with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
-    test_fea_solve_dmg()
