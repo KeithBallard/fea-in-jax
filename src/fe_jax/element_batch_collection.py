@@ -282,13 +282,13 @@ class ElementBatchCollection:
                 return jax.lax.dynamic_slice(
                     self.weights,
                     start_indices=(self.weights_offsets[i],),
-                    slice_sizes=(self.E[i],),
-                )
+                    slice_sizes=(self.E[i]*self.Q[i],),
+                ).reshape((self.E[i],self.Q[i]))
             case _:  # Q
                 return jax.lax.dynamic_slice(
                     self.weights,
                     start_indices=(self.weights_offsets[i],),
-                    slice_sizes=(1,),
+                    slice_sizes=(self.Q[i],),
                 )
 
     @partial(jax.jit, static_argnames="i")
@@ -316,6 +316,33 @@ class ElementBatchCollection:
                     start_indices=(self.dphi_dxi_offsets[i],),
                     slice_sizes=(self.Q[i] * self.N[i] * self.P[i],),
                 ).reshape(self.Q[i], self.N[i], self.P[i])
+
+    @partial(jax.jit, static_argnames="i")
+    def get_phi(self, i: int) -> jnp.ndarray:
+        """
+        Retrieves the (reshaped) `dphi_dxi` array for batch i.
+
+        Args:
+            i: Batch index
+
+        Returns:
+            out: Array of floats with shape (E, Q, N, P) or (Q, N, P) depending on quadrature
+                array type
+        """
+        match self.quadrature_types[i]:
+            case QuadratureArrayType.EQ:
+                return jax.lax.dynamic_slice(
+                    self.phi,
+                    start_indices=(self.phi_offsets[i],),
+                    slice_sizes=(self.E[i] * self.Q[i] * self.N[i],),
+                ).reshape(self.E[i], self.Q[i], self.N[i])
+            case _:  # Q
+                return jax.lax.dynamic_slice(
+                    self.phi,
+                    start_indices=(self.dphi_dxi_offsets[i],),
+                    slice_sizes=(self.Q[i] * self.N[i],),
+                ).reshape(self.Q[i], self.N[i])
+
 
     @partial(jax.jit, static_argnames="i")
     def get_dof_map(self, i: int) -> jnp.ndarray:

@@ -186,7 +186,6 @@ def calculate_jacobian_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
-    u_f: jnp.ndarray,
     precomputed_jacobian_nnz: int,
 ):
 
@@ -355,7 +354,6 @@ def calculate_jacobian_diag_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
-    u_f: jnp.ndarray,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -534,7 +532,6 @@ def calculate_residual_w_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
-    u_f: jnp.ndarray,
     constraints: ConstraintSystem,
     f_ext,
 ):
