@@ -1169,12 +1169,12 @@ def solve_nonlinear_step(
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         absolute_error = jnp.linalg.norm(R_f)
         relative_error = absolute_error / initial_R_f_norm
-        jax.debug.print(
-            "End of iteration {x} rel error {y}, abs error {z}",
-            x=nl_iteration - 1,
-            y=relative_error,
-            z=absolute_error,
-        )
+        # jax.debug.print(
+        #     "End of iteration {x} rel error {y}, abs error {z}",
+        #     x=nl_iteration - 1,
+        #     y=relative_error,
+        #     z=absolute_error,
+        # )
         """
         jax.debug.print(
             "Convergence criteria: {} {} {}",
@@ -1315,50 +1315,6 @@ def convert_external_load_to_system(
     )
 
 
-def convert_boundary_conditions(
-    boundary_conditions: List[DirichletBC | PeriodicBC],
-    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
-    dof_enumeration: DofEnumeration,
-    n_solution_components: int,
-    global_values: List[int] | None = None,
-    multipoint_constraints: List[MultiPointConstraint] | None = None,
-):
-    fixed_point_constraints, boundary_multipoint_constraints = (
-        convert_boundary_conditions_to_constraints(
-            boundary_conditions=boundary_conditions,
-            vertices_vd=vertices_vd,
-            dof_enumeration=dof_enumeration,
-            n_solution_components=n_solution_components,
-            global_values=global_values,
-        )
-    )
-    multipoint_constraints = consolidate_multipoint_constraints(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=[
-            *boundary_multipoint_constraints,
-            *multipoint_constraints,
-        ],
-    )
-
-    constraint_system = convert_constraints_to_system(
-        fixed_point_constraints=fixed_point_constraints,
-        multipoint_constraints=multipoint_constraints,
-        n_total_dofs=dof_enumeration.n_local_dofs(),
-    )
-
-    external_load = convert_boundary_conditions_to_external_load(
-        boundary_conditions=boundary_conditions,
-        vertices_vd=vertices_vd,
-        dof_enumeration=dof_enumeration,
-        n_solution_components=n_solution_components,
-        global_values=global_values,
-    )
-
-    f_ext = convert_external_load_to_system(external_load)
-
-    return (constraint_system, f_ext)
-
-
 def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
@@ -1459,6 +1415,11 @@ def preprocess_bvp(
         multipoint_constraints=multipoint_constraints,
     )
 
+    solve_nonlinear_step_jit = jax.jit(
+        solve_nonlinear_step,
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
+
     return (
         ebc,
         assembly_map_b,
@@ -1466,6 +1427,7 @@ def preprocess_bvp(
         jacobian_nnz,
         element_residual_func,
         f_ext,
+        solve_nonlinear_step_jit
     )
 
 
@@ -1568,6 +1530,95 @@ def solve_bvp(
     # #    b.internal_state = internal_state_beqi[i]
     #    b = b.replace(internal_state=internal_state_beqi[i])
 
+    # What Chennie did for last summer, it worked but not well tested
+    for i in range(len(element_batches)):
+        element_batches[i] = element_batches[i].replace(
+            internal_state=internal_state_beqi[i]
+        )
+
+    # capture memory usage after and analyze
+    if profile_memory:
+        u.block_until_ready()
+        stop_memory_profile("solve_linear_step")
+
+    if info.cumulative_linear_iterations > 0:
+        print(
+            f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}"
+        )
+        if plot_convergence:
+            plot_solver_info(opts=solver_options, info=info)
+
+    return (u, residual, element_batches)
+
+
+def solve_quasi_static_bvp(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: Callable,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
+    u_0_g: jnp.ndarray | None = None,
+    solver_options: SolverOptions = SolverOptions(),
+    plot_convergence: bool = False,
+    profile_memory: bool = False,
+) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
+    """
+    Solve a boundary value problem for static linear elasticity.
+
+    Parameters
+    ----------
+    vertices_vd          : vertices needed for all cells on the rank, ndarray[float, (V, D)]
+    element_batches      : batch of elements for this rank
+    element_residual_func: residual function emerging from weak form of governing equations
+    dirichlet_bcs        : Dirichlet boundary conditions, list[DirichletConstraint]
+    multipoint_constraints : Linear constraints between degrees of freedom, list[MultiPointConstraint]
+    global_values        : Length of list indicates number of global solution vector-values that will
+                           added to the global system (e.g. for periodic BCs). Each entry in the list
+                           indicates the number of components for each vector-value.
+    u_0_g                : initial guess for the solution, ndarray[float, (V * D)] or None (default, zeros will be used)
+    solver_options       : options for the linear/nonlinear solvers
+    plot_convergence     : indicates if the convergence history for the linear solver should be
+                           plotted via matplotlib as a figure
+    profile_memory       : indicates if GPU memory usage should be profiled, which will create *.prof
+                           files in the current directory
+
+    Returns
+    -------
+    u               : solution (displacement), ndarray[float, (V * D)]
+    R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
+    element_batches : element batches with updated internal state variables
+    """
+    if boundary_conditions is None:
+        boundary_conditions = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
+
+    n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
+
+    # If an initial guess was not provided, then use zeros
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(n_total_dofs,))
+    else:
+        assert u_0_g.shape == (n_total_dofs,)
+
+
+    # capture memory usage before
+    if profile_memory:
+        start_memory_profile("solve_linear_step")
+
+    u, internal_state_beqi, residual, relative_error, info = inner_solve(
+        element_residual_func=element_residual_func,
+        ebc=ebc,
+        assembly_map_b=assembly_map_b,
+        jacobian_nnz=jacobian_nnz,
+        u_0_g=u_0_g,
+        constraints=constraint_system,
+        solver_options=solver_options,
+        f_ext=f_ext,
+    )
     # What Chennie did for last summer, it worked but not well tested
     for i in range(len(element_batches)):
         element_batches[i] = element_batches[i].replace(
