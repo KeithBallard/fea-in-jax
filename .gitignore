@@ -4,6 +4,7 @@
 *.png
 *.npy
 *.log
+*.out
 .DS_Store
 
 __pycache__/
@@ -24,3 +25,4 @@ tests/__pycache__/
 jax-trace
 jax-trace_new
 PIGFEM*
+.env
