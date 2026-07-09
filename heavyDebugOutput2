@@ -1,0 +1,46 @@
+NVTX ranges matched: 160
+Memcpy table: CUPTI_ACTIVITY_KIND_MEMCPY
+Memcpy events: 43
+
+=== Memcpy Summary By Kind And Innermost NVTX Range ===
+Kind                            Count           MB      Time ms  Range
+----------------------------------------------------------------------------------------------------
+Device-to-Device                   20   160.000000     0.140096  snes_assign_vec_buffer_callback
+Device-to-Device                   18   144.000000     0.126080  snes_assign_vec_direct_dlpack
+Device-to-Device                    1     8.000000     0.007072  NO_MATCHING_NVTX_RANGE
+Device-to-Device                    1     8.000000     0.007008  snes_direct_vec_assign_to_petsc
+Device-to-Host                      3     0.000024     0.002496  NO_MATCHING_NVTX_RANGE
+
+=== Largest Individual Memcpy Events ===
+Kind                                   MB      Time us  Range
+------------------------------------------------------------------------------------------
+Device-to-Device                 8.000000        7.232  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.200  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.136  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.136  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.104  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.072  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.072  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.072  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.072  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.072  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.072  NO_MATCHING_NVTX_RANGE
+Device-to-Device                 8.000000        7.040  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.040  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.040  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.008  snes_direct_vec_assign_to_petsc
+Device-to-Device                 8.000000        7.008  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.008  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.008  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.008  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        7.008  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.008  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        7.008  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        6.976  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        6.976  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        6.976  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        6.976  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        6.976  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        6.976  snes_assign_vec_buffer_callback
+Device-to-Device                 8.000000        6.944  snes_assign_vec_direct_dlpack
+Device-to-Device                 8.000000        6.944  snes_assign_vec_buffer_callback
