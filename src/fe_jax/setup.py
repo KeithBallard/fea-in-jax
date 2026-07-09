@@ -245,9 +245,9 @@ def mesh_to_sparse_assembly_map(
     return AssemblyMap(indices=VtoEN_indices, shape=(n_vertices, np.prod(cells.shape)))
 
 
-@partial(jax.jit, static_argnames=["E"])
+@jax.jit
 def transform_global_to_element_node(
-    assembly_map: AssemblyMap, v_g: jnp.ndarray, E: int
+    assembly_map: AssemblyMap, v_g: jnp.ndarray
 ):
     """
     Transforms a vector that represents a global assembled vector into the element-node representation.
@@ -257,9 +257,9 @@ def transform_global_to_element_node(
     return v_g.at[assembly_map.indices, :].get(mode="drop", fill_value=0)
 
 
-@partial(jax.jit, static_argnames=["E"])
+@jax.jit
 def transform_global_unraveled_to_element_node(
-    assembly_map: AssemblyMap, v_g: jnp.ndarray, E: int
+    assembly_map: AssemblyMap, v_g: jnp.ndarray
 ):
     """
     Transforms a vector that represents a global assembled vector that is unraveled into the

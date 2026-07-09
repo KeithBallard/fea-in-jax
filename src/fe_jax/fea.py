@@ -157,7 +157,7 @@ def _calculate_jacobian_coo_terms_batch(
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -328,7 +328,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -413,7 +413,7 @@ def _calculate_residual_wo_constraints_batch(
         N == dphi_dxi_qnp.shape[1]
     ), f"Number of nodes per element {N} must match the number of basis functions {dphi_dxi_qnp.shape[1]}."
 
-    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
+    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f)
 
     # A vmap'ed version of the element residual function that maps over the elements
     R_vmap = jax.vmap(

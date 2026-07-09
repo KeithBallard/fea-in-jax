@@ -100,7 +100,7 @@ def test_simple_fea_residual_jacobian_transforms():
     print("u_0_g", u_0_g.shape, u_0_g)
     # Element-node representation
     assembly_map = assembly_map_b[0]
-    u_0_n = transform_global_unraveled_to_element_node(assembly_map, u_0_g, E=E)
+    u_0_n = transform_global_unraveled_to_element_node(assembly_map, u_0_g)
     print("u_0_n", u_0_n.shape, u_0_n)
     # Converted back to global unraveled to ensure transforms work as expected
     u_0_g_test = transform_element_node_to_global_unraveled_nosum(
