@@ -753,6 +753,35 @@ def solve_nonlinear_step(
         "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
     )
 
+    def line_search(u_f, delta_u, R_f, isv_f, residual_isv_func, max_backtracks = 20):
+        norm_R0 = jnp.linalg.norm(R_f)
+
+        def cond_fun(state):
+            alpha, u_trial, R_trial, isv_trial, n, accepted = state
+            return jnp.logical_and(n < max_backtracks, jnp.logical_not(accepted))
+
+        def body_fun(state):
+            alpha, _, _, _, n, _ = state
+            alpha = alpha*0.5
+            u_trial = u_f + alpha*delta_u
+            R_trial, isv_trial = residual_isv_func(u_trial)
+            accepted = jnp.linalg.norm(R_trial) <= norm_R0
+            # jax.debug.print(
+            #     'alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}',
+            #     a = alpha,
+            #     Rt = jnp.linalg.norm(R_trial),
+            #     Rf = norm_R0,
+            # )
+            return alpha, u_trial, R_trial, isv_trial, n+1, accepted
+
+        u_trial = u_f + delta_u
+        R_trial, isv_trial = residual_isv_func(u_trial)
+        accepted = jnp.linalg.norm(R_trial) <= norm_R0
+
+        init = (jnp.array(1.0), u_trial, R_trial, isv_trial, jnp.array(0.0), accepted)
+        alpha, u_trial, R_trial, isv_trial, _, _ = jax.lax.while_loop(cond_fun, body_fun, init)
+        return u_trial, R_trial, isv_trial, alpha
+
     def while_body(
         args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo],
     ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo]:
@@ -793,16 +822,24 @@ def solve_nonlinear_step(
             current_stage=DebugOutputStage.NONLINEAR_SOLVE,
         )
 
-
-
         D = ebc.U[0]
-        max_d = solver_options.max_linear_displacement
-        # TODO this only words if delta_u ONLY consists of nodal values, if other global DOFs are present this, need to be update (both the norm and the reshape with D.
-        max_u = jnp.max(jnp.linalg.norm(delta_u.reshape((-1, D)), axis=1))
-        scale = jnp.minimum(1.0, max_d / jnp.maximum(1e-16, max_u))
-        delta_u = delta_u * scale
-        u_f = u_f + delta_u
-        R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
+        # max_d = solver_options.max_linear_displacement
+        # # TODO this only words if delta_u ONLY consists of nodal values, if other global DOFs are present this, need to be update (both the norm and the reshape with D.
+        # max_u = jnp.max(jnp.linalg.norm(delta_u.reshape((-1, D)), axis=1))
+        # scale = jnp.minimum(1.0, max_d / jnp.maximum(1e-16, max_u))
+        # jax.debug.print('scale = {s}',s=scale)
+        # delta_u = delta_u * scale
+        # u_f = u_f + delta_u
+        # R_f = residual_isv_func_w_constraints(u_f=u_f)[0]
+
+        # backtracking line search
+        u_f, R_f, new_internal_state_beqi, alpha = line_search(
+            u_f = u_f,
+            delta_u = delta_u,
+            R_f=R_f,
+            isv_f = new_internal_state_beqi,
+            residual_isv_func = residual_isv_func_w_constraints,
+        )
 
         if debug_info.contains(DebugOutputQuantities.NODE_SOLUTION):
             debug_info.output(DebugOutputQuantities.NODE_SOLUTION, "u", u_f.reshape(-1,D))
