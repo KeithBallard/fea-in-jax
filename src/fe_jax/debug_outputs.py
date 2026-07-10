@@ -55,7 +55,6 @@ def _begin_stage(
     _active_groups.clear()
     _active_stage = DebugOutputStage(int(current_stage))
 
-    jax.debug.print("active stage = {x}", x = _active_stage)
     if not any(stage == _active_stage for _, stage in flags):
         return
 
