@@ -35,13 +35,22 @@ def make_single_fiber(
     x0: tuple,
     xN: tuple,
     fiber_id: int,
-    cell_shift: int
+    cell_shift: int,
+    x_shift: np.ndarray | None = None,
+    y_shift: np.ndarray | None = None,
+    z_shift: np.ndarray | None = None,
 ):
+    if x_shift is None:
+        x_shift = np.zeros(n_elements + 1)
+    if y_shift is None:
+        y_shift = np.zeros(n_elements + 1)
+    if z_shift is None:
+        z_shift = np.zeros(n_elements + 1)
     points = np.vstack(
         (
-            np.linspace(x0[0], xN[0], n_elements + 1),
-            np.linspace(x0[1], xN[1], n_elements + 1),
-            np.linspace(x0[2], xN[2], n_elements + 1),
+            np.linspace(x0[0], xN[0], n_elements + 1) + x_shift,
+            np.linspace(x0[1], xN[1], n_elements + 1) + y_shift,
+            np.linspace(x0[2], xN[2], n_elements + 1) + z_shift,
         )
     ).T
     cells = np.array(
@@ -53,7 +62,15 @@ def make_single_fiber(
     return points, cells, fiber_ids, cell_ids
 
 
-def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannForce):
+def make_bundle(
+    n_elements: list[int],
+    X0: list[tuple],
+    XN: list[tuple],
+    NeumannForce,
+    x_shift: np.ndarray | None = None,
+    y_shift: np.ndarray | None = None,
+    z_shift: np.ndarray | None = None,
+):
     point_blocks = []
     cell_blocks = []
     point_id_blocks = []
@@ -70,6 +87,9 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannF
             xN=xN,
             fiber_id=fiber_id,
             cell_shift=vertex_offset,
+            x_shift = x_shift,
+            y_shift = y_shift,
+            z_shift = z_shift,
         )
 
         point_blocks.append(points_i)
@@ -122,22 +142,44 @@ def run_threeFiberTow(
     contact_params,
     filename_base = None,
     pre_strain: float | None = None,
+    x_shift: np.ndarray | None = None,
+    y_shift: np.ndarray | None = None,
+    z_shift: np.ndarray | None = None,
 ):
     """ """
-    fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
+    fabric, bcs = make_bundle(
+        n_elements=n_elements,
+        X0=X0,
+        XN=XN,
+        NeumannForce=NeumannForce,
+        x_shift = x_shift,
+        y_shift = y_shift,
+        z_shift = z_shift,
+    )
     dyn_bcs = []
     f_n = lambda z,nf : nf*(np.exp(-(4*z)**2) - np.exp(-16))/(1-np.exp(-16))
+    nf_fiber = 2
     for nf in NeumannForce:
         temp_bcs =deepcopy(bcs)
         temp_bcs += [
             NeumannBC(
                 bc_type   = BCType.NODE,
                 component = 1,
-                index     = fabric.fiber_offsets[2] + i + 1,
+                index     = fabric.fiber_offsets[nf_fiber] + i + 1,
                 value     = -f_n(z,nf),
             )
-            for i,z in enumerate(fabric.points[fabric.fiber_offsets[2]+1:fabric.fiber_offsets[3]-1,2])
+            for i,z in enumerate(fabric.points[fabric.fiber_offsets[nf_fiber]+1:fabric.fiber_offsets[nf_fiber+1]-1,2])
         ]
+        # temp_bcs += [
+        #     NeumannBC(
+        #         bc_type   = BCType.NODE,
+        #         component = 1,
+        #         index     = fabric.fiber_offsets[nf_fiber] + i + 1,
+        #         # value     = -f_n(z,nf),
+        #         value     = -f_n(fabric.points[fabric.fiber_offsets[nf_fiber]+int(n_elements[0]/2) +i,2],nf),
+        #     )
+        #     for i in range(-2,3)
+        # ]
         dyn_bcs.append(temp_bcs)
 
 
@@ -155,9 +197,10 @@ def run_threeFiberTow(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=100,
+            nonlinear_max_iter=1000,
             linear_max_iter=500,
-            max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+            # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+            max_linear_displacement=0.001,
         ),
         contact_options=contact_params,
         plot_convergence=False,
@@ -166,7 +209,6 @@ def run_threeFiberTow(
         pre_strain=pre_strain,
     )
     u = u.reshape((-1,3))
-    fabric.points = fabric.points + u
 
     D_D = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_d = D_D[D_D.nonzero()].min()
@@ -183,14 +225,14 @@ args = {
     'n_elements':[40]*3,
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
-    'NeumannForce':[(i+1)*1e4 for i in range(10)],
+    'NeumannForce':[(i+1)*1e2 for i in range(10)],
     # 'NeumannForce':[i*1e4 for i in range(10,101)],
     # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
     'filename_base': 'ThreeFiberSpread/full_length_force',
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_stiffness_model = contact_stiffness_exponential,
-        D_stiffness_to_E_ratio  = 0.25,
+        contact_stiffness_model = contact_stiffness_constant,
+        D_stiffness_to_E_ratio  = 1,
         contact_search_radius   = 0.2,
         M_to_D_ratio            = 1.25,
         M_stiffness_to_E_ratio  = 1.0/100.0
