@@ -60,6 +60,13 @@ def main():
     _, x_dot = jax.jvp(lambda active_phi: solve(active_phi, x0), (phi,), (phi_dot,))
     expected_x_dot = (0.5 / jnp.sqrt(phi)) * phi_dot
 
+    delta_phi = jnp.array([1.0e-4, -2.0e-4, 3.0e-4], dtype=jnp.float64)
+    x_perturbed = solve(phi + delta_phi, x0)
+    x_linearized = x_star + jac @ delta_phi
+    perturbation_error = jnp.linalg.norm(x_perturbed - x_linearized)
+    actual_change = x_perturbed - x_star
+    predicted_change = jac @ delta_phi
+
     print("Testing differentiable SNES prototype with PETSc primal solve.")
     print("x_star:", x_star)
     print("expected x:", expected_x)
@@ -69,10 +76,15 @@ def main():
     print(expected_jac)
     print("jvp x_dot:", x_dot)
     print("expected x_dot:", expected_x_dot)
+    print("delta_phi:", delta_phi)
+    print("actual x change after resolving:", actual_change)
+    print("linearized x change from jacobian:", predicted_change)
+    print("linearization error norm:", perturbation_error)
 
     assert jnp.allclose(x_star, expected_x, rtol=1e-10, atol=1e-10)
     assert jnp.allclose(jac, expected_jac, rtol=1e-10, atol=1e-10)
     assert jnp.allclose(x_dot, expected_x_dot, rtol=1e-10, atol=1e-10)
+    assert perturbation_error < 1e-8
 
 
 if __name__ == "__main__":

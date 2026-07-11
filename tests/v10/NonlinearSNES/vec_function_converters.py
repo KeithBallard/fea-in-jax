@@ -34,7 +34,7 @@ def petscVecToJAX(vec):
     """Convert a PETSc Vec to a JAX array through the DLPack protocol."""
     if not hasattr(vec, "__dlpack__"):
         raise TypeError("PETSc Vec does not expose __dlpack__; no-copy input path is unavailable")
-    return jax.dlpack.from_dlpack(vec)
+    return jax.dlpack.from_dlpack(vec, copy=False)
 
 
 def jaxArrayToPETScVec(values):

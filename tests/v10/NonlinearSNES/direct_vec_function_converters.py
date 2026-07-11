@@ -34,11 +34,11 @@ def petscVecToJAX(vec):
     if hasattr(vec, "toDLPack"):
         import cupy as cp
 
-        vec_cupy = cp.from_dlpack(vec.toDLPack(mode="r"))
-        return jax.dlpack.from_dlpack(vec_cupy)
+        vec_cupy = cp.from_dlpack(vec.toDLPack(mode="r"),copy=False)
+        return jax.dlpack.from_dlpack(vec_cupy,copy=False)
     if not hasattr(vec, "__dlpack__"):
         raise TypeError("PETSc Vec does not expose DLPack; direct input path is unavailable")
-    return jax.dlpack.from_dlpack(vec)
+    return jax.dlpack.from_dlpack(vec,copy=False)
 
 
 def jaxArrayToPETScVec(values):
@@ -47,7 +47,9 @@ def jaxArrayToPETScVec(values):
 
     values.block_until_ready()
     values_cupy = cp.from_dlpack(values, copy=False)
-    return PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
+    petscVecObject =  PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
+    print(petscVecObject.getType())
+    return petscVecObject
 
 
 def assignPETScVecFromJAXDirect(vec, values):
