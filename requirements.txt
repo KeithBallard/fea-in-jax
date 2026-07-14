@@ -19,3 +19,5 @@ scipy==1.18.0
 flax==0.12.7
 # Intel MKL Pardiso solver (optional)
 #pypardiso
+pyvista==0.48.4
+pytest
