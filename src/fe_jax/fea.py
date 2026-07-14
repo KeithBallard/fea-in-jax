@@ -1,5 +1,5 @@
 from igl import adjacency_list
-from fe_jax.contact import ContactPreprocessConfig
+from .contact import ContactPreprocessConfig
 from .setup import *
 from .utils import *
 from .element_batch_collection import *
@@ -11,7 +11,7 @@ from .constraint_system import *
 from .dof_enumeration import *
 from .boundary_conditions import *
 from .load_system import *
-from . import contact
+from .contact import *
 from .debug_outputs import *
 
 import jax.numpy as jnp

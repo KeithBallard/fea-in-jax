@@ -118,7 +118,7 @@ def run_threeFiberTow(
         boundary_conditions=bcs,
         contact_options= ContactParams(
             self_adjacency_block    = 10000,
-            contact_stiffness_model = contact_stiffness_exponential,
+            contact_stiffness_model = __contact_stiffness_exponential,
             D_stiffness_to_E_ratio  = 0.25,
             contact_search_radius   = contact_search_radius,
             M_to_D_ratio            = 1.25,

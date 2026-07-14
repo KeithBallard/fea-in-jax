@@ -211,7 +211,7 @@ args = {
     'dir_step':0.005,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_stiffness_model = contact_stiffness_exponential,
+        contact_stiffness_model = __contact_stiffness_exponential,
         D_stiffness_to_E_ratio  = 0.25,
         contact_search_radius   = 0.4,
         M_to_D_ratio            = 1.25,
@@ -230,7 +230,7 @@ args31 = {
     'dir_step':-0.005,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_stiffness_model = contact_stiffness_exponential,
+        contact_stiffness_model = __contact_stiffness_exponential,
         D_stiffness_to_E_ratio  = 0.25,
         contact_search_radius   = 0.2,
         M_to_D_ratio            = 1.25,

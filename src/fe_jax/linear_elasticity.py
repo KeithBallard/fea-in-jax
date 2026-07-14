@@ -297,7 +297,7 @@ def elastic_truss(
 
 @jax.tree_util.Partial
 @jax.jit
-def contact_stiffness_linear(
+def __contact_stiffness_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
@@ -308,7 +308,7 @@ def contact_stiffness_linear(
 
 @jax.tree_util.Partial
 @jax.jit
-def contact_stiffness_constant(
+def __contact_stiffness_constant(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
@@ -317,7 +317,7 @@ def contact_stiffness_constant(
 
 @jax.tree_util.Partial
 @jax.jit
-def contact_stiffness_piecewise_linear(
+def __contact_stiffness_piecewise_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
@@ -339,7 +339,7 @@ def contact_stiffness_piecewise_linear(
 
 @jax.tree_util.Partial
 @jax.jit
-def contact_stiffness_exponential(
+def __contact_stiffness_exponential(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
@@ -352,14 +352,13 @@ def contact_stiffness_exponential(
     r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
     return alpha*jnp.exp(-r*d)
 
-@jax.tree_util.Partial
 @jax.jit
-def elastic_contact_truss(
+def __elastic_contact_truss_kernel(
+    contact_stiffness_model: jax.tree_util.Partial,
     eps_dd: jnp.ndarray,
     material_params_m: jnp.ndarray,
     x_nd: jnp.ndarray,
     u_nd: jnp.ndarray,
-    contact_stiffness_model: jax.tree_util.Partial,
 ):
     """
     A constitive relation for contact elements which is basically
@@ -404,6 +403,13 @@ def elastic_contact_truss(
     # )
 
     return stress_dd, jnp.array([])  # no internal state
+
+# Contact formulations to use for 1D contact elements
+elastic_contact_truss_constant = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_constant)
+elastic_contact_truss_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_linear)
+elastic_contact_truss_piecewise_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_linear)
+elastic_contact_truss_exponential = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_exponential)
+
 
 @jax.tree_util.Partial
 @jax.jit

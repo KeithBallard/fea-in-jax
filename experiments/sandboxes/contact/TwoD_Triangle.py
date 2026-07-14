@@ -87,7 +87,7 @@ def run_2D_triangle(
 args = {
     'contact_params': ContactParams(
         self_adjacency_block    = 2,
-        contact_stiffness_model = contact_stiffness_exponential,
+        contact_stiffness_model = __contact_stiffness_exponential,
         D_stiffness_to_E_ratio  = 100,
         contact_search_radius   = 1.5,
         M_to_D_ratio            = 1.1,
