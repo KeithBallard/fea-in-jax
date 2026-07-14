@@ -538,14 +538,25 @@ def plot_solver_info(opts: SolverOptions, info: SolverResultInfo):
     """
     import matplotlib.pyplot as plt
 
-    x_iter = jnp.linspace(
-        0,
-        info.cumulative_linear_iterations,
-        info.cumulative_linear_iterations + 1,
-        dtype=jnp.int32,
+    cum_iters = np.concat(
+        [
+            [0],
+            np.cumsum(np.asarray(info.linear_iterations_per_nonlinear_iteration)),
+        ]
     )
+    x_iter = np.hstack(
+        [
+            np.linspace(
+                cum_iters[i],
+                cum_iters[i + 1],
+                int(info.linear_iterations_per_nonlinear_iteration[i]) + 1,
+            )
+            for i in range(info.nonlinear_iterations)
+        ]
+    )
+
     y_r_norm = info.cumulative_residual_norm_history[
-        0 : info.cumulative_linear_iterations + 1
+        0 : info.cumulative_linear_iterations + info.nonlinear_iterations
     ]
 
     plt.plot(x_iter, y_r_norm)
@@ -554,12 +565,6 @@ def plot_solver_info(opts: SolverOptions, info: SolverResultInfo):
     plt.ylabel("|R|")
     plt.yscale("log")
 
-    cum_iters = np.concatenate(
-        [
-            [0],
-            np.cumsum(np.asarray(info.linear_iterations_per_nonlinear_iteration)),
-        ]
-    )
     for i in range(info.nonlinear_iterations):
         plt.axvline(
             x=cum_iters[i],

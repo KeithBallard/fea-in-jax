@@ -100,6 +100,7 @@ def hyperelasticity_residual(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     material_params_qm: jnp.ndarray,
+    internal_state_qi: jnp.ndarray,
     constitutive_model: Callable,
 ):
     """
@@ -139,4 +140,4 @@ def hyperelasticity_residual(
     det_JxW_q = jnp.einsum("q,q->q", det_J_q, W_q)
     R_nd = jnp.einsum("qnd,q->nd", grad_dphi_dx_stress_qnd, det_JxW_q)
 
-    return R_nd
+    return R_nd, internal_state_qi

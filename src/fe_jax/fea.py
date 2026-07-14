@@ -112,7 +112,7 @@ def _calculate_jacobian_batch_element_kernel(
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state_qi):
-        u_nd = u_t.reshape(N, D)
+        u_nd = u_t.reshape(N, U)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
@@ -153,11 +153,11 @@ def _calculate_jacobian_coo_terms_batch(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     dof_map_enu: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -185,7 +185,7 @@ def calculate_jacobian_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     precomputed_jacobian_nnz: int,
 ):
 
@@ -275,7 +275,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
     # Note: captures dphi_dxi_qnp, W_q, and constitutive_model
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state):
-        u_nd = u_t.reshape(N, D)
+        u_nd = u_t.reshape(N, U)
         R_nu = element_residual_func(
             u_nd=u_nd,
             x_nd=x_nd,
@@ -324,11 +324,11 @@ def _calculate_jacobian_diag_coo_terms_batch(
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
     dof_map_enu: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -353,7 +353,7 @@ def calculate_jacobian_diag_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -401,7 +401,7 @@ def _calculate_residual_wo_constraints_batch(
     x_end: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    assembly_map: jsparse.BCSR,
+    assembly_map: AssemblyMap,
     u_f: jnp.ndarray,
 ):
     # Extract shape constants needed for args
@@ -413,7 +413,7 @@ def _calculate_residual_wo_constraints_batch(
         N == dphi_dxi_qnp.shape[1]
     ), f"Number of nodes per element {N} must match the number of basis functions {dphi_dxi_qnp.shape[1]}."
 
-    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
+    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f)
 
     # A vmap'ed version of the element residual function that maps over the elements
     R_vmap = jax.vmap(
@@ -449,7 +449,7 @@ def _calculate_residual_wo_constraints_batch(
 def calculate_residual_wo_constraints(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     u_f: jnp.ndarray,
 ):
     """
@@ -531,7 +531,7 @@ def calculate_residual_w_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     constraints: ConstraintSystem,
     f_ext,
 ):
@@ -585,7 +585,7 @@ def __extract_first_element(func, u_f):
 def solve_nonlinear_step(
     element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
-    assembly_map_b: list[jsparse.BCSR],
+    assembly_map_b: list[AssemblyMap],
     jacobian_nnz: int,
     u_0_g: jnp.ndarray,
     constraints: ConstraintSystem,
