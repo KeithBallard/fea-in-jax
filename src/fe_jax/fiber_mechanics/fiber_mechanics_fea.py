@@ -123,14 +123,6 @@ def solve_fiber_mechanics_bvp(
 
     contact_fe_type = fe_type
 
-
-    # Build the residual callable once so we do not recreate the same Partial
-    # on every pseudo-time step.
-    element_residual_func = jax.tree_util.Partial(
-        linear_truss_residual,
-        contact_stiffness_model=contact_options.contact_stiffness_model,
-    )
-
     self_adjacency_block = contact_options.self_adjacency_block
     contact_search_radius = contact_options.contact_search_radius
     contact_params = jnp.array([
@@ -214,12 +206,7 @@ def solve_fiber_mechanics_bvp(
         )
 
         u_truss, residual_truss, element_batches_truss = solve_bvp(
-            # element_residual_func=linear_truss_residual,
-            element_residual_func=element_residual_func,
-            # element_residual_func=jax.tree_util.Partial(
-            #     linear_truss_residual,
-            #     contact_stiffness_model = contact_options.contact_stiffness_model,
-            # ),
+            element_residual_func=linear_truss_residual,
             vertices_vd=vertices_vd,
             u_0_g=None if i==0 else u_truss,
             element_batches=element_batches,

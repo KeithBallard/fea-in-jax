@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import Callable
 
 from .utils import (
     rank2_tensor_to_voigt,
@@ -194,7 +193,7 @@ def linear_elasticity_residual(
     W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
-    constitutive_model: Callable,
+    constitutive_model: jax.tree_util.Partial,
 ):
     """
     Residual function that computes the residual for the weak form corresponding to linear
@@ -296,7 +295,8 @@ def elastic_truss(
 
     return stress_dd, jnp.array([])  # no internal state
 
-# @jax.jit
+@jax.tree_util.Partial
+@jax.jit
 def contact_stiffness_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
@@ -306,7 +306,8 @@ def contact_stiffness_linear(
     E = jnp.where(d<radius,E_max - E_max/radius*d,0)
     return E
 
-# @jax.jit
+@jax.tree_util.Partial
+@jax.jit
 def contact_stiffness_constant(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
@@ -314,7 +315,8 @@ def contact_stiffness_constant(
     E_max = material_params_m[..., 0]
     return E_max
 
-# @jax.jit
+@jax.tree_util.Partial
+@jax.jit
 def contact_stiffness_piecewise_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
@@ -335,7 +337,8 @@ def contact_stiffness_piecewise_linear(
         jnp.where(d<s_r,seg2, 0.0),
     )
 
-# @jax.jit
+@jax.tree_util.Partial
+@jax.jit
 def contact_stiffness_exponential(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
@@ -349,14 +352,14 @@ def contact_stiffness_exponential(
     r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
     return alpha*jnp.exp(-r*d)
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("contact_stiffness_model",))
+@jax.tree_util.Partial
+@jax.jit
 def elastic_contact_truss(
     eps_dd: jnp.ndarray,
     material_params_m: jnp.ndarray,
     x_nd: jnp.ndarray,
     u_nd: jnp.ndarray,
-    contact_stiffness_model: Callable,
+    contact_stiffness_model: jax.tree_util.Partial,
 ):
     """
     A constitive relation for contact elements which is basically
@@ -402,8 +405,8 @@ def elastic_contact_truss(
 
     return stress_dd, jnp.array([])  # no internal state
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("constitutive_model","contact_stiffness_model",))
+@jax.tree_util.Partial
+@jax.jit
 def linear_truss_residual(
     u_nd: jnp.ndarray,
     x_nd: jnp.ndarray,
@@ -411,8 +414,8 @@ def linear_truss_residual(
     W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
-    constitutive_model: Callable,
-    contact_stiffness_model: Callable | None = None,
+    constitutive_model: jax.tree_util.Partial,
+    contact_stiffness_model: jax.tree_util.Partial | None = None,
 ):
     """
     Residual function that computes the residual for the weak form corresponding to linear
@@ -484,6 +487,7 @@ def linear_truss_residual(
 
     return R_nd, new_internal_state_qi
 
+
 def stiff_matrix(material_params_m: jnp.ndarray, x_nd: jnp.ndarray):
     """
     Compute the stiffness matrix directly from John Whitcomb's notes.
@@ -541,7 +545,7 @@ def stiffness_residual(
     W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
-    constitutive_model: Callable,
+    constitutive_model: jax.tree_util.Partial,
     # u_nd: jnp.ndarray,
     # x_nd: jnp.ndarray,
     # material_params: jnp.ndarray,

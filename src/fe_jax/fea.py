@@ -73,8 +73,7 @@ def _calculate_jacobian_unique_nnz(
     return jnp.sum(uniq_mask)
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("element_residual_func","constitutive_model"))
+@jax.jit
 def _calculate_jacobian_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -149,8 +148,7 @@ def _calculate_jacobian_batch_element_kernel(
     return J_ett
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("element_residual_func","constitutive_model"))
+@jax.jit
 def _calculate_jacobian_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -188,7 +186,7 @@ def _calculate_jacobian_coo_terms_batch(
     return (J_ett, rows, cols)
 
 
-@partial(jax.jit, static_argnames=("element_residual_func","debug_info","precomputed_jacobian_nnz"))
+@partial(jax.jit, static_argnames=("debug_info", "precomputed_jacobian_nnz"))
 def calculate_jacobian_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
@@ -255,8 +253,7 @@ def calculate_jacobian_wo_constraints(
     return J_sparse_ff
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("element_residual_func","constitutive_model"))
+@jax.jit
 def _calculate_jacobian_diag_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -339,8 +336,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
     return diag_J_et
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("element_residual_func","constitutive_model"))
+@jax.jit
 def _calculate_jacobian_diag_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -418,8 +414,7 @@ def calculate_jacobian_diag_wo_constraints(
     return diag_J_f
 
 
-# @jax.jit
-@partial(jax.jit, static_argnames=("element_residual_func","constitutive_model"))
+@jax.jit
 def _calculate_residual_wo_constraints_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -1122,7 +1117,7 @@ def solve_bvp(
     inner_solve = jax.jit(
         solve_nonlinear_step,
         # donate_argnames="internal_state_beqi",
-        static_argnames=["element_residual_func","solver_options", "jacobian_nnz"],
+        static_argnames=["solver_options", "jacobian_nnz"],
     )
 
     # capture memory usage before

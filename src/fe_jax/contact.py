@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import jax
 from jax import numpy as jnp
 import numpy as np
-from typing import Callable
 import scipy as sp
 
 from fe_jax.basis_quadrature import FiniteElementType
@@ -10,7 +9,7 @@ from fe_jax.basis_quadrature import FiniteElementType
 @dataclass
 class ContactParams:
     self_adjacency_block: int
-    contact_stiffness_model: Callable
+    contact_stiffness_model: jax.tree_util.Partial
     D_stiffness_to_E_ratio: float # ratio between stiffness at the diameter distance to the stiffness of the truss elements (D/E) 
     contact_search_radius: float # distance to first identify contacts, but stiffness should be very low  
     M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
@@ -23,8 +22,8 @@ class ContactPreprocessConfig:
     self_adjacency_block: int
     material_params: jnp.ndarray
     fe_type: FiniteElementType
-    constitutive_model: Callable
-    contact_pair_generator: Callable
+    constitutive_model: jax.tree_util.Partial
+    contact_pair_generator: jax.tree_util.Partial
 
 def _validate_point_cloud(
     points: jnp.ndarray,
@@ -259,8 +258,8 @@ def contact_batch(
     point_fiber_ids: jnp.ndarray,
     adjacency_block: int,
     radius: float,
-    distinct_fiber_fn: Callable = distinct_fiber_node2node,
-    self_fiber_fn: Callable = self_fiber_node2node,
+    distinct_fiber_fn: jax.tree_util.Partial = distinct_fiber_node2node,
+    self_fiber_fn: jax.tree_util.Partial = self_fiber_node2node,
 ) -> np.ndarray:
     """
     Find node-node contact candidates from global point and fiber-id arrays.
@@ -281,11 +280,11 @@ def contact_batch(
     radius : float
         Contact threshold. A node pair is considered in contact if the
         distance between them is <= radius.
-    distinct_fiber_fn : Callable
+    distinct_fiber_fn : jax.tree_util.Partial
         Function used to detect contact between two different fibers.
         It must accept ``points``, ``point_fiber_ids``, ``capacity``, and
         ``radius``, and return ``(contacts, n_valid, overflowed)``.
-    self_fiber_fn : Callable
+    self_fiber_fn : jax.tree_util.Partial
         Function used to detect self-contact within a single fiber.
         It must accept ``points``, ``point_fiber_ids``, ``capacity``, ``radius``,
         and ``adjacency_block``, and return ``(contacts, n_valid, overflowed)``.
