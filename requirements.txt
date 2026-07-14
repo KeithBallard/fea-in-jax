@@ -1,21 +1,21 @@
-numpy
-numba
-meshio
+numpy==2.4.6
+numba==0.65.1
+meshio==5.3.5
 # CPU-only version
-#jax
+jax==0.10.2
 # GPU version with CUDA 12
-#jax[cuda12]
-#cupy-cuda12x
+#jax[cuda12]==0.10.2
+#cupy-cuda12x==14.1.1
 # GPU version with CUDA 13 (recommended)
-#jax[cuda13]
-#cupy-cuda13x
-jaxopt
-libigl
-matplotlib
-mpi4py
-fenics-basix
-psutil
-scipy
-flax
+#jax[cuda13]==0.10.2
+#cupy-cuda13x==14.1.1
+jaxopt==0.8.5
+libigl==2.6.2
+matplotlib==3.11.0
+mpi4py==4.1.2
+fenics-basix==0.11.0
+psutil==7.2.2
+scipy==1.18.0
+flax==0.12.7
 # Intel MKL Pardiso solver (optional)
 #pypardiso
