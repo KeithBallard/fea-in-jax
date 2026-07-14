@@ -67,41 +67,25 @@ def reorder_cell_basix(mesh, point_ids):
         x = coords[:, 0]
         y = coords[:, 1]
 
-        # Rank y values to split bottom/top robustly
-        y_sorted = np.sort(y)
-        # Threshold between the 2nd and 3rd smallest y (middle split)
-        split_val = 0.5 * (y_sorted[1] + y_sorted[2])
+        # Calculate centroid
+        cx = np.mean(coords[:, 0])
+        cy = np.mean(coords[:, 1])
 
-        # Handle near-ties: if the gap is tiny, nudge the split
-        if abs(y_sorted[2] - y_sorted[1]) < 1e-7:
-            split_val += tol
+        # Sort points counter-clockwise around centroid
+        angles = np.arctan2(coords[:, 1] - cy, coords[:, 0] - cx)
+        ccw_order = np.argsort(angles)
 
-        bottom_mask = y <= split_val
-        top_mask = ~bottom_mask
+        # Find the "bottom-left" node to start the ordering
+        # Using lexsort on (x, y) to prioritize smallest y, then smallest x
+        y_ccw = coords[ccw_order, 1]
+        x_ccw = coords[ccw_order, 0]
+        bl_idx = np.lexsort((x_ccw, y_ccw))[0]
 
-        bottom_idx = np.where(bottom_mask)[0]
-        top_idx = np.where(top_mask)[0]
+        # Shift ccw_order so that the bottom-left node is first
+        ccw_order = np.roll(ccw_order, -bl_idx)
 
-        # Within each half, sort by x ascending
-        bl_br = bottom_idx[np.argsort(x[bottom_idx])]
-        tl_tr = top_idx[np.argsort(x[top_idx])]
-
-        # Handle near-ties: if the gap is tiny, nudge the split
-        if abs(x[top_idx[0]] - x[top_idx[1]]) < 1e-7:
-            # vertical RHS of bottom 
-            if x[top_idx[0]]> x[bottom_idx[0]]:
-                tl_tr = top_idx[np.argsort(y[top_idx])]
-                tl_tr = tl_tr[::-1]
-            # vertical LHS of bottom
-            elif x[top_idx[0]]< x[bottom_idx[0]]:
-                tl_tr = top_idx[np.argsort(y[top_idx])]
-        # top is float        
-        elif abs(y[top_idx[0]] - y[top_idx[1]]) < 1e-7 and abs(x[bottom_idx[0]] - x[bottom_idx[1]]) < 1e-7:
-            if x[top_idx[0]]> x[bottom_idx[0]]:
-                bl_br = bl_br[::-1]
-
-        order = np.concatenate([bl_br, tl_tr])
-        # order = np.array([bl_br[0], tl_tr[0],bl_br[1], tl_tr[1]])
+        # Map to Basix Quad4 ordering: [0, 1, 3, 2] in CCW perimeter
+        order = ccw_order[[0, 1, 3, 2]]
 
     else:
         raise ValueError(f"Unsupported element with {len(point_ids)} nodes")

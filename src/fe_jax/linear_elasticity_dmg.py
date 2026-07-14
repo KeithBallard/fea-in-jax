@@ -37,7 +37,7 @@ def update_one_q(eps_dd, state_i, mat_param_m, C_ss):
 
         d_stress_vogit = (C_ss + delta_C) @ d_eps_vogit
         stress_vogit = prev_stress + d_stress_vogit
-        stress_dmg = (1 - d) * stress_vogit
+        stress_dmg = (1 - update_d) * stress_vogit
         stress_dd = rank2_voigt_to_tensor(stress_dmg)
 
         # === Update state ===
@@ -230,11 +230,11 @@ def elastic_orthotropic(
 
     prev_eps    = internal_state_qi[:,:3]
     eps_vogit   = rank2_tensor_to_voigt(eps_qdd)
-    d_eps_vogit = eps_vogit - prev_eps
+    # d_eps_vogit = eps_vogit - prev_eps
     
-    d_stress_vogit  = jnp.einsum("qsi,qi->qs", C_qss, d_eps_vogit)
-    prev_stress  = internal_state_qi[:,3:6]
-    stress_vogit = prev_stress + d_stress_vogit
+    stress_vogit  = jnp.einsum("qsi,qi->qs", C_qss, eps_vogit)
+    # prev_stress  = internal_state_qi[:,3:6]
+    # stress_vogit = prev_stress + d_stress_vogit
     stress_qdd   = rank2_voigt_to_tensor(stress_vogit)
 
     update_internal_state_qi = internal_state_qi.at[:,0:3].set(eps_vogit)

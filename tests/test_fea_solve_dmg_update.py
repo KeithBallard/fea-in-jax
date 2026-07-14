@@ -1,24 +1,28 @@
 import meshio
 import numpy as np
 
-# import fea_traditional as test
+import fea_traditional as test
 from helper import *
 
 import os
 import pyvista as pv
 import time
-# jax.config.update("jax_enable_x64", True)   #   True or comment out both works. False cause incorrect result
+jax.config.update("jax_enable_x64", True)   #   True or comment out both works. False cause incorrect result
 from fe_jax.post_pred import *
 from fe_jax.write_vtk import *
+from fe_jax.linear_elasticity_dmg import *
+from fe_jax.fea import convert_boundary_conditions
 # jax.config.update("jax_disable_jit", True)
 # jax.config.update("jax_log_compiles", True)
  
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = 4
+    num_fib = 49
     args['t_total']  = 500
-    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib"
+    # args['dir_path'] = "debug"
+    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_CG"
+    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_dense"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -225,46 +229,88 @@ def test_fea_solve_dmg():
         )
     ]
 
-    u_prev = jnp.array(jnp.reshape(vtk_mesh['displacement'][:,:2],-1), dtype=jnp.float64)
-    # u_prev = None
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(element_residual_func=linear_elasticity_residual,
+            vertices_vd=points,
+            element_batches=element_batches,
+            boundary_conditions=dirichlet_bcs)
+    
+    solve_nonlinear_step_jit = jax.jit(
+        solve_nonlinear_quasi_step,
+        # donate_argnames="internal_state_beqi",
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
+
+    n_total_dofs = points.shape[0] * ebc.U[0]
+    u_prev = jnp.zeros(shape=(n_total_dofs,))
+
+    # 1. Create an array of strains for every time step: [strain*1, strain*2, ..., strain*t_total]
+    steps = jnp.arange(1, args['t_total'] + 1, dtype=jnp.float64)
+    strains = strain_increment * steps
+    
+    # 2. Pre-allocate the `g` vector for ALL time steps. 
+    # Shape will be: (t_total, size_of_dirichlet_values)
+    all_g = jnp.tile(jnp.array(dirichlet_values, dtype=jnp.float64), (args['t_total'], 1))
+    
+    # 3. Apply the strain update for all time steps simultaneously.
+    # strains[:, None] broadcasts the strain across all the nodes in the slice.
+    all_g = all_g.at[:, n_LHS:n_vals].set(strains[:, None])
 
     print('Start Deformation Loop')
     for i in range(1,args['t_total']+1):
-        dirichlet_values[n_LHS:n_vals] = strain_increment * i
-        for bc in range(len(dirichlet_bcs)):
-            dirichlet_bcs[bc].value = dirichlet_values[bc]
+        # dirichlet_values[n_LHS:n_vals] = strain_increment * i
+        # Update the constraint system's g vector directly to avoid slow CPU overhead 
+        # of reconstructing the boundary conditions every iteration.
 
+        constraint_system = constraint_system.replace(g=all_g[i - 1])
+        
         # Solve the boundary value problem
-        u, residual, element_batches = solve_bvp(
-            element_residual_func=linear_elasticity_residual,
-            vertices_vd=points,
-            element_batches=element_batches,
+        u, ebc, ISV_be, residual, relative_error, info = solve_nonlinear_step_jit(
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
+            jacobian_nnz=jacobian_nnz,
             u_0_g=u_prev,
-            boundary_conditions=dirichlet_bcs,
+            constraints=constraint_system,
             solver_options=SolverOptions(
-                # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-                # linear_precond_type=PreconditionerType.JACOBI,
-                # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-                linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+                linear_precond_type=PreconditionerType.JACOBI,
+                # linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,#_W_INFO,
+                linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
+                # linear_solve_type=LinearSolverType.SPSOLVE_CUPY, 
             ),
+            f_ext=f_ext,
         )
-
         u_prev = u
 
+        # Update the internal state variables in the element batch collection for the next time step
+        # ebc = ebc.replace(internal_state=jnp.hstack([isv.ravel() for isv in internal_state_beqi]))
+        # ebc = ebc.replace(internal_state=flat_internal_state)
         print("Time step =", i)
         # Update displacements to be 3D for VTK on GPU, then transfer once to host
-        # u_full = np.array(jnp.zeros((points.shape[0], 3)).at[:, :U].set(u.reshape(-1, U)))
 
-        # # write and save to vtk
-        vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+        # write and save to vtk
+        vtk_mesh = write2VTK_ISV(args,mesh,u,ISV_be,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
         vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
+    return n_total_dofs, args['out_dir']
 
 if __name__ == "__main__":
     t_start = time.time()
 
-    # with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
-    test_fea_solve_dmg()
+    with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
+        n_total_dofs, out_dir = test_fea_solve_dmg()
 
     t_end = time.time()
-    print("Time used:", t_end - t_start)
+    
+    total_time = t_end - t_start
+    print("Time used:", total_time)
+    
+    with open(os.path.join(out_dir, "statistics.txt"), "w") as f:
+        f.write(f"Number of dofs: {n_total_dofs}\n")
+        f.write(f"Total Solver time: {total_time} seconds\n")
