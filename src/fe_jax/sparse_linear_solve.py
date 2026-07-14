@@ -347,6 +347,7 @@ def linear_solve(
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
+                maxiter=solver_options.linear_max_iter,
             )
 
         case LinearSolverType.CG_JAX_SCIPY_W_INFO:

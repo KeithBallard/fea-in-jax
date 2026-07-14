@@ -27,3 +27,4 @@ jax-trace_new
 PIGFEM*
 .env
 *.bp
+*adios*
