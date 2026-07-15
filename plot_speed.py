@@ -3,7 +3,7 @@ import os
 
 
 
-Fibers = [1, 2, 4, 9, 16, 23,36,46]
+Fibers = [1, 2, 4, 9, 16, 23,36,49]
 
 
 def get_stats(filepath):
