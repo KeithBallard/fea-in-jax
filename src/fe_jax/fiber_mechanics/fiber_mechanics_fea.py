@@ -149,7 +149,7 @@ def solve_fiber_mechanics_bvp(
                 fe_type=contact_fe_type,
                 n_dofs_per_basis=n_dofs_per_basis,
                 connectivity_en=contact_cells,
-                constitutive_model=elastic_contact_truss,
+                constitutive_model=contact_options.contact_constitutive_model,
                 material_params=contact_params,
             )
         ]

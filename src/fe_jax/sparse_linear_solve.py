@@ -429,6 +429,7 @@ def linear_solve(
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
+                maxiter = solver_options.linear_max_iter,
             )
 
         case LinearSolverType.BICGSTAB_JAX_SCIPY:
@@ -439,6 +440,7 @@ def linear_solve(
                 M=preconditioner,
                 tol=solver_options.linear_relative_tol,
                 atol=solver_options.linear_absolute_tol,
+                maxiter = solver_options.linear_max_iter,
             )
 
         ##########################################################################################
