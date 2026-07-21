@@ -6,7 +6,7 @@
 *FIBERS, num=2
 1,	<bundle-1.fib>
 #Fiber	#Material	#Diameter
-19	1	0.200000000
+19	0	0.200000000
 1	67
 2	67
 3	67

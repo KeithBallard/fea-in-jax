@@ -140,11 +140,13 @@ def run_threeFiberTow(
     XN: list[tuple],
     NeumannForce,
     contact_params,
+    solver_options: SolverOptions,
     filename_base = None,
     pre_strain: float | None = None,
     x_shift: np.ndarray | None = None,
     y_shift: np.ndarray | None = None,
     z_shift: np.ndarray | None = None,
+    debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
 ):
     """ """
     fabric, bcs = make_bundle(
@@ -156,6 +158,19 @@ def run_threeFiberTow(
         y_shift = y_shift,
         z_shift = z_shift,
     )
+    if not isinstance(debug_info, NullDebugInfo):
+        debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
+        debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
+        debug_info.file.attrs['contact_search_radius']          = contact_params.contact_search_radius
+        debug_info.file.attrs['contact_M_to_D_ratio']           = contact_params.M_to_D_ratio
+        debug_info.file.attrs['contact_M_stiffness_to_E_ratio'] = contact_params.M_stiffness_to_E_ratio
+        debug_info.file.attrs['contact_self_adjacency_block']   = contact_params.self_adjacency_block
+        # debug_info.file.attrs['external_load_Fx_Fy']            = (0,-force)
+        debug_info.file.attrs['solver_linear_solve_type']       = solver_options.linear_solve_type.name
+        debug_info.file.attrs['solver_nonlinear_max_iter']      = solver_options.nonlinear_max_iter
+        debug_info.file.attrs['solver_linear_max_iter']         = solver_options.linear_max_iter
+        debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
+        debug_info.file.attrs['points']                         = fabric.points
     dyn_bcs = []
     f_n = lambda z,nf : nf*(np.exp(-(4*z)**2) - np.exp(-16))/(1-np.exp(-16))
     nf_fiber = 2
@@ -193,27 +208,21 @@ def run_threeFiberTow(
         fabric=fabric,
         materials=[VTMSFiberMaterial(id=0, E=E, A=A)],
         boundary_conditions=dyn_bcs,
-        solver_options=SolverOptions(
-            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-            linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
-            # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
-            # linear_precond_type=PreconditionerType.JACOBI,
-            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=100,
-            linear_max_iter=200,
-            # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
-            # max_linear_displacement=0.01,
-        ),
+        solver_options=solver_options,
         contact_options=contact_params,
-        plot_convergence=True,
+        plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
         pre_strain=pre_strain,
+        debug_info=debug_info,
     )
     u = u.reshape((-1,3))
 
     D_D = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_d = D_D[D_D.nonzero()].min()
+    if not isinstance(debug_info, NullDebugInfo):
+        print('close debug HDF5 file')
+        debug_info.file.close()
     return u,fabric,dyn_bcs
 
 # u,f = run_threeFiberTow(
@@ -239,7 +248,26 @@ args = {
         M_to_D_ratio            = 1.25,
         M_stiffness_to_E_ratio  = 1.0/100.0
     ),
+    'solver_options': SolverOptions(
+        # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
+        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
+        # linear_precond_type=PreconditionerType.JACOBI,
+        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        nonlinear_max_iter=100,
+        linear_max_iter=200,
+        # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+        # max_linear_displacement=0.01,
+    ),
 }
+# debug_info=make_debug_info(
+#     flags = [
+#         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+#         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+#         (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+#     ],
+#     filename = 'contact/twoD_triangle.h5'
+# )
 
 # args['contact_stiffness_model'] = contact_stiffness_linear
 # ul,fl,dl = run_threeFiberTow(**args)

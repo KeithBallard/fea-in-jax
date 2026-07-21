@@ -27,12 +27,14 @@ class VTMSBundle:
     def get_material_id(self, bundle_i: int) -> int:
         # Exists only for compatibility to interop with VTMSFabric
         assert bundle_i == 0
-        return self.material_id[bundle_i]
+        return self.material_id
+        # return self.material_id[bundle_i]
 
     def get_diameter(self, bundle_i: int) -> float:
         # Exists only for compatibility to interop with VTMSFabric
         assert bundle_i == 0
-        return self.diameter[bundle_i]
+        return self.diameter
+        # return self.diameter[bundle_i]
 
     def get_n_fibers_in_bundle(self, bundle_i: int) -> int:
         # Exists only for compatibility to interop with VTMSFabric
@@ -45,6 +47,18 @@ class VTMSBundle:
         s = slice(self.fiber_offsets[fiber_i], self.fiber_offsets[fiber_i + 1])
         return self.points[s, :]
 
+    def get_fiber_n_elements(self, bundle_i: int, fiber_i: int):
+        return (
+            self.fiber_offsets[fiber_i + 1]
+            - self.fiber_offsets[fiber_i]
+            - 1
+        )
+
+    def get_n_elements(self):
+        n_elements = 0
+        for i in range(self.fiber_offsets.shape[0] - 1):
+            n_elements += self.fiber_offsets[i + 1] - self.fiber_offsets[i] - 1
+        return n_elements
 
 @dataclass
 class VTMSFabric:

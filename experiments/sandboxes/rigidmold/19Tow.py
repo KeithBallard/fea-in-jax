@@ -105,13 +105,13 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],diameter
     )
     return fabric,bcs
 
-def make_cyl_mold(yz_center,R,L,dx):
+def make_cyl_mold(xy_center,R,L,dx):
     d_theta = 2*np.arcsin(dx/(2*R))
     theta = np.linspace(0,2*np.pi,int(2*np.pi/d_theta))
-    X = np.linspace(-L/2,L/2,int(L/dx))
-    Y = yz_center[0] + R*np.cos(theta[:-1])
-    Z = yz_center[1] + R*np.sin(theta[:-1])
-    P = np.vstack([np.vstack([np.full((Y.shape[0],),x),Y,Z]).T for x in X])
+    X = xy_center[0] + R*np.cos(theta[:-1])
+    Y = xy_center[1] + R*np.sin(theta[:-1])
+    Z = np.linspace(-L/2,L/2,int(L/dx))
+    P = np.vstack([np.vstack([X,Y,np.full((Y.shape[0],),z)]).T for z in Z])
 
     kd_tree = sp.spatial.cKDTree(P)
     C = np.array(list(kd_tree.query_pairs(r=1.1*dx)))
@@ -126,20 +126,22 @@ def make_cyl_mold(yz_center,R,L,dx):
     return P,C
 
 def run_mold(
-    n_elements: list[int],
-    X0: list[tuple],
-    XN: list[tuple],
+    fabric: VTMSBundle | VTMSFabric,
     contact_params: ContactParams,
-    diameter:float,
     pseudoT:int,
     dir_step:float,
     filename_base =None,
     rigid_mold_params: list | None = None,
+    pre_strain: float | None = None,
 ):
     """ """
-    fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,diameter=diameter)
+    # fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,diameter=diameter)
     fabric_n = fabric.points.shape[0]
     rigid_mold_id = np.sum([fabric.get_n_fibers_in_bundle(i) for i in range(fabric.get_n_bundles())])+1
+
+    bcs = [DirichletBC(index = i, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[:-1] for c in range(3)]
+    bcs += [DirichletBC(index = i-1, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[1:] for c in range(3)]
+
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_dist = d[d.nonzero()].min()
@@ -166,9 +168,9 @@ def run_mold(
     # return fabric,rigid_mold,dyn_bcs
     print('dynamic boundary conditions generated!')
 
-    E = 1e9
-    A = (fabric.diameters[0]/2)**2*np.pi
-    print(f"{min(min_dist/2,fabric.diameters[0]/2)}")
+    E = 0.5
+    A = (fabric.diameter/2)**2*np.pi
+    # print(f"{min(min_dist/2,fabric.diameters[0]/2)}")
     u, _, _ = solve_fiber_mechanics_bvp(
         fabric=fabric,
         rigid_mold=rigid_mold,
@@ -179,7 +181,7 @@ def run_mold(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=20,
+            nonlinear_max_iter=600,
             linear_max_iter=500,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -187,107 +189,26 @@ def run_mold(
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
         blow_up_threshold=1e3,
+        pre_strain=pre_strain,
     )
     u = u.reshape((-1,3))
     # fabric.points = fabric.points + u[:fabric_n,:]
 
     return u,fabric,rigid_mold
 
-# u,f = run_threeFiberTow(
-#     n_elements=[10, 10, 10],
-#     X0=[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
-#     XN=[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-#     contact_search_radius=0.25,
-#     NeumannForce = 1E5
-# )
 args = {
-    'n_elements':[40]*3,
-    'X0':[[-0.05, 0, -1], [0.05, 0, -1], [0, np.sqrt(3) / 2 * 0.1, -1]],
-    'XN':[[-0.05, 0, 1],  [0.05, 0, 1], [0, np.sqrt(3) / 2 * 0.1, 1]],
-    'filename_base': 'rigid_mold/pypardiso_NEW',
-    'pseudoT': 5,
-    'diameter': 0.1,
-    'rigid_mold_params': ((-0.5,0),0.25,1.0,0.025),
-    'dir_step':0.005,
+    'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
+    'filename_base': 'rigid_mold/EZ/19Tow_D0p02_M0p001_MDratio1p05_piecewise_',
+    'pseudoT': 30,
+    'rigid_mold_params': ((5.,0.86),0.4,4.0,0.2),
+    'dir_step':-0.02,
+    'pre_strain':-0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_stiffness_model = __contact_stiffness_exponential,
-        D_stiffness_to_E_ratio  = 0.25,
-        contact_search_radius   = 0.4,
-        M_to_D_ratio            = 1.25,
-        M_stiffness_to_E_ratio  = 1.0/100.0
+        contact_constitutive_model = elastic_contact_truss_constant,
+        D_stiffness_to_E_ratio  = 1.0,
+        contact_search_radius   = 0.3,
+        M_to_D_ratio            = 1.025,
+        M_stiffness_to_E_ratio  = 0.001
     ),
 }
-
-args31 = {
-    'n_elements':[80]*31,
-    'X0':[[i[0],i[1],2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
-    'XN':[[i[0],i[1],-2] for i in build_custom_hex([2,5,6,5,6,5,2],0.1)],
-    'filename_base': 'ThirtyOneFiberTow/ThirtyOneFiberTow_LessStiffContact',
-    'pseudoT': 100,
-    'diameter': 0.1,
-    'rigid_mold_params': ((0.75, 0), 0.3, 4.0, 0.025),
-    'dir_step':-0.005,
-    'contact_params': ContactParams(
-        self_adjacency_block    = 10000,
-        contact_stiffness_model = __contact_stiffness_exponential,
-        D_stiffness_to_E_ratio  = 0.25,
-        contact_search_radius   = 0.2,
-        M_to_D_ratio            = 1.25,
-        M_stiffness_to_E_ratio  = 1.0/100.0
-    ),
-}
-# args['contact_stiffness_model'] = contact_stiffness_linear
-# ul,fl,dl = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
-# up,fp,dp = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_exponential
-# ue,fe,de = run_threeFiberTow(**args)
-
-
-def get_min(fabric,i,j):
-    fi = fabric.get_fiber_points(0,i)
-    fj = fabric.get_fiber_points(0,j)
-    D = np.linalg.norm(fi[None,:,:] - fj[:,None,:],axis=-1)
-    return D[D.nonzero()].min()
-
-def get_mins(fabric):
-    n = fe.get_n_fibers_in_bundle(0)
-    M = []
-    for i in range(n):
-        for j in range(i+1,n):
-            print(f"({i},{j}) - {get_min(fabric,i,j)}")
-            M.append(get_min(fabric,i,j))
-    return np.array(M).min()
-
-# get_mins(fl)
-# get_mins(fp)
-# get_mins(fe)
-
-
-# f,_ = make_bundle(**{k: args[k] for k in ['n_elements','X0','XN']})
-# P,C = make_cyl_mold((0,0),0.25,0.4,0.025)
-# r = RigidMold(points = P, connections = C)
-def contact_test_case():
-    H = build_custom_hex([2,5,6,5,6,5,2],0.1)
-    fabric,_ = make_bundle(
-        n_elements=[80]*31,
-        X0 = [[i[0],i[1],2] for i in H],
-        XN = [[i[0],i[1],-2] for i in H],
-        diameter=0.1
-    )
-    point_fiber_ids = np.concatenate(
-        [
-            np.full((fabric.fiber_offsets[i+1]-fabric.fiber_offsets[i],), i)
-            for i in range(fabric.fiber_offsets.shape[0] - 1)
-        ]
-    )
-    mold_points,mold_connections = make_cyl_mold(*((-0.65, 0), 0.3, 4.0, 0.025))
-    mold = RigidMold(
-        points = mold_points,
-        point_ids= np.full((mold_points.shape[0],), point_fiber_ids.max()+1),
-        connections = mold_connections,
-    )
-    points = np.vstack([fabric.points,mold.points])
-    ids = np.concatenate([point_fiber_ids,mold.point_ids])
-    return fabric, mold, points, ids

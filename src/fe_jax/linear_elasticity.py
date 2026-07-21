@@ -385,13 +385,13 @@ def __elastic_contact_truss_kernel(
 
     P_dd = jnp.outer(l_d,l_d)
     # eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    L_ref = jnp.maximum(material_params_m[..., 1],jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
-    L_ref = jnp.maximum(0.1,jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
+    L_ref = jnp.maximum(material_params_m[..., 4],jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
+    # L_ref = jnp.maximum(0.1,jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
     # L_ref = 1.01
     # eps_a = (L_ref - jnp.linalg.norm(dx_d))/L_ref
     # eps_a = jnp.maximum(0,L_ref - jnp.linalg.norm(dx_d))
-    eps_a = jnp.minimum(0,jnp.linalg.norm(dx_d) - L_ref)/L_ref #unilateral compression
-    # eps_a = (jnp.linalg.norm(dx_d) - L_ref)/L_ref # bilateral
+    # eps_a = jnp.minimum(0,jnp.linalg.norm(dx_d) - L_ref)/L_ref #unilateral compression
+    eps_a = (jnp.linalg.norm(dx_d) - L_ref)/L_ref # bilateral
 
     stress_dd = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*A*eps_a*P_dd
     # jax.debug.print(
