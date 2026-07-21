@@ -18,10 +18,10 @@ from fe_jax.fea import convert_boundary_conditions
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = 49
+    num_fib = 1
     args['t_total']  = 500
-    # args['dir_path'] = "debug"
-    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_CG"
+    args['dir_path'] = "debug_update"
+    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_CG"
     # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_dense"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
@@ -279,9 +279,9 @@ def test_fea_solve_dmg():
             u_0_g=u_prev,
             constraints=constraint_system,
             solver_options=SolverOptions(
-                linear_precond_type=PreconditionerType.JACOBI,
-                # linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,#_W_INFO,
-                linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
+                # linear_precond_type=PreconditionerType.JACOBI,
+                linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+                # linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
                 # linear_solve_type=LinearSolverType.SPSOLVE_CUPY, 
             ),
             f_ext=f_ext,
@@ -303,8 +303,8 @@ def test_fea_solve_dmg():
 if __name__ == "__main__":
     t_start = time.time()
 
-    with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
-        n_total_dofs, out_dir = test_fea_solve_dmg()
+    # with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
+    n_total_dofs, out_dir = test_fea_solve_dmg()
 
     t_end = time.time()
     
