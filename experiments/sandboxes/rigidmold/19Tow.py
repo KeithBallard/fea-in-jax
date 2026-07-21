@@ -202,13 +202,13 @@ args = {
     'pseudoT': 30,
     'rigid_mold_params': ((5.,0.86),0.4,4.0,0.2),
     'dir_step':-0.02,
-    'pre_strain':-0.141373887,
+    # 'pre_strain':-0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_constitutive_model = elastic_contact_truss_constant,
+        contact_constitutive_model = elastic_contact_truss_piecewise_linear,
         D_stiffness_to_E_ratio  = 1.0,
         contact_search_radius   = 0.3,
-        M_to_D_ratio            = 1.025,
-        M_stiffness_to_E_ratio  = 0.001
+        M_to_D_ratio            = 1.05,
+        M_stiffness_to_E_ratio  = 0.00001
     ),
 }

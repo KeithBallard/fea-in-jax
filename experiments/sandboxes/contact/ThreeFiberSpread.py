@@ -242,11 +242,11 @@ args = {
     'filename_base': 'ThreeFiberSpread/full_length_force',
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_constitutive_model = elastic_contact_truss_constant,
-        D_stiffness_to_E_ratio  = 1,
-        contact_search_radius   = 0.2,
-        M_to_D_ratio            = 1.25,
-        M_stiffness_to_E_ratio  = 1.0/100.0
+        contact_constitutive_model = elastic_contact_truss_piecewise_linear,
+        D_stiffness_to_E_ratio  = 1.,
+        contact_search_radius   = 0.14,
+        M_to_D_ratio            = 1.05,
+        M_stiffness_to_E_ratio  = 0.001,
     ),
     'solver_options': SolverOptions(
         # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
