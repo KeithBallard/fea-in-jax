@@ -100,7 +100,36 @@ def solve_fiber_mechanics_bvp(
             for i in range(fabric.fiber_offsets.shape[0] - 1)
         ]
     )
+    contact_search_radius = contact_options.contact_search_radius
+    surface_contact_alpha = getattr(contact_options, "surface_contact_alpha", None)
+    use_surface_contact = surface_contact_alpha is not None
+    if (contact_search_radius is None) == (surface_contact_alpha is None):
+        raise ValueError(
+            "ContactParams must define exactly one of contact_search_radius or "
+            "surface_contact_alpha."
+        )
+    if use_surface_contact and surface_contact_alpha <= contact_options.M_to_D_ratio:
+        raise ValueError(
+            "surface_contact_alpha must be greater than M_to_D_ratio."
+        )
+
+    point_diameters = None
+    if use_surface_contact:
+        point_diameters = []
+        global_fiber_i = 0
+        for b_i in range(fabric.get_n_bundles()):
+            for _ in range(fabric.get_n_fibers_in_bundle(b_i)):
+                n_points = fabric.fiber_offsets[global_fiber_i + 1] - fabric.fiber_offsets[global_fiber_i]
+                point_diameters.append(np.full((n_points,), fabric.get_diameter(b_i)))
+                global_fiber_i += 1
+        point_diameters = np.concatenate(point_diameters)
     if rigid_mold is not None:
+        if use_surface_contact:
+            raise ValueError(
+                "surface_contact_alpha requires all contact bodies to provide "
+                "point diameters; model the cylinder as a fiber instead of "
+                "using rigid_mold."
+            )
         point_fiber_ids = np.concatenate([point_fiber_ids,rigid_mold.point_ids])
         element_batches+= [
             ElementBatch(
@@ -124,15 +153,27 @@ def solve_fiber_mechanics_bvp(
     contact_fe_type = fe_type
 
     self_adjacency_block = contact_options.self_adjacency_block
-    contact_search_radius = contact_options.contact_search_radius
-    contact_params = jnp.array([
-        contact_options.D_stiffness_to_E_ratio * np.max(material_params[:,0]),
-        np.max(material_params[:,1]),
-        contact_search_radius,
-        fabric.get_diameter(0),
-        contact_options.M_to_D_ratio * fabric.get_diameter(0),
-        contact_options.M_stiffness_to_E_ratio * np.max(material_params[:,0]),
-    ])  # E_max, A, R, D, M, E_M
+
+    contact_E_c = contact_options.D_stiffness_to_E_ratio * np.max(material_params[:,0])
+    contact_A = np.max(material_params[:,1])
+    contact_E_min = contact_options.M_stiffness_to_E_ratio * np.max(material_params[:,0])
+    legacy_contact_params = None
+    if not use_surface_contact:
+        legacy_contact_params = jnp.array([
+            contact_E_c,
+            contact_A,
+            contact_search_radius,
+            fabric.get_diameter(0),
+            contact_options.M_to_D_ratio * fabric.get_diameter(0),
+            contact_E_min,
+        ])  # E_c, A, search_radius, D, M, E_min
+
+    contact_output_params = {
+        'self_adjacency_block': self_adjacency_block,
+        'contact_search_radius': contact_search_radius,
+        'point_diameters': point_diameters,
+        'surface_contact_alpha': surface_contact_alpha,
+    }
 
     def contact_pair_generator(u_ref) -> list[ElementBatch] | None:
         if u_ref is None:
@@ -142,15 +183,33 @@ def solve_fiber_mechanics_bvp(
             point_fiber_ids=point_fiber_ids,
             adjacency_block=self_adjacency_block,
             radius=contact_search_radius,
+            point_diameters=point_diameters,
+            surface_contact_alpha=surface_contact_alpha,
         )
         if contact_cells.shape[0] == 0: return []
+
+        if use_surface_contact:
+            point_radii = 0.5 * point_diameters
+            contact_material_params = np.column_stack([
+                np.full((contact_cells.shape[0],), contact_E_c),
+                np.full((contact_cells.shape[0],), contact_A),
+                surface_contact_alpha * (
+                    point_radii[contact_cells[:,0]] + point_radii[contact_cells[:,1]]
+                ),
+                point_radii[contact_cells[:,0]],
+                point_radii[contact_cells[:,1]],
+                np.full((contact_cells.shape[0],), contact_options.M_to_D_ratio),
+                np.full((contact_cells.shape[0],), contact_E_min),
+            ])
+        else:
+            contact_material_params = legacy_contact_params
         return [
             ElementBatch(
                 fe_type=contact_fe_type,
                 n_dofs_per_basis=n_dofs_per_basis,
                 connectivity_en=contact_cells,
                 constitutive_model=contact_options.contact_constitutive_model,
-                material_params=contact_params,
+                material_params=jnp.array(contact_material_params),
             )
         ]
 
@@ -160,10 +219,7 @@ def solve_fiber_mechanics_bvp(
             fabric = fabric,
             mold = rigid_mold,
             filename = get_output(filename = f"{filename_base}_wireframe_0.vtk"),
-            contact_params = {
-                'self_adjacency_block': self_adjacency_block,
-                'contact_search_radius': contact_search_radius,
-            }
+            contact_params = contact_output_params,
         )
 
     # Normalize boundary_conditions to a per-step schedule.
@@ -252,10 +308,7 @@ def solve_fiber_mechanics_bvp(
                 fabric = temp_fab,
                 mold = temp_mold,
                 filename = get_output(filename = f"{filename_base}_wireframe_{i+1}.vtk"),
-                contact_params = {
-                    'self_adjacency_block': contact_options.self_adjacency_block,
-                    'contact_search_radius': contact_options.contact_search_radius,
-                }
+                contact_params = contact_output_params,
             )
         if jnp.isnan(u_truss).any() or jnp.isinf(u_truss).any() or np.linalg.norm(u_truss.reshape((-1,fabric.points.shape[1])),axis=1).max()>blow_up_threshold:
             raise RuntimeError(f"Nonlinear solve diverged: displacement magnitude exceeded threshold ({blow_up_threshold})")

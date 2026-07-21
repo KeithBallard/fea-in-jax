@@ -11,9 +11,10 @@ class ContactParams:
     self_adjacency_block: int
     contact_constitutive_model: jax.tree_util.Partial # such as `elastic_contact_truss_linear`
     D_stiffness_to_E_ratio: float # ratio between stiffness at the diameter distance to the stiffness of the truss elements (D/E) 
-    contact_search_radius: float # distance to first identify contacts, but stiffness should be very low  
+    contact_search_radius: float | None # distance to first identify contacts, but stiffness should be very low  
     M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
     M_stiffness_to_E_ratio: float # ratio between stiffness at M to the stiffness of the truss elements (M/E) 
+    surface_contact_alpha: float | None = None
 
 @dataclass
 class ContactPreprocessConfig:
@@ -257,9 +258,11 @@ def contact_batch(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
     adjacency_block: int,
-    radius: float,
+    radius: float | None,
     distinct_fiber_fn: jax.tree_util.Partial = distinct_fiber_node2node,
     self_fiber_fn: jax.tree_util.Partial = self_fiber_node2node,
+    point_diameters: np.ndarray | None = None,
+    surface_contact_alpha: float | None = None,
 ) -> np.ndarray:
     """
     Find node-node contact candidates from global point and fiber-id arrays.
@@ -278,7 +281,8 @@ def contact_batch(
     point_fiber_ids : array-like, shape (N_total,)
         Fiber id for each point.
     radius : float
-        Contact threshold. A node pair is considered in contact if the
+        Legacy absolute centerline search radius. Used directly when
+        point_diameters is None.
         distance between them is <= radius.
     distinct_fiber_fn : jax.tree_util.Partial
         Function used to detect contact between two different fibers.
@@ -288,6 +292,12 @@ def contact_batch(
         Function used to detect self-contact within a single fiber.
         It must accept ``points``, ``point_fiber_ids``, ``capacity``, ``radius``,
         and ``adjacency_block``, and return ``(contacts, n_valid, overflowed)``.
+    point_diameters : array-like, shape (N_total,), optional
+        Diameter associated with each point. When provided, contact search uses
+        pairwise surface radii instead of the legacy absolute radius.
+    surface_contact_alpha : float, optional
+        Multiplier applied to the pairwise radius sum. Required when
+        point_diameters is provided.
 
     Returns
     -------
@@ -296,24 +306,51 @@ def contact_batch(
         rows are filled with 0.
     """
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
-    if radius <= 0:
-        raise ValueError("radius must be positive")
+    if point_diameters is not None:
+        if surface_contact_alpha is None:
+            raise ValueError("surface_contact_alpha is required when point_diameters is provided")
+        if surface_contact_alpha <= 0:
+            raise ValueError("surface_contact_alpha must be positive")
 
-    # distinct_cells = distinct_fiber_fn(
-    #     points = points,
-    #     point_fiber_ids = point_fiber_ids,
-    #     radius = radius
-    # )
-    # self_cells = self_fiber_fn(
-    #     points = points,
-    #     point_fiber_ids = point_fiber_ids,
-    #     radius = radius,
-    #     adjacency_block = adjacency_block
-    # )
+        point_diameters = np.asarray(point_diameters, dtype=np.float64)
+        if point_diameters.ndim != 1:
+            raise ValueError("point_diameters must have shape (N_total,)")
+        if point_diameters.shape[0] != points.shape[0]:
+            raise ValueError("point_diameters must have the same leading dimension as points")
+        if np.any(point_diameters <= 0):
+            raise ValueError("point_diameters must be positive")
+
+        point_radii = 0.5 * point_diameters
+        query_radius = surface_contact_alpha * 2.0 * np.max(point_radii)
+    else:
+        if surface_contact_alpha is not None:
+            raise ValueError("surface_contact_alpha requires point_diameters")
+        if radius is None:
+            raise ValueError("radius is required when point_diameters is not provided")
+        if radius <= 0:
+            raise ValueError("radius must be positive")
+        point_radii = None
+        query_radius = radius
+
+
+
     kd_tree = sp.spatial.cKDTree(points)
-    pairs = np.array(list(kd_tree.query_pairs(r=radius)))
+    pairs = np.array(list(kd_tree.query_pairs(r=query_radius)),dtype=np.int32)
     if pairs.shape[0] == 0 :
         return np.zeros((0,2),dtype = np.int32)
+
+    if point_radii is not None:
+        pair_distances = np.linalg.norm(
+            points[pairs[:, 0], :] - points[pairs[:, 1], :],
+            axis=1,
+        )
+        pair_thresholds = surface_contact_alpha * (
+            point_radii[pairs[:, 0]] + point_radii[pairs[:, 1]]
+        )
+        pairs = pairs[pair_distances <= pair_thresholds]
+        if pairs.shape[0] == 0:
+            return np.zeros((0,2),dtype = np.int32)
+
     distinct_cells = pairs[point_fiber_ids[pairs[:,0]] != point_fiber_ids[pairs[:,1]]]
     self_cells = pairs[point_fiber_ids[pairs[:,0]] == point_fiber_ids[pairs[:,1]]]
     self_cells = self_cells[self_cells[:,1]-self_cells[:,0]>adjacency_block]

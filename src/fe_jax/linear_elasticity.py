@@ -315,17 +315,32 @@ def __contact_stiffness_constant(
     E_max = material_params_m[..., 0]
     return E_max
 
+def __contact_physical_length(material_params_m: jnp.ndarray) -> jnp.ndarray:
+    if material_params_m.shape[-1] == 6:
+        return material_params_m[..., 3]
+    return material_params_m[..., 3] + material_params_m[..., 4]
+
+def __contact_M_length(material_params_m: jnp.ndarray) -> jnp.ndarray:
+    if material_params_m.shape[-1] == 6:
+        return material_params_m[..., 4]
+    return material_params_m[..., 5] * __contact_physical_length(material_params_m)
+
+def __contact_E_min(material_params_m: jnp.ndarray) -> jnp.ndarray:
+    if material_params_m.shape[-1] == 6:
+        return material_params_m[..., 5]
+    return material_params_m[..., 6]
+
 @jax.tree_util.Partial
 @jax.jit
 def __contact_stiffness_piecewise_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact (defined by fiber diameter)
+    E_c= material_params_m[..., 0] # stiffness at physical contact 
     s_r = material_params_m[..., 2] # search_radius
-    dmtr = material_params_m[..., 3] # diameter
-    c_r = material_params_m[..., 4] # contact_radius
-    E_min = material_params_m[..., 5] # contact_radius
+    dmtr = __contact_physical_length(material_params_m)
+    c_r = __contact_M_length(material_params_m)
+    E_min = __contact_E_min(material_params_m)
 
     seg1 = E_c + (E_c-E_min)/(dmtr - c_r)*(d-dmtr)
     seg2 = E_min/(c_r-s_r)*(d-s_r)
@@ -343,10 +358,10 @@ def __contact_stiffness_exponential(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact (defined by fiber diameter)
-    dmtr = material_params_m[..., 3] # diameter
-    c_r = material_params_m[..., 4] # radius to "turn on" stiffness
-    E_min = material_params_m[..., 5] # stiffness at c_r
+    E_c= material_params_m[..., 0] # stiffness at physical contact
+    dmtr = __contact_physical_length(material_params_m)
+    c_r = __contact_M_length(material_params_m)
+    E_min = __contact_E_min(material_params_m)
 
     alpha =  jnp.exp((dmtr*jnp.log(E_min) - c_r*jnp.log(E_c))/(dmtr-c_r))
     r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
@@ -385,9 +400,10 @@ def __elastic_contact_truss_kernel(
 
     P_dd = jnp.outer(l_d,l_d)
     # eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    L_ref = jnp.maximum(material_params_m[..., 4],jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
-    # L_ref = jnp.maximum(0.1,jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:])) # reference length is set to maximum between the initial length at contact or diameter. This is only valid for cases that are initially at physical contact. 
-    # L_ref = 1.01
+    L_ref = jnp.maximum(
+        __contact_M_length(material_params_m),
+        jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:]),
+    )
     # eps_a = (L_ref - jnp.linalg.norm(dx_d))/L_ref
     # eps_a = jnp.maximum(0,L_ref - jnp.linalg.norm(dx_d))
     # eps_a = jnp.minimum(0,jnp.linalg.norm(dx_d) - L_ref)/L_ref #unilateral compression

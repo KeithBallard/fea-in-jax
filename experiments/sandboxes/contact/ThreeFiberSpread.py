@@ -236,9 +236,7 @@ args = {
     'n_elements':[40]*3,
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
-    'NeumannForce':[(i+1)*1e2 for i in range(10)],
-    # 'NeumannForce':[i*1e4 for i in range(10,101)],
-    # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
+    'NeumannForce':[(i+1)*1e3 for i in range(10)],
     'filename_base': 'ThreeFiberSpread/full_length_force',
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
@@ -246,10 +244,9 @@ args = {
         D_stiffness_to_E_ratio  = 1.,
         contact_search_radius   = 0.14,
         M_to_D_ratio            = 1.05,
-        M_stiffness_to_E_ratio  = 0.001,
+        M_stiffness_to_E_ratio  = 0.00001,
     ),
     'solver_options': SolverOptions(
-        # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
         # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
         # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
         # linear_precond_type=PreconditionerType.JACOBI,
@@ -257,7 +254,31 @@ args = {
         nonlinear_max_iter=100,
         linear_max_iter=200,
         # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
-        # max_linear_displacement=0.01,
+    ),
+}
+surf2surf_args = {
+    'n_elements':[40]*3,
+    'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
+    'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
+    'NeumannForce':[(i+1)*1e3 for i in range(10)],
+    'filename_base': 'ThreeFiberSpread/full_length_force',
+    'contact_params': ContactParams(
+        self_adjacency_block       = 10000,
+        contact_constitutive_model = elastic_contact_truss_piecewise_linear,
+        D_stiffness_to_E_ratio     = 1.,
+        contact_search_radius      = None,
+        M_to_D_ratio               = 1.05,
+        M_stiffness_to_E_ratio     = 0.00001,
+        surface_contact_alpha      = 1.4,
+    ),
+    'solver_options': SolverOptions(
+        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
+        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
+        # linear_precond_type=PreconditionerType.JACOBI,
+        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        nonlinear_max_iter=100,
+        linear_max_iter=200,
+        # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
     ),
 }
 # debug_info=make_debug_info(
