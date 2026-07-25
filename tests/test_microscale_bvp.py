@@ -141,3 +141,5 @@ def test_microscale_bvp():
     # Write output
     mesh.point_data["u"] = u.reshape((points.shape[0], U))
     mesh.write(get_output("test_microscale_bvp_out.vtk"))
+
+test_microscale_bvp()
