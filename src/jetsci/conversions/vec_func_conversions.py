@@ -12,6 +12,8 @@ from contextlib import contextmanager
 
 from time import perf_counter
 
+import inspect
+
 import jax
 from petsc4py import PETSc
 
@@ -102,12 +104,15 @@ def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
     vector, and `jax_func` is called as `jax_func(x)`.
     """
 
+    #notice, here it expects 'x' but inside it does not
+
     def petsc_function(snes, X, F, petsc_args=None):
         callback_start = perf_counter()
+
         with _nvtx_range("snes_petsc_vec_to_jax"):
             x = petsc_vec_to_jax_array(X)
         with _nvtx_range("snes_jax_vec_function"):
-            values = jax_func(x)
+            values = jax_func(x) #TODO: IMPORTANT okay, something is strange. Why is this saying there's already an argument in it?
         #print("jetsci.vec_callback: residual result shape/dtype", getattr(values, "shape", None), getattr(values, "dtype", None))
         #print("jetsci.vec_callback: residual result", values)
         with _nvtx_range("snes_assign_vec_direct_dlpack"):

@@ -10,6 +10,7 @@ from .dof_enumeration import *
 from .boundary_conditions import *
 
 import jetsci
+from jetsci import petsc_snes
 
 import jax.numpy as jnp
 import jax
@@ -1108,19 +1109,19 @@ def solve_bvp_PETSc(
 
     if boundary_conditions is None:
         boundary_conditions = []
-        if multipoint_constraints is None:
-            multipoint_constraints = []
-        if global_values is None:
-            global_values = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
     
-        (
-            ebc,
-            assembly_map_b,
-            constraint_system,
-            jacobian_nnz,
-            element_residual_func,
-            f_ext,
-        ) = preprocess_bvp(
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(
             vertices_vd=vertices_vd,
             element_batches=element_batches,
             element_residual_func=element_residual_func,
@@ -1137,24 +1138,54 @@ def solve_bvp_PETSc(
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
+    residual_for_phi, jacobian_for_phi = build_nonlinear_objects(
+            element_residual_func=element_residual_func,
+            ebc=ebc,
+            assembly_map_b=assembly_map_b,
+            jacobian_nnz=jacobian_nnz,
+            u_0_g=u_0_g,
+            constraints=constraint_system,
+            f_ext=f_ext)
+
     options = jetsci.SolverOptions(
-        nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
-        linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
-        linear_solve_type=jetsci.PETScLinearSolverType.LGMRES,
-    )
+            nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
+            linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
+            linear_solve_type=jetsci.PETScLinearSolverType.LGMRES,
+            linear_absolute_tol=1e-14,
+        )
+    
+    _, options = petsc_snes.solver_lifecycle.build_petsc_solver_with_reuse(
+            options,
+            residual_for_phi,
+            jacobian_for_phi,
+        )
+
+    
+    primitive = petsc_snes.differentiable_snes.DifferentiableSNESPrimitive(
+            residual=residual_for_phi,
+            jacobian=jacobian_for_phi,      #these need to be changed since these are supposed to be the non-phi derivatives
+            solver_key=options.solver_key,
+        )
+
+
+
+    solve = petsc_snes.differentiable_snes.make_differentiable_snes_solve(primitive)
+    phi = jnp.zeros_like(u_0_g)
+    output = solve(phi=phi,x0=u_0_g)
 
 
 
     
-def build_nonlinear_objects(element_residual_func: jax.tree_util.Partial,
+def build_nonlinear_objects(
+    element_residual_func: jax.tree_util.Partial,
     ebc: ElementBatchCollection,
     assembly_map_b: list[AssemblyMap],
     jacobian_nnz: int,
     u_0_g: jnp.ndarray,
     constraints: ConstraintSystem,
-    solver_options: SolverOptions,
     f_ext,
-    ):
+    *args,
+    **kwargs,):
 
     residual_isv_func_w_constraints = jax.jit(
             partial(
@@ -1194,10 +1225,13 @@ def build_nonlinear_objects(element_residual_func: jax.tree_util.Partial,
         )
 
     #these are from linear
-    R_w_dirichlet = lambda x: residual_func_w_constraints(x, *args, **kwargs)
+    R_w_dirichlet = lambda x: residual_func_w_constraints(
+                    x, *args, **kwargs
+                )
 
     #these are from linear, figure out where they need to be redefined
     J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
                     jacobian_func_wo_constraints(x, *args, **kwargs), constraints.dep_dofs
                 )
 
+    return R_w_dirichlet, J_w_dirichlet

@@ -36,7 +36,7 @@ from jax.experimental.buffer_callback import buffer_callback
 
 from petsc4py import PETSc
 
-from solver_lifecycle import *
+from .solver_lifecycle import *
 
 try:
     from jax.extend import core as jax_core
@@ -414,6 +414,7 @@ def make_differentiable_snes_solve(primitive: DifferentiableSNESPrimitive):
     """
 
     residual = primitive.residual
+
 
     if primitive.solver_key is not None:
         _register_primitive_context(primitive)

@@ -43,6 +43,13 @@ def _new_solver_key():
     return __solver_idNum
 
 
+def get_petsc_solver_objects_from_key(solver_key: int):
+    """Return the live SNES and companion KSP wrappers for `solver_key`."""
+    if solver_key not in __solver_dict:
+        raise KeyError(f"No PETSc solver found for solver_key={solver_key}")
+    return __solver_dict[solver_key]
+
+
 def _coo_jacobian_function(R: Callable, J: Callable | None):
     """Return a function of x that produces COOData for the SNES Jacobian."""
     if J is None:
@@ -83,6 +90,18 @@ def _apply_ksp_options(snes, options: SolverOptions):
     pc.setType(_PETSC_PC_TYPES[options.linear_precond_type])
 
 
+def _apply_ksp_options_direct(ksp, options: SolverOptions):
+    """Apply KSP/PC options to a standalone PETSc KSP object."""
+    ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
+    ksp.setTolerances(
+        rtol=options.linear_relative_tol,
+        atol=options.linear_absolute_tol,
+        max_it=options.linear_max_iter,
+    )
+    pc = ksp.getPC()
+    pc.setType(_PETSC_PC_TYPES[options.linear_precond_type])
+
+
 def build_petsc_snes_from_options(
     R: Callable, J: Callable | None, options: SolverOptions
 ):
@@ -95,9 +114,16 @@ def build_petsc_snes_from_options(
     if options.nonlinear_solver_type is not NonlinearSolverType.PETSC_SNES:
         raise TypeError("build_petsc_snes_from_options only builds PETSc SNES solvers")
 
-    residual_callback = convert_jax_vec_func_to_petsc_vec_func(R)
+    callback_stats = {}
+    residual_callback = convert_jax_vec_func_to_petsc_vec_func(
+        R,
+        stats=callback_stats,
+    )
+    jacobian_callback_state = PatternAwareMatAssignmentState()
     jacobian_callback = convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
-        _coo_jacobian_function(R, J)
+        _coo_jacobian_function(R, J),
+        state=jacobian_callback_state,
+        stats=callback_stats,
     )
 
     snes = PETSc.SNES().create(PETSc.COMM_WORLD)
@@ -109,6 +135,29 @@ def build_petsc_snes_from_options(
         residual_callback=residual_callback,
         jacobian_callback=jacobian_callback,
         options=options,
+        jacobian_callback_state=jacobian_callback_state,
+        callback_stats=callback_stats,
+    )
+
+
+def build_petsc_internal_ksp_from_options(options: SolverOptions):
+    """Build a standalone PETSc KSP wrapper for IFT-style linear solves.
+
+    This companion object is intentionally separate from the SNES-owned KSP so
+    the differentiation path can reuse PETSc linear algebra without borrowing
+    state from the primal nonlinear solve.
+    """
+    if options.nonlinear_solver_type is not NonlinearSolverType.PETSC_SNES:
+        raise TypeError("build_petsc_internal_ksp_from_options only builds PETSc KSP solvers")
+
+    ksp = PETSc.KSP().create(PETSc.COMM_WORLD)
+    _apply_ksp_options_direct(ksp, options)
+
+    return PETScLinearSolver(
+        ksp=ksp,
+        vector_callback=lambda *args, **kwargs: None,
+        matrix_callback=lambda *args, **kwargs: None,
+        options=options,
     )
 
 
@@ -116,7 +165,6 @@ def build_petsc_solver_with_reuse(
     options: SolverOptions,
     R: jax.tree_util.Partial,
     J: jax.tree_util.Partial,
-    x0: jnp.ndarry | None = None,
 ):
     """Return a solver and SolverOptions containing its dictionary key.
 
@@ -129,9 +177,7 @@ def build_petsc_solver_with_reuse(
 
     if options.solver_key is None:
         solver = build_petsc_snes_from_options(R, J, options)
-        ksp_for_IFT = (
-            PETSc.KSP().create()
-        )  # TODO: Figure out a more elegant way of setting this up
+        ksp_for_IFT = build_petsc_internal_ksp_from_options(options)
         solver_key = _new_solver_key()
         __solver_dict[solver_key] = (
             solver,
@@ -139,13 +185,10 @@ def build_petsc_solver_with_reuse(
         )  # this way we hide the KSP since we only need it for the KSP
         return solver, replace(options, solver_key=solver_key)
     else:
-        if options.solver_key not in __solver_dict:
-            raise KeyError(f"No PETSc solver found for solver_key={options.solver_key}")
-
+        solver, ksp_for_IFT = get_petsc_solver_objects_from_key(options.solver_key)
         update_petsc_snes_callbacks(solver, R, J)
-        update_petsc_snes_options(solver, options)
-
-    solver = __solver_dict[options.solver_key][0]
+        update_petsc_snes_options(solver, options) #These may need to be reworked but for now lets just assume on reuse you want to change the funcitons
+        update_petsc_linear_solver_options(ksp_for_IFT, options)
 
     return solver, options
 
@@ -156,9 +199,18 @@ def update_petsc_snes_callbacks(
     J: Callable | None,
 ):
     """Replace residual/Jacobian callbacks on an existing PETSc solver."""
-    solver.residual_callback = convert_jax_vec_func_to_petsc_vec_func(R)
+    if solver.callback_stats is None:
+        solver.callback_stats = {}
+    solver.residual_callback = convert_jax_vec_func_to_petsc_vec_func(
+        R,
+        stats=solver.callback_stats,
+    )
+    if solver.jacobian_callback_state is None:
+        solver.jacobian_callback_state = PatternAwareMatAssignmentState()
     solver.jacobian_callback = convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
-        _coo_jacobian_function(R, J)
+        _coo_jacobian_function(R, J),
+        state=solver.jacobian_callback_state,
+        stats=solver.callback_stats,
     )
     if solver.residual_vec is not None:
         solver.snes.setFunction(solver.residual_callback, solver.residual_vec)
@@ -176,6 +228,16 @@ def update_petsc_snes_options(solver: PETScNonlinearSolver, options: SolverOptio
     solver.options = options
     _apply_snes_options(solver.snes, options)
     _apply_ksp_options(solver.snes, options)
+    return solver
+
+
+def update_petsc_linear_solver_options(
+    solver: PETScLinearSolver,
+    options: SolverOptions,
+):
+    """Apply new PETSc method/tolerance options to an existing KSP wrapper."""
+    solver.options = options
+    _apply_ksp_options_direct(solver.ksp, options)
     return solver
 
 

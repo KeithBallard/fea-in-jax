@@ -5,6 +5,7 @@ from enum import auto
 from dataclasses import dataclass
 
 
+
 class NonlinearSolverType(Enum):
     JAX_NEWTON_RAPHSON = auto()
     PETSC_SNES         = auto()
