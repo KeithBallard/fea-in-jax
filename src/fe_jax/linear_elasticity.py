@@ -302,7 +302,7 @@ def __contact_stiffness_linear(
     material_params_m: jnp.ndarray
 ) -> float:
     E_max = material_params_m[..., 0]
-    radius = material_params_m[..., 2]
+    radius = material_params_m[..., 2] + material_params_m[..., 3]
     E = jnp.where(d<radius,E_max - E_max/radius*d,0)
     return E
 
@@ -325,11 +325,6 @@ def __contact_M_length(material_params_m: jnp.ndarray) -> jnp.ndarray:
         return material_params_m[..., 4]
     return material_params_m[..., 5] * __contact_physical_length(material_params_m)
 
-def __contact_E_min(material_params_m: jnp.ndarray) -> jnp.ndarray:
-    if material_params_m.shape[-1] == 6:
-        return material_params_m[..., 5]
-    return material_params_m[..., 6]
-
 @jax.tree_util.Partial
 @jax.jit
 def __contact_stiffness_piecewise_linear(
@@ -337,19 +332,22 @@ def __contact_stiffness_piecewise_linear(
     material_params_m: jnp.ndarray
 ) -> float:
     E_c= material_params_m[..., 0] # stiffness at physical contact 
-    s_r = material_params_m[..., 2] # search_radius
-    dmtr = __contact_physical_length(material_params_m)
-    c_r = __contact_M_length(material_params_m)
-    E_min = __contact_E_min(material_params_m)
+    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
 
-    seg1 = E_c + (E_c-E_min)/(dmtr - c_r)*(d-dmtr)
-    seg2 = E_min/(c_r-s_r)*(d-s_r)
-    # E = ()*(jnp.where(d<c_r,1,0))
-    # E += ()*(jnp.where(d>c_r,1,0)-jnp.where(d>s_r,1,0))
+    ramp_up_distance      = total_radius*material_params_m[...,4]
+    hard_contact_distance = total_radius*material_params_m[...,5]
+    search_radius         = total_radius*material_params_m[..., 6] # search_radius
+
+    E_min = material_params_m[...,7]
+
+    seg1 = E_c + (E_c-E_min)/(hard_contact_distance - ramp_up_distance)*(d-hard_contact_distance)
+    seg2 = E_min/(ramp_up_distance-search_radius)*(d-search_radius)
+    # E = ()*(jnp.where(d<ramp_up_distance,1,0))
+    # E += ()*(jnp.where(d>ramp_up_distance,1,0)-jnp.where(d>search_radius,1,0))
     return jnp.where(
-        d<c_r,
+        d<ramp_up_distance,
         seg1,
-        jnp.where(d<s_r,seg2, 0.0),
+        jnp.where(d<search_radius,seg2, 0.0),
     )
 
 @jax.tree_util.Partial
@@ -359,12 +357,15 @@ def __contact_stiffness_exponential(
     material_params_m: jnp.ndarray
 ) -> float:
     E_c= material_params_m[..., 0] # stiffness at physical contact
-    dmtr = __contact_physical_length(material_params_m)
-    c_r = __contact_M_length(material_params_m)
-    E_min = __contact_E_min(material_params_m)
+    total_radius = material_params_m[..., 2] + material_params_m[..., 3]
 
-    alpha =  jnp.exp((dmtr*jnp.log(E_min) - c_r*jnp.log(E_c))/(dmtr-c_r))
-    r = (jnp.log(E_min)-jnp.log(E_c))/(dmtr-c_r)
+    ramp_up_distance      = total_radius*material_params_m[...,4]
+    hard_contact_distance = total_radius*material_params_m[...,5]
+
+    E_min = material_params_m[...,7]
+
+    alpha =  jnp.exp((hard_contact_distance*jnp.log(E_min) - ramp_up_distance*jnp.log(E_c))/(hard_contact_distance-ramp_up_distance))
+    r = (jnp.log(E_min)-jnp.log(E_c))/(hard_contact_distance-ramp_up_distance)
     return alpha*jnp.exp(-r*d)
 
 @jax.jit
@@ -400,9 +401,14 @@ def __elastic_contact_truss_kernel(
 
     P_dd = jnp.outer(l_d,l_d)
     # eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
+
+    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
+    search_radius         = total_radius*material_params_m[..., 6] # search_radius
+    ramp_up_distance      = total_radius*material_params_m[...,4]
     L_ref = jnp.maximum(
-        __contact_M_length(material_params_m),
-        jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:]),
+        search_radius,
+        # ramp_up_distance,
+        jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:]), #distance at first contact
     )
     # eps_a = (L_ref - jnp.linalg.norm(dx_d))/L_ref
     # eps_a = jnp.maximum(0,L_ref - jnp.linalg.norm(dx_d))

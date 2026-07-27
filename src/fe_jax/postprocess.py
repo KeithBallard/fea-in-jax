@@ -60,9 +60,8 @@ def write_fabric_mold_contact(
             points=points,
             point_fiber_ids=point_ids,
             adjacency_block=contact_params['self_adjacency_block'],
-            radius=contact_params.get('contact_search_radius'),
             point_diameters=contact_params.get('point_diameters'),
-            surface_contact_alpha=contact_params.get('surface_contact_alpha'),
+            search2radius_ratio=contact_params.get('surface_contact_alpha'),
         )
         cells = np.concatenate([cells,contact_cells])
         cell_ids = np.concatenate(

@@ -232,44 +232,20 @@ def run_threeFiberTow(
 #     contact_search_radius=0.25,
 #     NeumannForce = 1E5
 # )
-args = {
+VTMS_args = {
     'n_elements':[40]*3,
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
     'NeumannForce':[(i+1)*1e3 for i in range(10)],
-    'filename_base': 'ThreeFiberSpread/full_length_force',
-    'contact_params': ContactParams(
-        self_adjacency_block    = 10000,
-        contact_constitutive_model = elastic_contact_truss_piecewise_linear,
-        D_stiffness_to_E_ratio  = 1.,
-        contact_search_radius   = 0.14,
-        M_to_D_ratio            = 1.05,
-        M_stiffness_to_E_ratio  = 0.00001,
-    ),
-    'solver_options': SolverOptions(
-        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
-        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
-        # linear_precond_type=PreconditionerType.JACOBI,
-        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=100,
-        linear_max_iter=200,
-        # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
-    ),
-}
-surf2surf_args = {
-    'n_elements':[40]*3,
-    'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
-    'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
-    'NeumannForce':[(i+1)*1e3 for i in range(10)],
-    'filename_base': 'ThreeFiberSpread/full_length_force',
+    'filename_base': 'ThreeFiberSpread/test_contact_VTMS_analogue_Jul27',
     'contact_params': ContactParams(
         self_adjacency_block       = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_linear,
         D_stiffness_to_E_ratio     = 1.,
-        contact_search_radius      = None,
         M_to_D_ratio               = 1.05,
+        C_to_D_ratio               = 1.0,
         M_stiffness_to_E_ratio     = 0.00001,
-        surface_contact_alpha      = 1.4,
+        contact_search_alpha       = 1.4,
     ),
     'solver_options': SolverOptions(
         # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
@@ -289,14 +265,6 @@ surf2surf_args = {
 #     ],
 #     filename = 'contact/twoD_triangle.h5'
 # )
-
-# args['contact_stiffness_model'] = contact_stiffness_linear
-# ul,fl,dl = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
-# up,fp,dp = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_exponential
-# ue,fe,de = run_threeFiberTow(**args)
-
 def get_min(fabric,i,j):
     fi = fabric.get_fiber_points(0,i)
     fj = fabric.get_fiber_points(0,j)
