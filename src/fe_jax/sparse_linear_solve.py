@@ -301,9 +301,9 @@ def linear_solve(
             LinearSolverType.SPSOLVE_PYPARDISO,
         ] or solver_options.linear_precond_type == PreconditionerType.ILU_CUPY
     ):
-        J_sparse_handle = __constrain_jacobian(J_w_dirichlet(x_0), constraints)
+        J_sparse = J_w_dirichlet(x_0)
     else:
-        J_sparse_handle = None
+        J_sparse = None
 
     match solver_options.linear_precond_type:
         ##########################################################################################
@@ -323,10 +323,10 @@ def linear_solve(
 
         case PreconditionerType.ILU_CUPY:
             assert (
-                J_sparse_handle is not None
+                J_sparse is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            ilu_ctx = __cupy_spilu_init(J_sparse_handle)
+            ilu_ctx = __cupy_spilu_init(J_sparse)
             preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
 
         case _:
@@ -475,10 +475,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_sparse_handle is not None
+                J_sparse is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            delta_x = __spsolve(J_sparse_handle, -R_0)
+            delta_x = __spsolve(J_sparse, -R_0)
 
         case LinearSolverType.LU_CUPY:
             if preconditioner is not None:
@@ -486,10 +486,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_sparse_handle is not None
+                J_sparse is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            ilu_ctx = __cupy_splu_init(J_sparse_handle)
+            ilu_ctx = __cupy_splu_init(J_sparse)
             delta_x = __cupy_solve(ilu_ctx, -R_0)
 
         ##########################################################################################
@@ -501,10 +501,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_sparse_handle is not None
+                J_sparse is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            ctx = __amgx_init(J_sparse_handle)
+            ctx = __amgx_init(J_sparse)
             delta_x = __amgx_solve(ctx, -R_0, delta_x)
             __amgx_finalize(ctx)
 
@@ -517,10 +517,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_sparse_handle is not None
+                J_sparse is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            delta_x = __pypardiso_solve(J_sparse_handle, -R_0)
+            delta_x = __pypardiso_solve(J_sparse, -R_0)
 
         case _:
             raise Exception(
@@ -597,16 +597,6 @@ def __retrieve_object(uid):
     return _OBJECT_STORE[int(uid)]
 
 
-def __constrain_jacobian_impl(A: jsparse.COO, constraints) -> np.int64:
-    A_constrained = apply_mpc_to_jacobian(A, constraints)
-    return __store_object(A_constrained)
-
-
-@jax.jit
-def __constrain_jacobian(A: jsparse.COO, constraints) -> jnp.ndarray:
-    result_info = jax.ShapeDtypeStruct((), jnp.int64)
-    return jax.pure_callback(__constrain_jacobian_impl, result_info, A, constraints)
-
 
 ##################################################################################################
 # CUPY wrappers
@@ -620,8 +610,7 @@ if CUPY_AVAILABLE:
     class __SolverCtx:
         handle: jnp.ndarray
 
-    def __solve_cpu_impl(A_handle: jnp.ndarray, b: jnp.ndarray):
-        A = __retrieve_object(A_handle)
+    def __solve_cpu_impl(A: jsparse.COO, b: jnp.ndarray):
         A_scipy = scipy.sparse.csr_matrix(
             (
                 np.array(A.data),
@@ -636,12 +625,11 @@ if CUPY_AVAILABLE:
         return scipy.sparse.linalg.spsolve(A_scipy, np.array(b))
 
     @jax.jit
-    def __solve_cpu(A_handle: jnp.ndarray, b: jnp.ndarray):
+    def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
         result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        return jax.pure_callback(__solve_cpu_impl, result_info, A_handle, b)
+        return jax.pure_callback(__solve_cpu_impl, result_info, A, b)
 
-    def __cupy_spsolve_impl(A_handle: jnp.ndarray, b: jnp.ndarray):
-        A = __retrieve_object(A_handle)
+    def __cupy_spsolve_impl(A: jsparse.COO, b: jnp.ndarray):
         A_cp = cpsparse.csr_matrix(
             (
                 cp.asarray(A.data),
@@ -658,26 +646,25 @@ if CUPY_AVAILABLE:
         return np.asarray(res_cp.get())
 
     @jax.jit
-    def __cupy_spsolve(A_handle: jnp.ndarray, b: jnp.ndarray):
+    def __cupy_spsolve(A: jsparse.COO, b: jnp.ndarray):
         result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        return jax.pure_callback(__cupy_spsolve_impl, result_info, A_handle, b)
+        return jax.pure_callback(__cupy_spsolve_impl, result_info, A, b)
 
-    def __spsolve(A_handle: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+    def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
         """
         Sparse direct solve for system A*x = b.
         Returns the solution, x.
         """
         match jextend.backend.get_backend().platform:
             case "cpu":
-                return __solve_cpu(A_handle, b)
+                return __solve_cpu(A, b)
             case "gpu":
-                return __cupy_spsolve(A_handle, b)
+                return __cupy_spsolve(A, b)
         raise Exception(
             f"Backend {jextend.backend.get_backend().platform} unsupported."
         )
 
-    def __cupy_spilu_init_impl(A_handle: jnp.ndarray):
-        A = __retrieve_object(A_handle)
+    def __cupy_spilu_init_impl(A: jsparse.COO):
         A_cp = cpsparse.csr_matrix(
             (
                 cp.asarray(A.data),
@@ -694,13 +681,12 @@ if CUPY_AVAILABLE:
         return __store_object(ilu_obj)
 
     @jax.jit
-    def __cupy_spilu_init(A_handle: jnp.ndarray) -> __SolverCtx:
+    def __cupy_spilu_init(A: jsparse.COO) -> __SolverCtx:
         result_info = jax.ShapeDtypeStruct((), jnp.int64)
-        handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, A_handle)
+        handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, A)
         return __SolverCtx(handle=handle)
 
-    def __cupy_splu_init_impl(A_handle: jnp.ndarray):
-        A = __retrieve_object(A_handle)
+    def __cupy_splu_init_impl(A: jsparse.COO):
         A_cp = cpsparse.csr_matrix(
             (
                 cp.asarray(A.data),
@@ -717,9 +703,9 @@ if CUPY_AVAILABLE:
         return __store_object(ilu_obj)
 
     @jax.jit
-    def __cupy_splu_init(A_handle: jnp.ndarray) -> __SolverCtx:
+    def __cupy_splu_init(A: jsparse.COO) -> __SolverCtx:
         result_info = jax.ShapeDtypeStruct((), jnp.int64)
-        handle = jax.pure_callback(__cupy_splu_init_impl, result_info, A_handle)
+        handle = jax.pure_callback(__cupy_splu_init_impl, result_info, A)
         return __SolverCtx(handle=handle)
 
     def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):

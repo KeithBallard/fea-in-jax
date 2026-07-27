@@ -68,6 +68,150 @@ def _calculate_jacobian_unique_nnz(
     return jnp.sum(uniq_mask)
 
 
+def precompute_constrained_jacobian_mapping(
+    ebc: ElementBatchCollection,
+    constraints,
+    n_total_dofs: int,
+):
+    """
+    Precomputes the mapping from raw element stiffness entries to the final unique,
+    constrained Jacobian COO coordinates.
+    """
+    import numpy as np
+    non_zero_indices = jnp.vstack(
+        [
+            __get_jacobian_indices(
+                i, ebc.E, ebc.N, ebc.U, ebc.connectivity, ebc.EN_offsets
+            )
+            for i in range(ebc.B)
+        ]
+    )
+    K_row = non_zero_indices[:, 0]
+    K_col = non_zero_indices[:, 1]
+
+    dep_dofs = constraints.dep_dofs
+
+    P_indices = constraints.P.indices  # shape (nse, 2)
+    P_data = constraints.P.data        # shape (nse,)
+
+    row_P = dep_dofs[P_indices[:, 0]]
+    col_P = P_indices[:, 1]
+    data_P = P_data
+
+    is_row_dep = jnp.isin(K_row, dep_dofs)
+    is_col_dep = jnp.isin(K_col, dep_dofs)
+    
+    # Block 1
+    raw_indices_1 = jnp.arange(K_row.shape[0])
+    mask_1 = ~(is_row_dep | is_col_dep)
+    rows_1 = K_row[mask_1]
+    cols_1 = K_col[mask_1]
+    src_indices_1 = raw_indices_1[mask_1]
+    weights_1 = jnp.ones_like(rows_1, dtype=jnp.float32)
+
+    if P_indices.shape[0] > 0:
+        # Block 2
+        col_A_expanded = K_col[:, None]
+        row_B_expanded = row_P[None, :]
+        match_mask = (col_A_expanded == row_B_expanded)
+        idx_A, idx_B = jnp.where(match_mask)
+
+        row_2_raw = K_row[idx_A]
+        col_2_raw = col_P[idx_B]
+        is_row_dep_2 = jnp.isin(row_2_raw, dep_dofs)
+        
+        rows_2 = row_2_raw[~is_row_dep_2]
+        cols_2 = col_2_raw[~is_row_dep_2]
+        src_indices_2 = idx_A[~is_row_dep_2]
+        weights_2 = data_P[idx_B[~is_row_dep_2]]
+
+        # Block 3
+        mask_K_indep = ~jnp.isin(K_col, dep_dofs)
+        row_B_expanded_3 = row_P[:, None]
+        row_C_expanded_3 = K_row[None, :]
+        match_mask_3 = (row_B_expanded_3 == row_C_expanded_3) & mask_K_indep[None, :]
+        idx_B3, idx_C3 = jnp.where(match_mask_3)
+
+        rows_3 = col_P[idx_B3]
+        cols_3 = K_col[idx_C3]
+        src_indices_3 = idx_C3
+        weights_3 = data_P[idx_B3]
+
+        # Block 4
+        row_B_expanded_4 = row_P[:, None]
+        row_C_expanded_4 = row_2_raw[None, :]
+        match_mask_4 = (row_B_expanded_4 == row_C_expanded_4)
+        idx_B4, idx_C4 = jnp.where(match_mask_4)
+
+        rows_4 = col_P[idx_B4]
+        cols_4 = col_2_raw[idx_C4]
+        src_indices_4 = idx_A[idx_C4]
+        weights_4 = data_P[idx_B4] * data_P[idx_B[idx_C4]]
+    else:
+        rows_2 = cols_2 = src_indices_2 = weights_2 = jnp.zeros((0,), dtype=jnp.int32)
+        rows_3 = cols_3 = src_indices_3 = weights_3 = jnp.zeros((0,), dtype=jnp.int32)
+        rows_4 = cols_4 = src_indices_4 = weights_4 = jnp.zeros((0,), dtype=jnp.int32)
+
+    all_rows = jnp.concatenate([rows_1, rows_2, rows_3, rows_4])
+    all_cols = jnp.concatenate([cols_1, cols_2, cols_3, cols_4])
+    all_src_indices = jnp.concatenate([src_indices_1, src_indices_2, src_indices_3, src_indices_4])
+    all_weights = jnp.concatenate([weights_1, weights_2, weights_3, weights_4])
+
+    # Sort the coordinates to perform unique and duplicate summing
+    perm = jnp.lexsort((all_cols, all_rows))
+    sorted_rows = all_rows[perm]
+    sorted_cols = all_cols[perm]
+    sorted_src_indices = all_src_indices[perm]
+    sorted_weights = all_weights[perm]
+
+    sorted_coords = jnp.vstack((sorted_rows, sorted_cols)).T
+    diff = jnp.diff(sorted_coords, axis=0)
+    uniq_mask = jnp.append(True, (diff != 0).any(axis=1))
+
+    row_unique = sorted_rows[uniq_mask]
+    col_unique = sorted_cols[uniq_mask]
+
+    unique_target_indices = jnp.cumsum(uniq_mask) - 1
+
+    # Final unique coordinates with dependent diagonal added
+    row_final = jnp.concatenate([row_unique, dep_dofs])
+    col_final = jnp.concatenate([col_unique, dep_dofs])
+
+    # Convert to standard NumPy arrays for static JIT parameters/shapes
+    row_final_np = np.array(row_final, dtype=np.int32)
+    col_final_np = np.array(col_final, dtype=np.int32)
+    source_indices_np = np.array(sorted_src_indices, dtype=np.int32)
+    target_indices_np = np.array(unique_target_indices, dtype=np.int32)
+    weights_np = np.array(sorted_weights, dtype=np.float32)
+
+    return (
+        row_final_np,
+        col_final_np,
+        source_indices_np,
+        target_indices_np,
+        weights_np,
+        int(row_final_np.shape[0]),
+        int(row_unique.shape[0]),
+    )
+
+
+def _calculate_jacobian_unique_nnz_w_constraints(
+    ebc: ElementBatchCollection,
+    constraints,
+    n_total_dofs: int,
+) -> int:
+    """
+    Returns the number of non-zeros in the Jacobian for a collection of batches of elements,
+    taking into account the effect of multi-point and boundary constraints.
+    """
+    _, _, _, _, _, total_nnz, _ = precompute_constrained_jacobian_mapping(
+        ebc=ebc,
+        constraints=constraints,
+        n_total_dofs=n_total_dofs,
+    )
+    return total_nnz
+
+
 @jax.jit
 def _calculate_jacobian_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
@@ -230,6 +374,56 @@ def calculate_jacobian_wo_constraints(
     )
 
     return J_sparse_ff
+
+
+@partial(jax.jit, static_argnames=["precomputed_constrained_jacobian_nnz", "row_unique_shape"])
+def calculate_jacobian_w_constraints(
+    u_f: jnp.ndarray,
+    element_residual_func: jax.tree_util.Partial,
+    ebc: ElementBatchCollection,
+    assembly_map_b: list[jsparse.BCSR],
+    source_indices: jnp.ndarray,
+    target_indices: jnp.ndarray,
+    target_weights: jnp.ndarray,
+    row_final: jnp.ndarray,
+    col_final: jnp.ndarray,
+    precomputed_constrained_jacobian_nnz: int,
+    row_unique_shape: int,
+):
+    J_ett, _, _ = zip(
+        *[
+            _calculate_jacobian_coo_terms_batch(
+                element_residual_func=element_residual_func,
+                constitutive_model=ebc.constitutive_models[i],
+                material_params=ebc.get_material_params(i),
+                internal_state=ebc.get_internal_state(i),
+                x_end=ebc.get_x(i),
+                dphi_dxi_qnp=ebc.get_dphi_dxi(i),
+                W_q=ebc.get_weights(i),
+                dof_map_enu=ebc.get_dof_map(i),
+                assembly_map=assembly_map_b[i],
+                u_f=u_f,
+            )
+            for i in range(ebc.B)
+        ]
+    )
+    J_ett = jnp.concatenate([x.ravel() for x in J_ett])
+
+    # 1. Allocate final unique data array
+    data_constrained = jnp.zeros((precomputed_constrained_jacobian_nnz,))
+    # 2. Scatter-add the raw entries using the precomputed mapping
+    data_constrained = data_constrained.at[target_indices].add(J_ett[source_indices] * target_weights)
+    # 3. Set the identity boundary conditions for dependent DoFs
+    data_constrained = data_constrained.at[row_unique_shape:].set(1.0)
+
+    # 4. Return the fully constrained COO matrix
+    return jsparse.COO(
+        (data_constrained, row_final, col_final),
+        shape=(u_f.shape[0], u_f.shape[0]),
+        rows_sorted=False,
+        cols_sorted=False,
+    )
+
 
 
 @jax.jit
@@ -598,6 +792,13 @@ def solve_nonlinear_step(
     constraints: ConstraintSystem,
     solver_options: SolverOptions,
     f_ext,
+    source_indices: jnp.ndarray,
+    target_indices: jnp.ndarray,
+    target_weights: jnp.ndarray,
+    row_final: jnp.ndarray,
+    col_final: jnp.ndarray,
+    precomputed_constrained_jacobian_nnz: int,
+    row_unique_shape: int,
 ):
     """
     Solve the linearized system of equations emerging from the governing equations.
@@ -655,14 +856,20 @@ def solve_nonlinear_step(
         partial(__extract_first_element, residual_isv_func_w_constraints)
     )
 
-    # Function that produces J(u) without Dirichlet BCs and MPCs applied
-    jacobian_func_wo_constraints = jax.jit(
+    # Function that produces J(u) with Dirichlet BCs and MPCs applied
+    jacobian_func_w_constraints = jax.jit(
         partial(
-            calculate_jacobian_wo_constraints,
+            calculate_jacobian_w_constraints,
             element_residual_func=element_residual_func,
             ebc=ebc,
             assembly_map_b=assembly_map_b,
-            precomputed_jacobian_nnz=jacobian_nnz,
+            source_indices=source_indices,
+            target_indices=target_indices,
+            target_weights=target_weights,
+            row_final=row_final,
+            col_final=col_final,
+            precomputed_constrained_jacobian_nnz=precomputed_constrained_jacobian_nnz,
+            row_unique_shape=row_unique_shape,
         )
     )
 
@@ -704,7 +911,7 @@ def solve_nonlinear_step(
         )
 
     print(
-        "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
+        "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied and multi-point constraints are also fully built-in."
     )
 
     def while_body(
@@ -718,8 +925,8 @@ def solve_nonlinear_step(
                 dirichlet_bcs_builtin=True,
             ),
             jacobian=Jacobian(
-                function=jax.tree_util.Partial(jacobian_func_wo_constraints),
-                dirichlet_bcs_builtin=False,
+                function=jax.tree_util.Partial(jacobian_func_w_constraints),
+                dirichlet_bcs_builtin=True,
             ),
             jacobian_diagonal=JacobianDiagonl(
                 function=jax.tree_util.Partial(jacobian_diag_func_wo_constraints),
@@ -1051,13 +1258,33 @@ def solve_bvp(
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
+    # Precompute constrained Jacobian mapping
+    (
+        row_final,
+        col_final,
+        source_indices,
+        target_indices,
+        target_weights,
+        precomputed_constrained_jacobian_nnz,
+        row_unique_shape,
+    ) = precompute_constrained_jacobian_mapping(
+        ebc=ebc,
+        constraints=constraint_system,
+        n_total_dofs=n_total_dofs,
+    )
+
     # inner_solve = solve_nonlinear_step
     # if ebc.is_homogeneous:
     #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
     inner_solve = jax.jit(
         solve_nonlinear_step,
         # donate_argnames="internal_state_beqi",
-        static_argnames=["solver_options", "jacobian_nnz"],
+        static_argnames=[
+            "solver_options",
+            "jacobian_nnz",
+            "precomputed_constrained_jacobian_nnz",
+            "row_unique_shape",
+        ],
     )
 
     # capture memory usage before
@@ -1073,6 +1300,13 @@ def solve_bvp(
         constraints=constraint_system,
         solver_options=solver_options,
         f_ext=f_ext,
+        source_indices=source_indices,
+        target_indices=target_indices,
+        target_weights=target_weights,
+        row_final=row_final,
+        col_final=col_final,
+        precomputed_constrained_jacobian_nnz=precomputed_constrained_jacobian_nnz,
+        row_unique_shape=row_unique_shape,
     )
 
     # Update internal state variables for the element batches
