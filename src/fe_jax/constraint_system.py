@@ -54,7 +54,7 @@ class ConstraintSystem:
         """
         Apply the constraints to the solution vector.
         """
-        return delta_u.at[self.dep_dofs].set(self.P @ delta_u + self.g - u_0[self.dep_dofs])
+        return delta_u.at[self.dep_dofs].set(self.P @ (delta_u + u_0) + self.g - u_0[self.dep_dofs])
 
     @jax.jit
     def apply_to_residual(self, R: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:

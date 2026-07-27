@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
-
 from functools import partial
 
 from .utils import debug_print
@@ -200,3 +199,99 @@ def apply_dirichlet_bcs_rhs(
     b_modified = b - A @ tmp
     b_modified = b_modified.at[dirichlet_dofs].set(dirichlet_values)
     return b_modified
+
+
+def _apply_mpc_to_jacobian_jax(K: jsparse.COO, constraints) -> jsparse.COO:
+    """
+    Applies multi-point constraints (MPCs) and fixed-point (Dirichlet) constraints
+    to a sparse Jacobian matrix in COO format using fully vectorized JAX/GPU operations.
+    """
+    dep_dofs = constraints.dep_dofs
+    n_total_dofs = K.shape[0]
+
+    P_indices = constraints.P.indices  # shape (nse, 2)
+    P_data = constraints.P.data        # shape (nse,)
+
+    row_P = dep_dofs[P_indices[:, 0]]
+    col_P = P_indices[:, 1]
+    data_P = P_data
+
+    K_row = K.row
+    K_col = K.col
+    K_data = K.data
+
+    is_row_dep = jnp.isin(K_row, dep_dofs)
+    is_col_dep = jnp.isin(K_col, dep_dofs)
+    mask_1 = ~(is_row_dep | is_col_dep)
+    row_1 = K_row
+    col_1 = K_col
+    data_1 = jnp.where(mask_1, K_data, 0.0)
+
+    def coo_matmul(A_row, A_col, A_data, B_row, B_col, B_data):
+        col_A_expanded = A_col[:, None]
+        row_B_expanded = B_row[None, :]
+        match_mask = (col_A_expanded == row_B_expanded)
+        idx_A, idx_B = jnp.where(match_mask)
+
+        row_res = A_row[idx_A]
+        col_res = B_col[idx_B]
+        data_res = A_data[idx_A] * B_data[idx_B]
+        return row_res, col_res, data_res
+
+    def coo_matmul_transpose_left(B_row, B_col, B_data, C_row, C_col, C_data):
+        row_B_expanded = B_row[:, None]
+        row_C_expanded = C_row[None, :]
+        match_mask = (row_B_expanded == row_C_expanded)
+        idx_B, idx_C = jnp.where(match_mask)
+
+        row_res = B_col[idx_B]
+        col_res = C_col[idx_C]
+        data_res = B_data[idx_B] * C_data[idx_C]
+        return row_res, col_res, data_res
+
+    if P_indices.shape[0] > 0:
+        row_2_raw, col_2_raw, data_2_raw = coo_matmul(K_row, K_col, K_data, row_P, col_P, data_P)
+        is_row_dep_2 = jnp.isin(row_2_raw, dep_dofs)
+        row_2 = row_2_raw[~is_row_dep_2]
+        col_2 = col_2_raw[~is_row_dep_2]
+        data_2 = data_2_raw[~is_row_dep_2]
+
+        mask_K_indep = ~jnp.isin(K_col, dep_dofs)
+        row_K_indep = K_row
+        col_K_indep = K_col
+        data_K_indep = jnp.where(mask_K_indep, K_data, 0.0)
+        row_3, col_3, data_3 = coo_matmul_transpose_left(row_P, col_P, data_P, row_K_indep, col_K_indep, data_K_indep)
+
+        row_4, col_4, data_4 = coo_matmul_transpose_left(row_P, col_P, data_P, row_2_raw, col_2_raw, data_2_raw)
+    else:
+        row_2 = row_3 = row_4 = jnp.zeros((0,), dtype=jnp.int32)
+        col_2 = col_3 = col_4 = jnp.zeros((0,), dtype=jnp.int32)
+        data_2 = data_3 = data_4 = jnp.zeros((0,), dtype=jnp.float32)
+
+    row_diag = dep_dofs
+    col_diag = dep_dofs
+    data_diag = jnp.ones_like(dep_dofs, dtype=jnp.float32)
+
+    total_rows = jnp.concatenate([row_1, row_2, row_3, row_4, row_diag])
+    total_cols = jnp.concatenate([col_1, col_2, col_3, col_4, col_diag])
+    total_data = jnp.concatenate([data_1, data_2, data_3, data_4, data_diag])
+
+    return jsparse.COO(
+        (total_data, total_rows, total_cols),
+        shape=K.shape,
+        rows_sorted=False,
+        cols_sorted=False
+    )
+
+
+def apply_mpc_to_jacobian(K: jsparse.COO, constraints) -> jsparse.COO:
+    """
+    Applies multi-point constraints (MPCs) and fixed-point (Dirichlet) constraints
+    to a sparse Jacobian matrix in COO format.
+    """
+    dep_dofs = constraints.dep_dofs
+    if dep_dofs.shape[0] == 0:
+        return K
+
+    return _apply_mpc_to_jacobian_jax(K, constraints)
+

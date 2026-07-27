@@ -33,4 +33,4 @@ def test_mesh_to_sparse_assembly_map_round_trips_mesh_coordinates():
         print("transformed_points", transformed_points.shape)  # , transformed_points)
 
         # Make sure the coordinates are close to the original mesh
-        assert jnp.isclose(jnp.array(points[:, 0:2]), transformed_points[0]).all()
+        assert jnp.isclose(jnp.array(points[:, 0:2]), transformed_points[0][:, 0:2]).all()

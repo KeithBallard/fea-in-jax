@@ -310,23 +310,29 @@ def transform_global_to_element_node(
     ).reshape(E, V, U)
 
 
-@partial(jax.jit, static_argnames=["E"])
+@partial(jax.jit, static_argnames=["E", "U"])
 def transform_global_unraveled_to_element_node(
-    assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int
+    assembly_map: jsparse.BCSR, v_g: jnp.ndarray, E: int, U: int | None = None
 ):
     """
     Transforms a vector that represents a global assembled vector that is unraveled into the
     element-node representation.
 
+    Any global degrees of freedom (DoFs) appended to the end of the global vector `v_g`
+    (beyond the V * U node-based degrees of freedom) are excluded/ignored during this 
+    transformation, returning only the node-based field components.
+
     TODO: change this to transform into batches (keep batch info in Dimensions)
     """
     assert assembly_map.shape[0] == 1
     V = assembly_map.shape[1]
-    U = v_g.shape[0] // V
+    if U is None:
+        U = v_g.shape[0] // V
     N = assembly_map.shape[2] // E
+    v_g_sliced = v_g[0 : V * U]
     return jsparse.bcsr_dot_general(
         assembly_map,
-        v_g.reshape(1, V, U),
+        v_g_sliced.reshape(1, V, U),
         dimension_numbers=(((1,), (1,)), ((0,), (0,))),
     ).reshape(E, N, U)
 

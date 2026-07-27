@@ -63,3 +63,19 @@ class PeriodicBC:
     global_gradient_index: (
         int  # Index of global value corresponding to volume average gradients
     )
+
+
+@dataclass
+class GlobalRelationBC:
+    """
+    Represents a relationship between global degrees of freedom:
+    global_value[index_secondary, component_secondary] = factor * global_value[index_primary, component_primary] + constant
+    """
+
+    index_secondary: int
+    component_secondary: int
+    index_primary: int
+    component_primary: int
+    factor: float = 1.0
+    constant: float = 0.0
+

@@ -156,8 +156,9 @@ def _calculate_jacobian_coo_terms_batch(
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
 ):
+    U = dof_map_enu.shape[1] // x_end.shape[1]
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f, x_end.shape[0], U=U
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -327,8 +328,9 @@ def _calculate_jacobian_diag_coo_terms_batch(
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
 ):
+    U = dof_map_enu.shape[1] // x_end.shape[1]
     u_enu = transform_global_unraveled_to_element_node(
-        assembly_map, u_f, x_end.shape[0]
+        assembly_map, u_f, x_end.shape[0], U=U
     )
 
     dof_map = dof_map_enu.reshape(x_end.shape[0], -1)
@@ -392,7 +394,6 @@ def calculate_jacobian_diag_wo_constraints(
     return diag_J_f
 
 
-@jax.jit
 def _calculate_residual_wo_constraints_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -403,6 +404,7 @@ def _calculate_residual_wo_constraints_batch(
     W_q: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
+    U: int | None = None,
 ):
     # Extract shape constants needed for args
     E = x_end.shape[0]
@@ -413,7 +415,7 @@ def _calculate_residual_wo_constraints_batch(
         N == dphi_dxi_qnp.shape[1]
     ), f"Number of nodes per element {N} must match the number of basis functions {dphi_dxi_qnp.shape[1]}."
 
-    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
+    u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E, U=U)
 
     # A vmap'ed version of the element residual function that maps over the elements
     R_vmap = jax.vmap(
@@ -486,15 +488,20 @@ def calculate_residual_wo_constraints(
             W_q=ebc.get_weights(i),
             assembly_map=assembly_map_b[i],
             u_f=u_f,
+            U=ebc.U[i],
         )
         for i in range(ebc.B)
     ]  # for each item, 0: R_end, 1: internal_state
 
     R_f = jnp.zeros_like(u_f)
     for i in range(ebc.B):
-        R_f += transform_element_node_to_global_unraveled_sum(
+        V_val = assembly_map_b[i].shape[1]
+        U_val = ebc.U[i]
+        n_vert_dofs = V_val * U_val
+        R_f_contrib = transform_element_node_to_global_unraveled_sum(
             assembly_map=assembly_map_b[i], v_en=result[i][0]
         )
+        R_f = R_f.at[0:n_vert_dofs].add(R_f_contrib)
 
     new_internal_state_beqi = [result[i][1] for i in range(ebc.B)]
     # TODO split this out into a separate call
@@ -767,7 +774,7 @@ class NeumannCondition:
 
 
 def convert_boundary_conditions_to_external_load(
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC],
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC | GlobalRelationBC],
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     dof_enumeration: DofEnumeration,
     n_solution_components: int,
@@ -823,7 +830,7 @@ def convert_external_load_to_system(
 
 
 def convert_boundary_conditions(
-    boundary_conditions: List[DirichletBC | PeriodicBC],
+    boundary_conditions: List[DirichletBC | PeriodicBC | GlobalRelationBC],
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     dof_enumeration: DofEnumeration,
     n_solution_components: int,
@@ -870,7 +877,7 @@ def preprocess_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
     element_residual_func: jax.tree_util.Partial,
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC | GlobalRelationBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
 ):
@@ -979,7 +986,7 @@ def solve_bvp(
     vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
     element_batches: list[ElementBatch],
     element_residual_func: jax.tree_util.Partial,
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC | GlobalRelationBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
     u_0_g: jnp.ndarray | None = None,

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Set, Tuple
 from enum import Enum, auto
 import numpy as np
 
-from .boundary_conditions import BCType, DirichletBC, PeriodicBC
+from .boundary_conditions import BCType, DirichletBC, PeriodicBC, GlobalRelationBC
 from .dof_enumeration import DofEnumeration
 from .utils import tensor_to_voigt_indices
 
@@ -540,5 +540,27 @@ def convert_boundary_conditions_to_constraints(
                         factors=list(indep_terms.values()),
                     )
                 )
+        elif isinstance(bc, GlobalRelationBC):
+            if bc.index_secondary >= len(global_values) or bc.index_primary >= len(global_values):
+                raise ValueError(
+                    f"GlobalRelationBC references global block {bc.index_secondary} or {bc.index_primary}, "
+                    f"but only {len(global_values)} global blocks were declared."
+                )
+            if bc.component_secondary >= global_values[bc.index_secondary] or bc.component_primary >= global_values[bc.index_primary]:
+                raise ValueError(
+                    "GlobalRelationBC components are outside the declared global block sizes."
+                )
+            
+            dep_dof = int(global_dof_offsets[bc.index_secondary] + bc.component_secondary)
+            indep_dof = int(global_dof_offsets[bc.index_primary] + bc.component_primary)
+            
+            multi_point_constraints.append(
+                MultiPointConstraint(
+                    dep_dof=dep_dof,
+                    indep_dofs=[indep_dof],
+                    factors=[bc.factor],
+                    rhs_constant=bc.constant
+                )
+            )
 
     return fixed_point_constraints, multi_point_constraints

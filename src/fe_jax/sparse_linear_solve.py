@@ -233,9 +233,7 @@ def linear_solve(
         if jacobian.dirichlet_bcs_builtin:
             J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
         else:
-            J_w_dirichlet = lambda x: apply_dirichlet_bcs_lhs(
-                jacobian.function(x, *args, **kwargs), constraints.dep_dofs
-            )
+            J_w_dirichlet = lambda x: jacobian.function(x, *args, **kwargs)
     else:
         J_w_dirichlet = None
 
@@ -295,6 +293,18 @@ def linear_solve(
     delta_x = constraints.apply_to_solution(jnp.zeros_like(R_0))
     info = solver_info_0
 
+    if J_w_dirichlet is not None and (
+        solver_options.linear_solve_type in [
+            LinearSolverType.SPSOLVE_CUPY,
+            LinearSolverType.LU_CUPY,
+            LinearSolverType.AMGX,
+            LinearSolverType.SPSOLVE_PYPARDISO,
+        ] or solver_options.linear_precond_type == PreconditionerType.ILU_CUPY
+    ):
+        J_sparse_handle = __constrain_jacobian(J_w_dirichlet(x_0), constraints)
+    else:
+        J_sparse_handle = None
+
     match solver_options.linear_precond_type:
         ##########################################################################################
         # jax native preconditioners
@@ -313,11 +323,10 @@ def linear_solve(
 
         case PreconditionerType.ILU_CUPY:
             assert (
-                J_w_dirichlet is not None
+                J_sparse_handle is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            J_sparse = J_w_dirichlet(x_0)
-            ilu_ctx = __cupy_spilu_init(J_sparse)
+            ilu_ctx = __cupy_spilu_init(J_sparse_handle)
             preconditioner = lambda x: __cupy_solve(ilu_ctx, x)
 
         case _:
@@ -466,11 +475,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_w_dirichlet is not None
+                J_sparse_handle is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            J_sparse = J_w_dirichlet(x_0)
-            delta_x = __spsolve(J_sparse, -R_0)
+            delta_x = __spsolve(J_sparse_handle, -R_0)
 
         case LinearSolverType.LU_CUPY:
             if preconditioner is not None:
@@ -478,12 +486,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_w_dirichlet is not None
+                J_sparse_handle is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            J_sparse = J_w_dirichlet(x_0)
-
-            ilu_ctx = __cupy_splu_init(J_sparse)
+            ilu_ctx = __cupy_splu_init(J_sparse_handle)
             delta_x = __cupy_solve(ilu_ctx, -R_0)
 
         ##########################################################################################
@@ -495,11 +501,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_w_dirichlet is not None
+                J_sparse_handle is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            J_sparse = J_w_dirichlet(x_0)
-            ctx = __amgx_init(J_sparse)
+            ctx = __amgx_init(J_sparse_handle)
             delta_x = __amgx_solve(ctx, -R_0, delta_x)
             __amgx_finalize(ctx)
 
@@ -512,11 +517,10 @@ def linear_solve(
                     f"WARNING: a preconditioner was specifed but unused by {solver_options.linear_solve_type}"
                 )
             assert (
-                J_w_dirichlet is not None
+                J_sparse_handle is not None
             ), f"{solver_options.linear_solve_type} requires the `jacobian` argument to be provided."
 
-            J_sparse = J_w_dirichlet(x_0)
-            delta_x = __pypardiso_solve(J_sparse, -R_0)
+            delta_x = __pypardiso_solve(J_sparse_handle, -R_0)
 
         case _:
             raise Exception(
@@ -593,6 +597,17 @@ def __retrieve_object(uid):
     return _OBJECT_STORE[int(uid)]
 
 
+def __constrain_jacobian_impl(A: jsparse.COO, constraints) -> np.int64:
+    A_constrained = apply_mpc_to_jacobian(A, constraints)
+    return __store_object(A_constrained)
+
+
+@jax.jit
+def __constrain_jacobian(A: jsparse.COO, constraints) -> jnp.ndarray:
+    result_info = jax.ShapeDtypeStruct((), jnp.int64)
+    return jax.pure_callback(__constrain_jacobian_impl, result_info, A, constraints)
+
+
 ##################################################################################################
 # CUPY wrappers
 
@@ -605,89 +620,106 @@ if CUPY_AVAILABLE:
     class __SolverCtx:
         handle: jnp.ndarray
 
-    def __solve_cpu(A: jsparse.COO, b: jnp.ndarray):
-        """
-        Sparse direct solve for system A*x = b for a CPU backend.
-        Returns the solution, x.
-        """
-        A_jax_csr = coo_to_csr(A)
-        A_csr = scipy.sparse.csr_matrix(
+    def __solve_cpu_impl(A_handle: jnp.ndarray, b: jnp.ndarray):
+        A = __retrieve_object(A_handle)
+        A_scipy = scipy.sparse.csr_matrix(
             (
-                np.array(A_jax_csr.data),
-                np.array(A_jax_csr.indices),
-                np.array(A_jax_csr.indptr),
+                np.array(A.data),
+                (
+                    np.array(A.row),
+                    np.array(A.col),
+                ),
             ),
-            shape=(A.shape[0], A.shape[1]),
+            shape=A.shape,
         )
-        return scipy.sparse.linalg.spsolve(A_csr, b)
+        A_scipy.sum_duplicates()
+        return scipy.sparse.linalg.spsolve(A_scipy, np.array(b))
 
     @jax.jit
-    def __cupy_spsolve(A: jsparse.CSR, b: jnp.ndarray):
+    def __solve_cpu(A_handle: jnp.ndarray, b: jnp.ndarray):
+        result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+        return jax.pure_callback(__solve_cpu_impl, result_info, A_handle, b)
 
-        def kernel(ctx, out, A: jsparse.CSR, b):
-            A_cp = cpsparse.csr_matrix(
-                (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
-                shape=A.shape,
-            )
-            A_cp.has_canonical_format = True
-            # cp.savetxt("A_cp.csv", A_cp.todense())
-            cp.asarray(out)[...] = cplinalg.spsolve(A_cp, cp.asarray(b))
-
-        out_type = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        cupy_callback = buffer_callback(kernel, out_type)
-        return cupy_callback(A, b)
+    def __cupy_spsolve_impl(A_handle: jnp.ndarray, b: jnp.ndarray):
+        A = __retrieve_object(A_handle)
+        A_cp = cpsparse.csr_matrix(
+            (
+                cp.asarray(A.data),
+                (
+                    cp.asarray(A.row),
+                    cp.asarray(A.col),
+                ),
+            ),
+            shape=A.shape,
+        )
+        A_cp.sum_duplicates()
+        A_cp.has_canonical_format = True
+        res_cp = cplinalg.spsolve(A_cp, cp.asarray(b))
+        return np.asarray(res_cp.get())
 
     @jax.jit
-    def __solve_gpu(A: jsparse.COO, b: jnp.ndarray):
-        """
-        Sparse direct solve for system A*x = b for a GPU backend.
-        Returns the solution, x.
-        """
-        A_csr = coo_to_csr(A)
-        return __cupy_spsolve(A_csr, b)
+    def __cupy_spsolve(A_handle: jnp.ndarray, b: jnp.ndarray):
+        result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
+        return jax.pure_callback(__cupy_spsolve_impl, result_info, A_handle, b)
 
-    def __spsolve(A: jsparse.COO, b: jnp.ndarray) -> jnp.ndarray:
+    def __spsolve(A_handle: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
         """
         Sparse direct solve for system A*x = b.
         Returns the solution, x.
         """
         match jextend.backend.get_backend().platform:
             case "cpu":
-                return jnp.array(__solve_cpu(A, b))
+                return __solve_cpu(A_handle, b)
             case "gpu":
-                return __solve_gpu(A, b)
+                return __cupy_spsolve(A_handle, b)
         raise Exception(
             f"Backend {jextend.backend.get_backend().platform} unsupported."
         )
 
-    def __cupy_spilu_init_impl(A: jsparse.CSR):
+    def __cupy_spilu_init_impl(A_handle: jnp.ndarray):
+        A = __retrieve_object(A_handle)
         A_cp = cpsparse.csr_matrix(
-            (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+            (
+                cp.asarray(A.data),
+                (
+                    cp.asarray(A.row),
+                    cp.asarray(A.col),
+                ),
+            ),
             shape=A.shape,
         )
+        A_cp.sum_duplicates()
         A_cp.has_canonical_format = True
         ilu_obj = cplinalg.spilu(A_cp, fill_factor=1.0)
         return __store_object(ilu_obj)
 
     @jax.jit
-    def __cupy_spilu_init(A: jsparse.COO) -> __SolverCtx:
+    def __cupy_spilu_init(A_handle: jnp.ndarray) -> __SolverCtx:
         result_info = jax.ShapeDtypeStruct((), jnp.int64)
-        handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, coo_to_csr(A))
+        handle = jax.pure_callback(__cupy_spilu_init_impl, result_info, A_handle)
         return __SolverCtx(handle=handle)
 
-    def __cupy_splu_init_impl(A: jsparse.CSR):
+    def __cupy_splu_init_impl(A_handle: jnp.ndarray):
+        A = __retrieve_object(A_handle)
         A_cp = cpsparse.csr_matrix(
-            (cp.asarray(A.data), cp.asarray(A.indices), cp.asarray(A.indptr)),
+            (
+                cp.asarray(A.data),
+                (
+                    cp.asarray(A.row),
+                    cp.asarray(A.col),
+                ),
+            ),
             shape=A.shape,
         )
+        A_cp.sum_duplicates()
         A_cp.has_canonical_format = True
         ilu_obj = cplinalg.splu(A_cp)
         return __store_object(ilu_obj)
 
     @jax.jit
-    def __cupy_splu_init(A: jsparse.COO) -> __SolverCtx:
+    def __cupy_splu_init(A_handle: jnp.ndarray) -> __SolverCtx:
         result_info = jax.ShapeDtypeStruct((), jnp.int64)
-        handle = jax.pure_callback(__cupy_splu_init_impl, result_info, coo_to_csr(A))
+        handle = jax.pure_callback(__cupy_splu_init_impl, result_info, A_handle)
         return __SolverCtx(handle=handle)
 
     def __cupy_solve_impl(ctx, out, handle: jnp.ndarray, b: jnp.ndarray):
@@ -750,9 +782,10 @@ if PYAMX_AVAILABLE:
             (
                 cp.asarray(A.data),
                 (cp.asarray(A.row), cp.asarray(A.col)),
-            ),  # cp.asarray(A.indices), cp.asarray(A.indptr)),
+            ),
             shape=A.shape,
         )
+        A_cp.sum_duplicates()
         A_amgx.upload_CSR(A_cp)
 
         b_amgx = pyamgx.Vector().create(rsc)
@@ -781,7 +814,7 @@ if PYAMX_AVAILABLE:
             jax.ShapeDtypeStruct((), jnp.int64),
         )
         cfg_handle, rsc_handle, A_handle, b_handle, x_handle, solver_handle = (
-            jax.pure_callback(__amgx_init_impl, result_info, A)  # coo_to_csr(A)
+            jax.pure_callback(__amgx_init_impl, result_info, A)
         )
         return __AMGXCtx(
             cfg_handle=cfg_handle,
@@ -866,45 +899,27 @@ if PYPARDISO_AVAILABLE:
     import cupy as cp
 
     def __pypardiso_solve_impl(
-        # ctx, <- buffer_callback implementation
-        # out, <- buffer_callback implementation
-        A_data: jnp.ndarray,
-        A_row: jnp.ndarray,
-        A_col: jnp.ndarray,
+        A: jsparse.COO,
         b: jnp.ndarray,
     ):
         A_scipy = scipy.sparse.csr_matrix(
             (
-                cp.asarray(A_data).get().astype(np.float64),
+                cp.asarray(A.data).get().astype(np.float64),
                 (
-                    cp.asarray(A_row).get().astype(np.int32),
-                    cp.asarray(A_col).get().astype(np.int32),
+                    cp.asarray(A.row).get().astype(np.int32),
+                    cp.asarray(A.col).get().astype(np.int32),
                 ),
             ),
             shape=(b.shape[0], b.shape[0]),
         )
+        A_scipy.sum_duplicates()
         b_np = cp.asarray(b).get().astype(np.float64)
         result = pypardiso.spsolve(A_scipy, b_np)
-        # cp.asarray(out)[...] = cp.asarray(result) <- buffer_callback implementation
         return result
 
     @jax.jit
     def __pypardiso_solve(A: jsparse.COO, b: jnp.ndarray):
-        """
-        # Import Note
-        The buffer_callback would theoretically be more efficient, but there is a bug in JAX resulting
-        in bizzare values in the arrays.  If jax.debug.print is not called to view the arrays, they become
-        uninitiailized values within __pypardiso_solve_impl. It is like the XLA compiler thinks the arrays
-        are not used and the computation branch is pruned. Consequently, I will use a pure_callback variant.
-        Fortunately, for this solver, the cost is low since the solve is performed on the host anyway.
-        """
         result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
         return jax.pure_callback(
-            __pypardiso_solve_impl, result_info, A.data, A.row, A.col, b
+            __pypardiso_solve_impl, result_info, A, b
         )
-        # result_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
-        # jax.debug.print("A.row - jax {}", A.row)
-        # jax.debug.print("A.data - jax {}", A.data)
-        # return buffer_callback(
-        #    __pypardiso_solve_impl, result_info, command_buffer_compatible=False
-        # )(A.data, A.row, A.col, b)

@@ -4,8 +4,8 @@ meshio
 # CPU-only version
 #jax
 # GPU version with CUDA 12
-#jax[cuda12]
-#cupy-cuda12x
+jax[cuda12]
+cupy-cuda12x
 # GPU version with CUDA 13 (recommended)
 #jax[cuda13]
 #cupy-cuda13x
@@ -18,4 +18,4 @@ psutil
 scipy
 flax
 # Intel MKL Pardiso solver (optional)
-#pypardiso
+pypardiso
