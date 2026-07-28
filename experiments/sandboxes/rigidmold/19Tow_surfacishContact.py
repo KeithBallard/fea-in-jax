@@ -182,16 +182,15 @@ def run_mold(
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
-        debug_info.file.attrs['contact_search_radius']          = contact_params.contact_search_radius
         debug_info.file.attrs['contact_M_to_D_ratio']           = contact_params.M_to_D_ratio
         debug_info.file.attrs['contact_M_stiffness_to_E_ratio'] = contact_params.M_stiffness_to_E_ratio
         debug_info.file.attrs['contact_self_adjacency_block']   = contact_params.self_adjacency_block
         # debug_info.file.attrs['external_load_Fx_Fy']            = (0,-force)
-        debug_info.file.attrs['solver_linear_solve_type']       = solver_options.linear_solve_type.name
-        debug_info.file.attrs['solver_nonlinear_max_iter']      = solver_options.nonlinear_max_iter
-        debug_info.file.attrs['solver_linear_max_iter']         = solver_options.linear_max_iter
-        debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
-        debug_info.file.attrs['points']                         = fabric.points
+        # debug_info.file.attrs['solver_linear_solve_type']       = solver_options.linear_solve_type.name
+        # debug_info.file.attrs['solver_nonlinear_max_iter']      = solver_options.nonlinear_max_iter
+        # debug_info.file.attrs['solver_linear_max_iter']         = solver_options.linear_max_iter
+        # debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
+        # debug_info.file.attrs['points']                         = fabric.points
     bcs = [DirichletBC(index = i, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[:old_fibers_n] for c in range(3)]
     bcs += [DirichletBC(index = i-1, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[1:old_fibers_n + 1] for c in range(3)]
     if cylinder_points is not None:
@@ -231,7 +230,7 @@ def run_mold(
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=2000,
+            nonlinear_max_iter=100,
             linear_max_iter=50,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -252,7 +251,7 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Jul27/19Tow_bruteForceIt_DE1_ME0p000001',
+    'filename_base': 'rigid_mold/EZ_Jul27/19Tow_bruteForceIt_DE1_ME0p0001',
     'pseudoT': 30,
     'cylinder_points': np.array([
         [5.000000000, 0.860000000,  2.000000000],
@@ -277,19 +276,11 @@ args = {
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_linear,
         D_stiffness_to_E_ratio  = 1.0,
-        M_stiffness_to_E_ratio  = 0.00001,
+        M_stiffness_to_E_ratio  = 0.0001,
         M_to_D_ratio            = 1.00,
         C_to_D_ratio            = 0.5,
         contact_search_alpha    = 2.0,
     ),
-    # 'contact_params': ContactParams(
-    #     self_adjacency_block    = 10000,
-    #     contact_constitutive_model = elastic_contact_truss_piecewise_linear,
-    #     D_stiffness_to_E_ratio  = 1.0,
-    #     M_to_D_ratio            = 0.5,
-    #     M_stiffness_to_E_ratio  = 0.001,
-    #     surface_contact_alpha   = 4,
-    # ),
 }
 
 debug_info=make_debug_info(
