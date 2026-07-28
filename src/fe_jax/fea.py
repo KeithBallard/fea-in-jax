@@ -245,6 +245,19 @@ def calculate_jacobian_wo_constraints(
         J_sparse_ff, result_length=precomputed_jacobian_nnz
     )
 
+    diag_mask = J_sparse_ff.row == J_sparse_ff.col
+    J_sparse_ff = jsparse.COO(
+        (
+            jnp.where(diag_mask, J_sparse_ff.data + 1.0, J_sparse_ff.data),
+            J_sparse_ff.row,
+            J_sparse_ff.col,
+        ),
+        shape = J_sparse_ff.shape,
+        rows_sorted = J_sparse_ff._rows_sorted,
+        cols_sorted = J_sparse_ff._cols_sorted,
+    )
+    # J_sparse_ff.data = J_sparse_ff.data.at[J_sparse_ff.row == J_sparse_ff.col].add(1.)
+
     if debug_info.contains(DebugOutputQuantities.GLOBAL_JACOBIAN_COO):
         debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "data_wo_constraints", J_sparse_ff.data)
         debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "rows_wo_constraints", J_sparse_ff.row)
@@ -753,7 +766,7 @@ def solve_nonlinear_step(
         "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
     )
 
-    def line_search(u_f, delta_u, R_f, isv_f, residual_isv_func, max_backtracks = 20):
+    def line_search(u_f, delta_u, R_f, isv_f, residual_isv_func, max_backtracks = 1):
         norm_R0 = jnp.linalg.norm(R_f)
 
         def cond_fun(state):
