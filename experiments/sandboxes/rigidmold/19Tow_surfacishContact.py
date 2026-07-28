@@ -228,9 +228,9 @@ def run_mold(
         solver_options=SolverOptions(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
-            # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
-            linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=3,
+            linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
+            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            nonlinear_max_iter=250,
             linear_max_iter=50,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -251,7 +251,7 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Jul28/dampJacobianDiag',
+    'filename_base': 'rigid_mold/EZ_Jul28/dampJacobianDiag_DE4_ME_1em6_NL250_BICGSTAB',
     'pseudoT': 30,
     'cylinder_points': np.array([
         [5.000000000, 0.860000000,  2.000000000],
@@ -275,8 +275,8 @@ args = {
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_linear,
-        D_stiffness_to_E_ratio  = 1.0,
-        M_stiffness_to_E_ratio  = 0.0000,
+        D_stiffness_to_E_ratio  = 4.0,
+        M_stiffness_to_E_ratio  = 1e-6,
         M_to_D_ratio            = 1.00,
         C_to_D_ratio            = 0.5,
         contact_search_alpha    = 2.0,
