@@ -134,6 +134,7 @@ def run_mold(
     cylinder_points: np.ndarray | None = None,
     cylinder_diameter: float = 1.0,
     pre_strain: float | None = None,
+    debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
 ):
     """ """
     # fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,diameter=diameter)
@@ -178,6 +179,19 @@ def run_mold(
     fabric_n = fabric.points.shape[0]
     rigid_mold = None
 
+    if not isinstance(debug_info, NullDebugInfo):
+        debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
+        debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
+        debug_info.file.attrs['contact_search_radius']          = contact_params.contact_search_radius
+        debug_info.file.attrs['contact_M_to_D_ratio']           = contact_params.M_to_D_ratio
+        debug_info.file.attrs['contact_M_stiffness_to_E_ratio'] = contact_params.M_stiffness_to_E_ratio
+        debug_info.file.attrs['contact_self_adjacency_block']   = contact_params.self_adjacency_block
+        # debug_info.file.attrs['external_load_Fx_Fy']            = (0,-force)
+        debug_info.file.attrs['solver_linear_solve_type']       = solver_options.linear_solve_type.name
+        debug_info.file.attrs['solver_nonlinear_max_iter']      = solver_options.nonlinear_max_iter
+        debug_info.file.attrs['solver_linear_max_iter']         = solver_options.linear_max_iter
+        debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
+        debug_info.file.attrs['points']                         = fabric.points
     bcs = [DirichletBC(index = i, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[:old_fibers_n] for c in range(3)]
     bcs += [DirichletBC(index = i-1, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[1:old_fibers_n + 1] for c in range(3)]
     if cylinder_points is not None:
@@ -226,10 +240,14 @@ def run_mold(
         pseudotime_iters=len(dyn_bcs),
         blow_up_threshold=1e3,
         pre_strain=pre_strain,
+        debug_info=debug_info,
     )
     u = u.reshape((-1,3))
     # fabric.points = fabric.points + u[:fabric_n,:]
 
+    if not isinstance(debug_info, NullDebugInfo):
+        print('close debug HDF5 file')
+        debug_info.file.close()
     return u,fabric,dyn_bcs
 
 args = {
@@ -273,3 +291,11 @@ args = {
     #     surface_contact_alpha   = 4,
     # ),
 }
+
+debug_info=make_debug_info(
+    flags = [
+        (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+    ],
+    filename = args['filename_base'] + '.h5'
+)
