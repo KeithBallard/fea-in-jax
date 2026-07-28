@@ -56,6 +56,7 @@ class SolverOptions:
     nonlinear_max_iter:     int = 10
     nonlinear_relative_tol: float = 1e-10
     nonlinear_absolute_tol: float = 1e-8
+    nonlinear_step_tol:     float = 0.0
 
     linear_max_iter:        int = 1000
     linear_relative_tol:    float = 1e-14

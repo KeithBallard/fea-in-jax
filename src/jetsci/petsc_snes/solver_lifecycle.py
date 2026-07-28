@@ -13,7 +13,6 @@ from .solver import *
 
 from petsc4py import PETSc
 
-
 _PETSC_KSP_TYPES = {
     PETScLinearSolverType.CG: "cg",
     PETScLinearSolverType.LGMRES: "lgmres",
@@ -63,9 +62,7 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
 
     def jacobian_coo(x):
         jacobian = J(x)
-        if all(hasattr(jacobian, field) for field in ("shape", "vals", "rows", "cols")):
-            return jacobian
-        return convert_jax_dense_mat_to_coo_data(jnp.asarray(jacobian))
+        return convert_jax_mat_to_coo_data(jacobian)
 
     return jacobian_coo
 
@@ -74,6 +71,7 @@ def _apply_snes_options(snes, options: SolverOptions):
     snes.setTolerances(
         rtol=options.nonlinear_relative_tol,
         atol=options.nonlinear_absolute_tol,
+        stol=options.nonlinear_step_tol,
         max_it=options.nonlinear_max_iter,
     )
 
@@ -81,6 +79,8 @@ def _apply_snes_options(snes, options: SolverOptions):
 def _apply_ksp_options(snes, options: SolverOptions):
     ksp = snes.getKSP()
     ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
+    if hasattr(PETSc.KSP, "NormType"):
+        ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
     ksp.setTolerances(
         rtol=options.linear_relative_tol,
         atol=options.linear_absolute_tol,
@@ -93,6 +93,8 @@ def _apply_ksp_options(snes, options: SolverOptions):
 def _apply_ksp_options_direct(ksp, options: SolverOptions):
     """Apply KSP/PC options to a standalone PETSc KSP object."""
     ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
+    if hasattr(PETSc.KSP, "NormType"):
+        ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
     ksp.setTolerances(
         rtol=options.linear_relative_tol,
         atol=options.linear_absolute_tol,
@@ -243,9 +245,13 @@ def update_petsc_linear_solver_options(
 
 def destroy_petsc_solver(solver_key: int):
     """Remove a solver from the dictionary and destroy its PETSc objects."""
-    solver = __solver_dict.pop(solver_key)
+    solver = __solver_dict.pop(solver_key, None)
+    if solver is None:
+        return None
     solver[0].destroy()
     solver[1].destroy()
+    if hasattr(PETSc, "garbage_cleanup"):
+        PETSc.garbage_cleanup()
     return solver
 
     # careful with this, because it can let you overwriting existing solvers in it's current state.

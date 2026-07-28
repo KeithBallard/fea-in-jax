@@ -296,6 +296,11 @@ def _register_primitive_context(primitive: "DifferentiableSNESPrimitive") -> Non
     _PRIMITIVE_CONTEXTS[primitive.solver_key] = primitive
 
 
+def unregister_primitive_context(solver_key: int) -> None:
+    """Remove a registered primitive context when its PETSc solver is destroyed."""
+    _PRIMITIVE_CONTEXTS.pop(solver_key, None)
+
+
 def _differentiable_snes_solve_impl(phi, x0, *, solver_key: int):
     primitive = _primitive_context(solver_key)
     if primitive.solver_key is not None and primitive.solver_key != solver_key:

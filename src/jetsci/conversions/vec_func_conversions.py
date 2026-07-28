@@ -17,10 +17,13 @@ import inspect
 import jax
 from petsc4py import PETSc
 
+import jax.numpy as jnp
+
 try:
     from cupyx.profiler import time_range as _cupy_time_range
 except Exception:
     _cupy_time_range = None
+
 
 
 @contextmanager
@@ -96,6 +99,45 @@ def assign_petsc_vec_from_jax(vec, values):
         vec_cupy[...] = values_cupy.reshape(vec_cupy.shape)
 
 
+def _scalar_float(value):
+    value = jnp.asarray(value)
+    if hasattr(value, "block_until_ready"):
+        value.block_until_ready()
+    return float(value)
+
+
+def _scalar_int(value):
+    value = jnp.asarray(value)
+    if hasattr(value, "block_until_ready"):
+        value.block_until_ready()
+    return int(value)
+
+
+def _record_vec_diagnostics(stats, x, values, *, near_zero_tol=1e-14):
+    if stats is None:
+        return
+
+    x = jnp.asarray(x)
+    values = jnp.asarray(values)
+    abs_values = jnp.abs(values)
+    stats["residual_input_shape"] = tuple(int(s) for s in x.shape)
+    stats["residual_output_shape"] = tuple(int(s) for s in values.shape)
+    stats["residual_input_norm"] = _scalar_float(jnp.linalg.norm(x))
+    stats["residual_output_norm"] = _scalar_float(jnp.linalg.norm(values))
+    stats["residual_output_abs_min"] = (
+        _scalar_float(jnp.min(abs_values)) if values.size else None
+    )
+    stats["residual_output_abs_max"] = (
+        _scalar_float(jnp.max(abs_values)) if values.size else None
+    )
+    stats["residual_output_finite_count"] = _scalar_int(jnp.sum(jnp.isfinite(values)))
+    stats["residual_output_nan_count"] = _scalar_int(jnp.sum(jnp.isnan(values)))
+    stats["residual_output_inf_count"] = _scalar_int(jnp.sum(jnp.isinf(values)))
+    stats["residual_output_near_zero_count"] = _scalar_int(
+        jnp.sum(abs_values <= near_zero_tol)
+    )
+
+
 def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
     """Convert a state-only JAX vector function into a PETSc Vec callback.
 
@@ -122,6 +164,8 @@ def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
             stats["residual_total_s"] = stats.get("residual_total_s", 0.0) + (
                 perf_counter() - callback_start
             )
+            if stats.get("collect_diagnostics", False):
+                _record_vec_diagnostics(stats, x, values)
         return None
 
     return petsc_function

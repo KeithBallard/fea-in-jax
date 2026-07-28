@@ -15,7 +15,7 @@ def test_microscale_bvp():
     # initialise_tracking()
 
     # Read in the mesh
-    mesh = meshio.read(get_mesh("microscale_2D_r2.vtk"))
+    mesh = meshio.read(get_mesh("microscale_2D_r0.vtk"))
     points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
     cells = np.array(mesh.cells[0].data, dtype=np.uint64)
     mesh.cell_data["DomainIDs"][0] = np.array(
@@ -177,12 +177,13 @@ def test_microscale_bvp():
         )
 
 
-
+    """
     petsc_result, _, _ = time_solve("PETSc solve_bvp_PETSc", run_petsc, n_calls=3)
     u_petsc, residual_petsc, _ = petsc_result
     print("|R| PETSc = ", jnp.linalg.norm(residual_petsc))
 
     exit(1)
+    """
 
     """
     jax_result, _, _ = time_solve("JAX solve_bvp", run_jax, n_calls=2)

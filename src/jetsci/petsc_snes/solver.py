@@ -153,6 +153,7 @@ class PETScNonlinearSolver:
     callback_stats: dict | None = None
     diagnostics: bool = False
     last_diagnostics: dict | None = None
+    last_ksp_residual_history: list[tuple[int, float]] | None = None
 
     def __post_init__(self):
         """Setup snes and Mat/Vec."""
@@ -187,17 +188,45 @@ class PETScNonlinearSolver:
             copy_start = perf_counter()
             x0_vec.copy(x)
             copy_time = perf_counter() - copy_start
+            ksp = self.snes.getKSP()
+            ksp_residual_history = []
+
+            def ksp_monitor(ksp, iteration, residual_norm):
+                del ksp
+                ksp_residual_history.append((int(iteration), float(residual_norm)))
+
+            if hasattr(ksp, "cancelMonitor"):
+                ksp.cancelMonitor()
+            ksp.setMonitor(ksp_monitor)
             petsc_start = perf_counter()
             self.snes.solve(None, x)
             petsc_time = perf_counter() - petsc_start
+            self.last_ksp_residual_history = ksp_residual_history
+            update_vec = x.duplicate()
+            try:
+                x.copy(update_vec)
+                update_vec.axpy(-1.0, x0_vec)
+                solution_update_norm = update_vec.norm()
+            finally:
+                update_vec.destroy()
             self.last_diagnostics = {
                 "total_s": perf_counter() - solve_start,
                 "input_conversion_s": conversion_time,
                 "initial_copy_s": copy_time,
                 "snes_solve_s": petsc_time,
                 "snes_iterations": self.snes.getIterationNumber(),
+                "snes_converged_reason": self.snes.getConvergedReason(),
                 "snes_function_norm": self.snes.getFunctionNorm(),
-                "snes_ksp_iterations": self.snes.getKSP().getIterationNumber(),
+                "snes_solution_norm": x.norm(),
+                "snes_solution_update_norm": solution_update_norm,
+                "snes_ksp_iterations": ksp.getIterationNumber(),
+                "snes_ksp_converged_reason": ksp.getConvergedReason(),
+                "snes_ksp_residual_norm": ksp.getResidualNorm(),
+                "snes_ksp_tolerances": ksp.getTolerances(),
+                "snes_ksp_norm_type": ksp.getNormType() if hasattr(ksp, "getNormType") else None,
+                "snes_ksp_residual_history_count": len(ksp_residual_history),
+                "snes_ksp_residual_history_head": ksp_residual_history[:8],
+                "snes_ksp_residual_history_tail": ksp_residual_history[-8:],
                 "callback_stats": dict(self.callback_stats or {}),
             }
             if self.diagnostics:

@@ -83,6 +83,82 @@ def convert_jax_dense_mat_to_coo_data(dense_mat: jnp.ndarray) -> COOData:
     )
 
 
+def convert_jax_sparse_coo_to_coo_data(sparse_mat) -> COOData:
+    """Convert a JAX sparse COO matrix into the callback COOData convention."""
+    return COOData(
+        shape=jnp.asarray(sparse_mat.shape, dtype=jnp.int64),
+        vals=sparse_mat.data,
+        rows=jnp.asarray(sparse_mat.row, dtype=jnp.int32),
+        cols=jnp.asarray(sparse_mat.col, dtype=jnp.int32),
+    )
+
+
+def convert_jax_mat_to_coo_data(mat) -> COOData:
+    """Accept COOData, JAX sparse COO, or dense rank-2 arrays as COOData."""
+    if isinstance(mat, COOData):
+        return mat
+    if all(hasattr(mat, field) for field in ("shape", "vals", "rows", "cols")):
+        return mat
+    if all(hasattr(mat, field) for field in ("shape", "data", "row", "col")):
+        return convert_jax_sparse_coo_to_coo_data(mat)
+    return convert_jax_dense_mat_to_coo_data(jnp.asarray(mat))
+
+
+def _scalar_float(value):
+    value = jnp.asarray(value)
+    if hasattr(value, "block_until_ready"):
+        value.block_until_ready()
+    return float(value)
+
+
+def _scalar_int(value):
+    value = jnp.asarray(value)
+    if hasattr(value, "block_until_ready"):
+        value.block_until_ready()
+    return int(value)
+
+
+def _record_coo_diagnostics(stats, data: COOData, *, prefix="jacobian", near_zero_tol=1e-14):
+    """Record cheap COO sanity diagnostics in the callback stats dictionary."""
+    if stats is None:
+        return
+
+    vals = jnp.asarray(data.vals)
+    rows = jnp.asarray(data.rows)
+    cols = jnp.asarray(data.cols)
+    abs_vals = jnp.abs(vals)
+    finite_mask = jnp.isfinite(vals)
+    diag_mask = rows == cols
+    diag_abs_vals = jnp.where(diag_mask, abs_vals, jnp.inf)
+    offdiag_abs_vals = jnp.where(~diag_mask, abs_vals, jnp.inf)
+    diag_count = _scalar_int(jnp.sum(diag_mask))
+    shape = tuple(int(x) for x in jnp.asarray(data.shape).tolist())
+
+    stats[f"{prefix}_shape"] = shape
+    stats[f"{prefix}_nnz"] = int(vals.size)
+    stats[f"{prefix}_finite_count"] = _scalar_int(jnp.sum(finite_mask))
+    stats[f"{prefix}_nan_count"] = _scalar_int(jnp.sum(jnp.isnan(vals)))
+    stats[f"{prefix}_inf_count"] = _scalar_int(jnp.sum(jnp.isinf(vals)))
+    stats[f"{prefix}_abs_min"] = _scalar_float(jnp.min(abs_vals)) if vals.size else None
+    stats[f"{prefix}_abs_max"] = _scalar_float(jnp.max(abs_vals)) if vals.size else None
+    stats[f"{prefix}_diag_entry_count"] = diag_count
+    stats[f"{prefix}_near_zero_entry_count"] = _scalar_int(jnp.sum(abs_vals <= near_zero_tol))
+    stats[f"{prefix}_near_zero_diag_count"] = _scalar_int(
+        jnp.sum(diag_mask & (abs_vals <= near_zero_tol))
+    )
+    stats[f"{prefix}_diag_abs_min"] = (
+        _scalar_float(jnp.min(diag_abs_vals)) if diag_count else None
+    )
+    stats[f"{prefix}_diag_abs_max"] = (
+        _scalar_float(jnp.max(jnp.where(diag_mask, abs_vals, -jnp.inf)))
+        if diag_count
+        else None
+    )
+    stats[f"{prefix}_offdiag_abs_min"] = (
+        _scalar_float(jnp.min(offdiag_abs_vals)) if vals.size > diag_count else None
+    )
+
+
 def _mat_set_values_coo(mat, vals):
     """Sets the values for an existing PETSc Mat given values as a CuPy array"""
     lib = ct.CDLL(PETSc.__file__)
@@ -439,6 +515,8 @@ def convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
             stats["jacobian_total_s"] = stats.get("jacobian_total_s", 0.0) + (
                 perf_counter() - callback_start
             )
+            if stats.get("collect_diagnostics", False):
+                _record_coo_diagnostics(stats, data)
         return None
 
     return petsc_matrix_function
