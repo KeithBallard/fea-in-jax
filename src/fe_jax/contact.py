@@ -15,7 +15,7 @@ class ContactParams:
     M_stiffness_to_E_ratio: float # ratio between stiffness at M to the stiffness of the truss elements (M/E) 
 
     M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
-    C_to_D_ratio: float # M is distance to have a hard stiffness set.
+    C_to_D_ratio: float # C is distance to have a hard stiffness set.
     contact_search_alpha: float # dimensionless value for search_radius = contact_search_alpha*(radius1+radius2)
     # It should be C_to_D_ratio<M_to_D_ratio<contact_search_alpha
 

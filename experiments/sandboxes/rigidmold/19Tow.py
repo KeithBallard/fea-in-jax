@@ -181,14 +181,14 @@ def run_mold(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=600,
+            nonlinear_max_iter=1000,
             linear_max_iter=500,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
         plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
-        blow_up_threshold=1e3,
+        blow_up_threshold=5,
         pre_strain=pre_strain,
     )
     u = u.reshape((-1,3))
@@ -198,17 +198,18 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ/19Tow_D0p02_M0p001_MDratio1p05_piecewise_',
+    'filename_base': 'rigid_mold/EZ_Jul27/CYL_19Tow_D0p02_M0p001_MDratio1p05_piecewise_',
     'pseudoT': 30,
     'rigid_mold_params': ((5.,0.86),0.4,4.0,0.2),
-    'dir_step':-0.02,
-    # 'pre_strain':-0.141373887,
+    'dir_step':-0.0,
+    'pre_strain':-0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_linear,
         D_stiffness_to_E_ratio  = 1.0,
-        contact_search_radius   = 0.3,
+        M_stiffness_to_E_ratio  = 0.0000,
         M_to_D_ratio            = 1.05,
-        M_stiffness_to_E_ratio  = 0.00001
+        C_to_D_ratio            = 0.5,
+        contact_search_alpha    = 4.0,
     ),
 }
