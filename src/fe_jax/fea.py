@@ -765,13 +765,14 @@ def solve_nonlinear_step(
             alpha = alpha*0.5
             u_trial = u_f + alpha*delta_u
             R_trial, isv_trial = residual_isv_func(u_trial)
-            accepted = jnp.linalg.norm(R_trial) <= norm_R0
+            accepted = jnp.linalg.norm(R_trial) <= 1.01*norm_R0
             # jax.debug.print(
             #     'alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}',
             #     a = alpha,
             #     Rt = jnp.linalg.norm(R_trial),
             #     Rf = norm_R0,
             # )
+            # jax.debug.print('n = {n}, alpha = {a}', n = n, a = alpha)
             return alpha, u_trial, R_trial, isv_trial, n+1, accepted
 
         u_trial = u_f + delta_u

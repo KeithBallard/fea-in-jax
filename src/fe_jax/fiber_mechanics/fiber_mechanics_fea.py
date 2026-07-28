@@ -1,6 +1,7 @@
 from .vtms_structs import *
 from .vtk_exporter import *
 from ..postprocess import write_fabric_mold_contact
+from ..postprocess import write_simulation_log
 from ..paths import get_output
 from ..fea import *
 from ..contact import *
@@ -205,6 +206,20 @@ def solve_fiber_mechanics_bvp(
         ]
 
     if filename_base is not None:
+        write_simulation_log(
+            get_output(filename=f"{filename_base}_run.json"),
+            fabric=fabric,
+            materials=materials,
+            boundary_conditions=boundary_conditions,
+            solver_options=solver_options,
+            pseudotime_iters=pseudotime_iters,
+            plot_convergence=plot_convergence,
+            blow_up_threshold=blow_up_threshold,
+            rigid_mold=rigid_mold,
+            pre_strain=pre_strain,
+            contact_options=contact_options,
+        )
+
         write_vtk(fabric,get_output(filename=f"{filename_base}_0.vtk"))
         write_fabric_mold_contact(
             fabric = fabric,
