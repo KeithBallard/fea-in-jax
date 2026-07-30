@@ -115,6 +115,8 @@ class SolverOptions:
     nonlinear_relative_tol: float = 1e-10
     nonlinear_absolute_tol: float = 1e-8
     max_linear_displacement: float = jnp.inf
+    max_backtracks:  int = 20
+    damp_Newton_diag: float = 0.
 
     def __post_init__(self):
         # Validate that the selected preconditioner is available

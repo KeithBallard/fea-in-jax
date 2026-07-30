@@ -248,7 +248,7 @@ def calculate_jacobian_wo_constraints(
     diag_mask = J_sparse_ff.row == J_sparse_ff.col
     J_sparse_ff = jsparse.COO(
         (
-            jnp.where(diag_mask, J_sparse_ff.data + 0., J_sparse_ff.data),
+            jnp.where(diag_mask, J_sparse_ff.data + solver_options.damp_Newton_diag, J_sparse_ff.data),
             J_sparse_ff.row,
             J_sparse_ff.col,
         ),
@@ -766,7 +766,7 @@ def solve_nonlinear_step(
         "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
     )
 
-    def line_search(u_f, delta_u, R_f, isv_f, residual_isv_func, max_backtracks = 20):
+    def line_search(u_f, delta_u, R_f, isv_f, residual_isv_func, max_backtracks):
         norm_R0 = jnp.linalg.norm(R_f)
 
         def cond_fun(state):
@@ -853,6 +853,7 @@ def solve_nonlinear_step(
             R_f=R_f,
             isv_f = new_internal_state_beqi,
             residual_isv_func = residual_isv_func_w_constraints,
+            max_backtracks=solver_options.max_backtracks,
         )
 
         if debug_info.contains(DebugOutputQuantities.NODE_SOLUTION):
