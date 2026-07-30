@@ -186,7 +186,7 @@ def _calculate_jacobian_coo_terms_batch(
     return (J_ett, rows, cols)
 
 
-@partial(jax.jit, static_argnames=("debug_info", "precomputed_jacobian_nnz"))
+@partial(jax.jit, static_argnames=("debug_info", "precomputed_jacobian_nnz", "solver_options"))
 def calculate_jacobian_wo_constraints(
     u_f: jnp.ndarray,
     element_residual_func: jax.tree_util.Partial,
@@ -194,6 +194,7 @@ def calculate_jacobian_wo_constraints(
     assembly_map_b: list[jsparse.BCSR],
     precomputed_jacobian_nnz: int,
     debug_info: DebugInfo | NullDebugInfo,
+    solver_options: SolverOptions,
 ):
 
     # NOTE This could be slow, measure.  To speed up this section, it might help to
@@ -719,6 +720,7 @@ def solve_nonlinear_step(
             assembly_map_b=assembly_map_b,
             precomputed_jacobian_nnz=jacobian_nnz,
             debug_info=debug_info,
+            solver_options=solver_options,
         )
     )
 

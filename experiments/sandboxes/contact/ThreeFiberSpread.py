@@ -215,6 +215,7 @@ def run_threeFiberTow(
         pseudotime_iters=len(dyn_bcs),
         pre_strain=pre_strain,
         debug_info=debug_info,
+        blow_up_threshold=10,
     )
     u = u.reshape((-1,3))
 
@@ -237,14 +238,15 @@ VTMS_args = {
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
     'NeumannForce':[(i+1)*1e3 for i in range(10)],
-    'filename_base': 'ThreeFiberSpread/test_contact_VTMS_analogue_Jul27',
+    # 'filename_base': 'ThreeFiberSpread/test_contact_VTMS_analogue_Jul27',
+    'filename_base': None,
     'contact_params': ContactParams(
         self_adjacency_block       = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_linear,
         D_stiffness_to_E_ratio     = 1.,
         M_to_D_ratio               = 1.05,
         C_to_D_ratio               = 1.0,
-        M_stiffness_to_E_ratio     = 0.00001,
+        M_stiffness_to_E_ratio     = 0.0001,
         contact_search_alpha       = 1.4,
     ),
     'solver_options': SolverOptions(
