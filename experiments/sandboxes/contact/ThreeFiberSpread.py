@@ -140,7 +140,7 @@ def run_threeFiberTow(
     XN: list[tuple],
     NeumannForce,
     contact_params,
-    solver_options: SolverOptions,
+    # solver_options: SolverOptions,
     filename_base = None,
     pre_strain: float | None = None,
     x_shift: np.ndarray | None = None,
@@ -157,6 +157,19 @@ def run_threeFiberTow(
         x_shift = x_shift,
         y_shift = y_shift,
         z_shift = z_shift,
+    )
+    d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
+    min_dist = d[d.nonzero()].min()
+    solver_options=SolverOptions(
+        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
+        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
+        # linear_precond_type=PreconditionerType.JACOBI,
+        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+        nonlinear_max_iter=100,
+        linear_max_iter=200,
+        max_linear_displacement=min(min_dist,fabric.diameters[0])/10,
+        # max_linear_displacement=fabric.diameters[0]/10,
+        max_backtracks=20,
     )
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
@@ -198,8 +211,6 @@ def run_threeFiberTow(
         dyn_bcs.append(temp_bcs)
 
 
-    d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
-    min_dist = d[d.nonzero()].min()
     E = 1e9
     A = (fabric.diameters[0]/2)**2*np.pi
     print(f"EA/N = {E*A/NeumannForce}")
@@ -238,27 +249,26 @@ VTMS_args = {
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
     'NeumannForce':[(i+1)*1e3 for i in range(10)],
-    # 'filename_base': 'ThreeFiberSpread/test_contact_VTMS_analogue_Jul27',
-    'filename_base': None,
+    # 'NeumannForce':np.concatenate(
+    #     (
+    #         [(i+1)*1000 for i in range(3)],
+    #         [3000+(i+1)*250 for i in range(11)],
+    #         [(i+1)*1000 for i in range(5,10)]
+    #     )
+    # ),
+    'filename_base': 'ThreeFiberSpread/Jul30/quadratic',
+    # 'filename_base': None,
     'contact_params': ContactParams(
         self_adjacency_block       = 10000,
-        contact_constitutive_model = elastic_contact_truss_piecewise_linear,
+        contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
         D_stiffness_to_E_ratio     = 1.,
         M_to_D_ratio               = 1.05,
         C_to_D_ratio               = 1.0,
-        M_stiffness_to_E_ratio     = 0.0001,
+        M_stiffness_to_E_ratio     = 0.0005,
         contact_search_alpha       = 1.4,
     ),
-    'solver_options': SolverOptions(
-        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
-        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
-        # linear_precond_type=PreconditionerType.JACOBI,
-        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=100,
-        linear_max_iter=200,
-        # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
-    ),
 }
+run_threeFiberTow(**VTMS_args)
 # debug_info=make_debug_info(
 #     flags = [
 #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),

@@ -352,6 +352,36 @@ def __contact_stiffness_piecewise_linear(
 
 @jax.tree_util.Partial
 @jax.jit
+def __contact_stiffness_piecewise_quadratic(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_c= material_params_m[..., 0] # stiffness at physical contact 
+    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
+
+    ramp_up_distance      = total_radius*material_params_m[...,4]
+    hard_contact_distance = total_radius*material_params_m[...,5]
+    search_radius         = total_radius*material_params_m[..., 6] # search_radius
+
+    E_min = material_params_m[...,7]
+
+    mu = E_min/(ramp_up_distance-search_radius)
+    alpha = (E_c - E_min + mu*(ramp_up_distance-hard_contact_distance))/((hard_contact_distance-ramp_up_distance)**2)
+    beta = mu - 2*alpha*ramp_up_distance
+    gamma = E_min + alpha*ramp_up_distance**2 - mu*ramp_up_distance
+
+    seg1 = alpha*d**2 + beta*d + gamma
+    seg2 = E_min/(ramp_up_distance-search_radius)*(d-search_radius)
+    # E = ()*(jnp.where(d<ramp_up_distance,1,0))
+    # E += ()*(jnp.where(d>ramp_up_distance,1,0)-jnp.where(d>search_radius,1,0))
+    return jnp.where(
+        d<ramp_up_distance,
+        seg1,
+        jnp.where(d<search_radius,seg2, 0.0),
+    )
+
+@jax.tree_util.Partial
+@jax.jit
 def __contact_stiffness_exponential(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
@@ -430,6 +460,7 @@ def __elastic_contact_truss_kernel(
 elastic_contact_truss_constant = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_constant)
 elastic_contact_truss_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_linear)
 elastic_contact_truss_piecewise_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_linear)
+elastic_contact_truss_piecewise_quadratic = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_quadratic)
 elastic_contact_truss_exponential = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_exponential)
 
 
