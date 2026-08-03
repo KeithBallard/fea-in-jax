@@ -1,4 +1,10 @@
+import argparse
+import csv
+import statistics
+import time
+
 from fe_jax.helper import *
+import jax
 import matplotlib.pyplot as plt
 import numpy as np
 from copy import deepcopy
@@ -140,13 +146,15 @@ def run_threeFiberTow(
     XN: list[tuple],
     NeumannForce,
     contact_params,
-    # solver_options: SolverOptions,
     filename_base = None,
     pre_strain: float | None = None,
     x_shift: np.ndarray | None = None,
     y_shift: np.ndarray | None = None,
     z_shift: np.ndarray | None = None,
     debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
+    linear_solve_type: LinearSolverType = LinearSolverType.SPSOLVE_PYPARDISO,
+    damp_Newton_diag: float = 0.,
+    solver_options: SolverOptions | None = None,
 ):
     """ """
     fabric, bcs = make_bundle(
@@ -160,21 +168,19 @@ def run_threeFiberTow(
     )
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_dist = d[d.nonzero()].min()
-    solver_options=SolverOptions(
-        # linear_solve_type=LinearSolverType.GMRES_JAX_SCIPY ,
-        # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY ,
-        # linear_precond_type=PreconditionerType.JACOBI,
-        linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-        nonlinear_max_iter=100,
-        linear_max_iter=200,
-        max_linear_displacement=min(min_dist,fabric.diameters[0])/10,
-        # max_linear_displacement=fabric.diameters[0]/10,
-        max_backtracks=20,
-    )
+    if solver_options is None:
+        solver_options=SolverOptions(
+            linear_solve_type=linear_solve_type,
+            nonlinear_max_iter=100,
+            linear_max_iter=200,
+            max_linear_displacement=min(min_dist,fabric.diameters[0])/10,
+            max_backtracks=20,
+            damp_Newton_diag=damp_Newton_diag,
+        )
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
-        debug_info.file.attrs['contact_search_radius']          = contact_params.contact_search_radius
+        debug_info.file.attrs['contact_search_alpha']           = contact_params.contact_search_alpha
         debug_info.file.attrs['contact_M_to_D_ratio']           = contact_params.M_to_D_ratio
         debug_info.file.attrs['contact_M_stiffness_to_E_ratio'] = contact_params.M_stiffness_to_E_ratio
         debug_info.file.attrs['contact_self_adjacency_block']   = contact_params.self_adjacency_block
@@ -183,6 +189,7 @@ def run_threeFiberTow(
         debug_info.file.attrs['solver_nonlinear_max_iter']      = solver_options.nonlinear_max_iter
         debug_info.file.attrs['solver_linear_max_iter']         = solver_options.linear_max_iter
         debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
+        debug_info.file.attrs['solver_damp_Newton_diag']        = solver_options.damp_Newton_diag
         debug_info.file.attrs['points']                         = fabric.points
     dyn_bcs = []
     f_n = lambda z,nf : nf*(np.exp(-(4*z)**2) - np.exp(-16))/(1-np.exp(-16))
@@ -213,7 +220,7 @@ def run_threeFiberTow(
 
     E = 1e9
     A = (fabric.diameters[0]/2)**2*np.pi
-    print(f"EA/N = {E*A/NeumannForce}")
+    print(f"EA/N = {E*A/np.asarray(NeumannForce)}")
     print(f"{min(min_dist/2,fabric.diameters[0]/2)}")
     u, _, _ = solve_fiber_mechanics_bvp(
         fabric=fabric,
@@ -232,6 +239,7 @@ def run_threeFiberTow(
 
     D_D = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_d = D_D[D_D.nonzero()].min()
+    jax.block_until_ready(u)
     if not isinstance(debug_info, NullDebugInfo):
         print('close debug HDF5 file')
         debug_info.file.close()
@@ -244,19 +252,11 @@ def run_threeFiberTow(
 #     contact_search_radius=0.25,
 #     NeumannForce = 1E5
 # )
-VTMS_args = {
+args = {
     'n_elements':[40]*3,
     'X0':[[i[0],i[1],-1] for i in build_custom_hex([2,1],0.1)],
     'XN':[[i[0],i[1],1] for i in build_custom_hex([2,1],0.1)],
     'NeumannForce':[(i+1)*1e3 for i in range(10)],
-    # 'NeumannForce':np.concatenate(
-    #     (
-    #         [(i+1)*1000 for i in range(3)],
-    #         [3000+(i+1)*250 for i in range(11)],
-    #         [(i+1)*1000 for i in range(5,10)]
-    #     )
-    # ),
-    # 'filename_base': 'ThreeFiberSpread/Jul30/quadratic',
     'filename_base': None,
     'contact_params': ContactParams(
         self_adjacency_block       = 10000,
@@ -264,16 +264,282 @@ VTMS_args = {
         D_stiffness_to_E_ratio     = 1.,
         M_to_D_ratio               = 1.05,
         C_to_D_ratio               = 1.0,
-        M_stiffness_to_E_ratio     = 0.000,
+        M_stiffness_to_E_ratio     = 0.0001,
         contact_search_alpha       = 1.4,
     ),
 }
-# run_threeFiberTow(**VTMS_args)
+
+CONTACT_MODEL_SCENARIOS = {
+    "exponential": elastic_contact_truss_exponential,
+    "tanh": elastic_contact_truss_tanh,
+    "piecewise_linear": elastic_contact_truss_piecewise_linear,
+    "piecewise_quadratic": elastic_contact_truss_piecewise_quadratic,
+    "constant": elastic_contact_truss_constant,
+}
+
+SOLVER_SCENARIOS = {
+    "pardiso_no_damp": {
+        "linear_solve_type": LinearSolverType.SPSOLVE_PYPARDISO,
+        "damp_Newton_diag": 0.,
+    },
+    "pardiso_damp_1": {
+        "linear_solve_type": LinearSolverType.SPSOLVE_PYPARDISO,
+        "damp_Newton_diag": 1.,
+    },
+    "bicgstab": {
+        "linear_solve_type": LinearSolverType.BICGSTAB_JAX_SCIPY,
+        "damp_Newton_diag": 0.,
+    },
+}
+
+BENCHMARK_DEBUG_FLAGS = [
+    (DebugOutputQuantities.NODE_SOLUTION, DebugOutputStage.NONLINEAR_SOLVE),
+    (DebugOutputQuantities.NODE_RESIDUAL, DebugOutputStage.NONLINEAR_SOLVE),
+]
+
+BENCHMARK_RESULT_FIELDS = [
+    "backend",
+    "devices",
+    "contact_model",
+    "solver",
+    "linear_solve_type",
+    "damp_Newton_diag",
+    "status",
+    "cold_runtime_s",
+    "cold_final_max_deflection",
+    "hot_warmup_runtime_s",
+    "hot_mean_runtime_s",
+    "hot_min_runtime_s",
+    "hot_max_runtime_s",
+    "hot_std_runtime_s",
+    "hot_runs",
+    "hot_times_s",
+    "hot_final_max_deflection",
+    "cold_filename_base",
+    "cold_debug_filename",
+    "error",
+]
+
+
+def _contact_params_for_model(contact_model):
+    contact_params = deepcopy(args["contact_params"])
+    contact_params.contact_constitutive_model = contact_model
+    return contact_params
+
+
+def _scenario_kwargs(
+    contact_name: str,
+    solver_name: str,
+    filename_base: str | None,
+    debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
+):
+    solver_spec = SOLVER_SCENARIOS[solver_name]
+    run_args = args.copy()
+    run_args["contact_params"] = _contact_params_for_model(
+        CONTACT_MODEL_SCENARIOS[contact_name]
+    )
+    run_args["filename_base"] = filename_base
+    run_args["debug_info"] = debug_info
+    run_args["linear_solve_type"] = solver_spec["linear_solve_type"]
+    run_args["damp_Newton_diag"] = solver_spec["damp_Newton_diag"]
+    return run_args
+
+
+def _final_max_deflection(u):
+    return float(np.linalg.norm(np.asarray(u), axis=1).max())
+
+
+def _timed_run(run_kwargs):
+    start = time.perf_counter()
+    u, _, _ = run_threeFiberTow(**run_kwargs)
+    jax.block_until_ready(u)
+    elapsed = time.perf_counter() - start
+    return elapsed, _final_max_deflection(u)
+
+
+def _close_debug_info(debug_info):
+    if isinstance(debug_info, NullDebugInfo):
+        return
+    if debug_info.file.id.valid:
+        debug_info.file.close()
+
+
+def _run_benchmark_scenario(
+    contact_name: str,
+    solver_name: str,
+    backend: str,
+    devices: str,
+    output_prefix: str,
+    hot_runs: int,
+    write_hot_output: bool,
+):
+    solver_spec = SOLVER_SCENARIOS[solver_name]
+    scenario_base = f"{output_prefix}/{backend}/{contact_name}/{solver_name}"
+    cold_filename_base = f"{scenario_base}/cold"
+    cold_debug_filename = f"{scenario_base}/cold_debug.h5"
+    row = {
+        "backend": backend,
+        "devices": devices,
+        "contact_model": contact_name,
+        "solver": solver_name,
+        "linear_solve_type": solver_spec["linear_solve_type"].name,
+        "damp_Newton_diag": solver_spec["damp_Newton_diag"],
+        "status": "ok",
+        "cold_runtime_s": "",
+        "cold_final_max_deflection": "",
+        "hot_warmup_runtime_s": "",
+        "hot_mean_runtime_s": "",
+        "hot_min_runtime_s": "",
+        "hot_max_runtime_s": "",
+        "hot_std_runtime_s": "",
+        "hot_runs": hot_runs,
+        "hot_times_s": "",
+        "hot_final_max_deflection": "",
+        "cold_filename_base": cold_filename_base,
+        "cold_debug_filename": cold_debug_filename,
+        "error": "",
+    }
+
+    try:
+        debug_info = make_debug_info(
+            flags=BENCHMARK_DEBUG_FLAGS,
+            filename=cold_debug_filename,
+        )
+        try:
+            cold_time, cold_deflection = _timed_run(
+                _scenario_kwargs(
+                    contact_name=contact_name,
+                    solver_name=solver_name,
+                    filename_base=cold_filename_base,
+                    debug_info=debug_info,
+                )
+            )
+        finally:
+            _close_debug_info(debug_info)
+
+        row["cold_runtime_s"] = cold_time
+        row["cold_final_max_deflection"] = cold_deflection
+
+        warmup_filename_base = (
+            f"{scenario_base}/hot_warmup" if write_hot_output else None
+        )
+        hot_warmup_time, hot_final_deflection = _timed_run(
+            _scenario_kwargs(
+                contact_name=contact_name,
+                solver_name=solver_name,
+                filename_base=warmup_filename_base,
+            )
+        )
+        row["hot_warmup_runtime_s"] = hot_warmup_time
+
+        hot_times = []
+        for hot_i in range(hot_runs):
+            hot_filename_base = (
+                f"{scenario_base}/hot_{hot_i}" if write_hot_output else None
+            )
+            hot_time, hot_final_deflection = _timed_run(
+                _scenario_kwargs(
+                    contact_name=contact_name,
+                    solver_name=solver_name,
+                    filename_base=hot_filename_base,
+                )
+            )
+            hot_times.append(hot_time)
+
+        row["hot_mean_runtime_s"] = statistics.fmean(hot_times)
+        row["hot_min_runtime_s"] = min(hot_times)
+        row["hot_max_runtime_s"] = max(hot_times)
+        row["hot_std_runtime_s"] = statistics.stdev(hot_times) if len(hot_times) > 1 else 0.
+        row["hot_times_s"] = ";".join(str(t) for t in hot_times)
+        row["hot_final_max_deflection"] = hot_final_deflection
+    except Exception as exc:
+        row["status"] = "failed"
+        row["error"] = repr(exc)
+        print(f"FAILED {contact_name} / {solver_name}: {exc!r}")
+
+    return row
+
+
+def run_benchmarks(
+    contact_models: list[str] | None = None,
+    solvers: list[str] | None = None,
+    hot_runs: int = 7,
+    output_prefix: str = "contact/ThreeFiberSpread/benchmarks",
+    write_hot_output: bool = False,
+):
+    if hot_runs < 1:
+        raise ValueError("hot_runs must be at least 1.")
+    contact_models = list(CONTACT_MODEL_SCENARIOS) if contact_models is None else contact_models
+    solvers = list(SOLVER_SCENARIOS) if solvers is None else solvers
+    backend = jax.default_backend()
+    devices = ",".join(str(device) for device in jax.devices())
+    results_filename = f"{output_prefix}/{backend}/results.csv"
+    results_path = get_output(results_filename)
+
+    with open(results_path, "w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=BENCHMARK_RESULT_FIELDS)
+        writer.writeheader()
+        for contact_name in contact_models:
+            for solver_name in solvers:
+                print(f"\n=== Benchmark: {contact_name} / {solver_name} on {backend} ===")
+                row = _run_benchmark_scenario(
+                    contact_name=contact_name,
+                    solver_name=solver_name,
+                    backend=backend,
+                    devices=devices,
+                    output_prefix=output_prefix,
+                    hot_runs=hot_runs,
+                    write_hot_output=write_hot_output,
+                )
+                writer.writerow(row)
+                csv_file.flush()
+
+    print(f"\nBenchmark results written to {results_path}")
+    return results_path
+
+
+def _parse_cli_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--benchmark", action="store_true")
+    parser.add_argument("--hot-runs", type=int, default=7)
+    parser.add_argument(
+        "--contact-models",
+        nargs="+",
+        choices=tuple(CONTACT_MODEL_SCENARIOS),
+        default=list(CONTACT_MODEL_SCENARIOS),
+    )
+    parser.add_argument(
+        "--solvers",
+        nargs="+",
+        choices=tuple(SOLVER_SCENARIOS),
+        default=list(SOLVER_SCENARIOS),
+    )
+    parser.add_argument(
+        "--output-prefix",
+        default="contact/ThreeFiberSpread/benchmarks",
+    )
+    parser.add_argument(
+        "--write-hot-output",
+        action="store_true",
+        help="Also write VTK/log outputs for hot runs. This adds file I/O to the timed path.",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    cli_args = _parse_cli_args()
+    if cli_args.benchmark:
+        run_benchmarks(
+            contact_models=cli_args.contact_models,
+            solvers=cli_args.solvers,
+            hot_runs=cli_args.hot_runs,
+            output_prefix=cli_args.output_prefix,
+            write_hot_output=cli_args.write_hot_output,
+        )
 # debug_info=make_debug_info(
 #     flags = [
 #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
 #         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-#         (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
 #     ],
 #     filename = 'contact/twoD_triangle.h5'
 # )

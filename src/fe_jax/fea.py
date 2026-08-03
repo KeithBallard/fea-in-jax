@@ -782,14 +782,13 @@ def solve_nonlinear_step(
             u_trial = u_f + alpha*delta_u
             R_trial = residual_func(u_trial)
             accepted = jnp.linalg.norm(R_trial) <= accepted_residual_growth_scale*norm_R0
-            jax.debug.print(
-                'alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}, ||delta_u|| = {du}',
-                a = alpha,
-                Rt = jnp.linalg.norm(R_trial),
-                Rf = norm_R0,
-                du = jnp.max(jnp.linalg.norm(delta_u.reshape((-1, 3)), axis=1)),
-            )
-            # jax.debug.print('n = {n}, alpha = {a}', n = n, a = alpha)
+            # jax.debug.print(
+            #     'alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}, ||delta_u|| = {du}',
+            #     a = alpha,
+            #     Rt = jnp.linalg.norm(R_trial),
+            #     Rf = norm_R0,
+            #     du = jnp.max(jnp.linalg.norm(delta_u.reshape((-1, 3)), axis=1)),
+            # )
             return alpha, u_trial, R_trial, n+1, accepted
 
         alpha = jnp.minimum(jnp.array(1.0), jnp.array(2.0)*initial_alpha)
