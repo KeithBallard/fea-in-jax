@@ -315,16 +315,6 @@ def __contact_stiffness_constant(
     E_max = material_params_m[..., 0]
     return E_max
 
-def __contact_physical_length(material_params_m: jnp.ndarray) -> jnp.ndarray:
-    if material_params_m.shape[-1] == 6:
-        return material_params_m[..., 3]
-    return material_params_m[..., 3] + material_params_m[..., 4]
-
-def __contact_M_length(material_params_m: jnp.ndarray) -> jnp.ndarray:
-    if material_params_m.shape[-1] == 6:
-        return material_params_m[..., 4]
-    return material_params_m[..., 5] * __contact_physical_length(material_params_m)
-
 @jax.tree_util.Partial
 @jax.jit
 def __contact_stiffness_piecewise_linear(
@@ -398,6 +388,23 @@ def __contact_stiffness_exponential(
     r = (jnp.log(E_min)-jnp.log(E_c))/(hard_contact_distance-ramp_up_distance)
     return alpha*jnp.exp(-r*d)
 
+@jax.tree_util.Partial
+@jax.jit
+def __contact_stiffness_tanh(
+    d: jnp.ndarray,
+    material_params_m: jnp.ndarray
+) -> float:
+    E_c= material_params_m[..., 0] # stiffness at physical contact
+    total_radius = material_params_m[..., 2] + material_params_m[..., 3]
+
+    ramp_up_distance      = total_radius*material_params_m[...,4]
+    hard_contact_distance = total_radius*material_params_m[...,5]
+
+    E_min = material_params_m[...,7]
+
+    sharpness_factor = 2/(hard_contact_distance - ramp_up_distance)*jnp.arctanh(2*E_min/E_c - 1)
+    return E_c/2*(jnp.tanh(-sharpness_factor*(d-(ramp_up_distance + hard_contact_distance)/2)) + 1)
+
 @jax.jit
 def __elastic_contact_truss_kernel(
     contact_stiffness_model: jax.tree_util.Partial,
@@ -457,11 +464,12 @@ def __elastic_contact_truss_kernel(
     return stress_dd, jnp.array([])  # no internal state
 
 # Contact formulations to use for 1D contact elements
-elastic_contact_truss_constant = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_constant)
-elastic_contact_truss_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_linear)
-elastic_contact_truss_piecewise_linear = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_linear)
+elastic_contact_truss_constant            = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_constant)
+elastic_contact_truss_linear              = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_linear)
+elastic_contact_truss_piecewise_linear    = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_linear)
 elastic_contact_truss_piecewise_quadratic = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_piecewise_quadratic)
-elastic_contact_truss_exponential = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_exponential)
+elastic_contact_truss_exponential         = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_exponential)
+elastic_contact_truss_tanh                = jax.tree_util.Partial(__elastic_contact_truss_kernel, __contact_stiffness_tanh)
 
 
 @jax.tree_util.Partial
