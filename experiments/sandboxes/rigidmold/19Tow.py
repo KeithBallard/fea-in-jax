@@ -125,6 +125,63 @@ def make_cyl_mold(xy_center,R,L,dx):
     # C = np.vstack(mask.nonzero()).T
     return P,C
 
+def make_boundary_conditions(
+    fabric,
+    old_fibers_n: int,
+    old_points_n: int,
+    fabric_n: int,
+    pin_y: float,
+):
+    bcs = []
+
+    # Fix both ends of original bundle fibers.
+    for i in fabric.fiber_offsets[:old_fibers_n]:
+        for c in range(3):
+            bcs.append(DirichletBC(index=i, component=c, value=0.0, bc_type=BCType.NODE))
+
+    for i in fabric.fiber_offsets[1:old_fibers_n + 1]:
+        for c in range(3):
+            bcs.append(DirichletBC(index=i - 1, component=c, value=0.0, bc_type=BCType.NODE))
+
+    # Prescribe pin/cylinder nodes.
+    for i in range(old_points_n, fabric_n):
+        bcs.append(DirichletBC(index=i, component=0, value=0.0, bc_type=BCType.NODE))
+        bcs.append(DirichletBC(index=i, component=1, value=pin_y, bc_type=BCType.NODE))
+        bcs.append(DirichletBC(index=i, component=2, value=0.0, bc_type=BCType.NODE))
+
+    return bcs
+
+def make_bc_schedule(
+    fabric,
+    old_fibers_n: int,
+    old_points_n: int,
+    fabric_n: int,
+    n_load_steps: int,
+    dir_step: float,
+    schedule: list[str] | tuple[str, ...] = ("LOAD", "RELAX"),
+):
+    dyn_bcs = []
+    labels = []
+
+    for k in range(1, n_load_steps + 1):
+        pin_y = k * dir_step
+
+        for stage in schedule:
+            stage = stage.upper()
+            if stage not in ("LOAD", "RELAX"):
+                raise ValueError(f"Unknown schedule stage: {stage}")
+
+            dyn_bcs.append(make_boundary_conditions(
+                fabric=fabric,
+                old_fibers_n=old_fibers_n,
+                old_points_n=old_points_n,
+                fabric_n=fabric_n,
+                pin_y=pin_y,
+            ))
+            labels.append((stage, k))
+
+    return dyn_bcs, labels
+
 def run_mold(
     fabric: VTMSBundle | VTMSFabric,
     contact_params: ContactParams,
@@ -137,7 +194,6 @@ def run_mold(
     debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
 ):
     """ """
-    # fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,diameter=diameter)
     if cylinder_points is not None:
         cylinder_points = np.asarray(cylinder_points, dtype=np.float64)
         if cylinder_points.ndim != 2 or cylinder_points.shape[1] != fabric.points.shape[1]:
@@ -192,24 +248,34 @@ def run_mold(
         # debug_info.file.attrs['solver_max_linear_displacement'] = solver_options.max_linear_displacement
         # debug_info.file.attrs['points']                         = fabric.points
 
-    bcs = [DirichletBC(index = i, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[:old_fibers_n] for c in range(3)]
-    bcs += [DirichletBC(index = i-1, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[1:old_fibers_n + 1] for c in range(3)]
-    if cylinder_points is not None:
-        bcs += [DirichletBC(index = i, component = 0, value = 0, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
-        bcs += [DirichletBC(index = i, component = 1, value = dir_step, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
-        bcs += [DirichletBC(index = i, component = 2, value = 0, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
+    # bcs = [DirichletBC(index = i, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[:old_fibers_n] for c in range(3)]
+    # bcs += [DirichletBC(index = i-1, component = c, value = 0, bc_type=BCType.NODE) for i in fabric.fiber_offsets[1:old_fibers_n + 1] for c in range(3)]
+    # if cylinder_points is not None:
+    #     bcs += [DirichletBC(index = i, component = 0, value = 0, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
+    #     bcs += [DirichletBC(index = i, component = 1, value = dir_step, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
+    #     bcs += [DirichletBC(index = i, component = 2, value = 0, bc_type=BCType.NODE) for i in range(old_points_n, fabric_n)]
 
+
+    dyn_bcs, stage_labels = make_bc_schedule(
+        fabric=fabric,
+        old_fibers_n=old_fibers_n,
+        old_points_n=old_points_n,
+        fabric_n=fabric_n,
+        n_load_steps=pseudoT,
+        dir_step=dir_step,
+        schedule=("LOAD"),
+    )
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_dist = d[d.nonzero()].min()
 
 
-    dyn_bcs = []
-    for ii in range(pseudoT):
-        temp_bcs =deepcopy(bcs)
-        for temp_bc,control_bc in zip(temp_bcs,bcs):
-            temp_bc.value = control_bc.value*(ii+1)
-        dyn_bcs.append(temp_bcs)
+    # dyn_bcs = []
+    # for ii in range(pseudoT):
+    #     temp_bcs =deepcopy(bcs)
+    #     for temp_bc,control_bc in zip(temp_bcs,bcs):
+    #         temp_bc.value = control_bc.value*(ii+1)
+    #     dyn_bcs.append(temp_bcs)
     # return fabric,rigid_mold,dyn_bcs
     print('dynamic boundary conditions generated!')
 
@@ -231,13 +297,13 @@ def run_mold(
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=4,
-            linear_max_iter=1000,
-            damp_Newton_diag=0.1,
+            nonlinear_max_iter=75,
+            linear_max_iter=200,
+            damp_Newton_diag=0.0,
             # nonlinear_relative_tol=.0001,
             max_linear_displacement=0.02,
             max_backtracks=1,
-            linear_absolute_tol=3.16e-3,
+            # linear_absolute_tol=3.16e-3,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
         plot_convergence=False,
