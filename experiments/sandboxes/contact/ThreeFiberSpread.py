@@ -256,19 +256,19 @@ VTMS_args = {
     #         [(i+1)*1000 for i in range(5,10)]
     #     )
     # ),
-    'filename_base': 'ThreeFiberSpread/Jul30/quadratic',
-    # 'filename_base': None,
+    # 'filename_base': 'ThreeFiberSpread/Jul30/quadratic',
+    'filename_base': None,
     'contact_params': ContactParams(
         self_adjacency_block       = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
         D_stiffness_to_E_ratio     = 1.,
         M_to_D_ratio               = 1.05,
         C_to_D_ratio               = 1.0,
-        M_stiffness_to_E_ratio     = 0.0005,
+        M_stiffness_to_E_ratio     = 0.000,
         contact_search_alpha       = 1.4,
     ),
 }
-run_threeFiberTow(**VTMS_args)
+# run_threeFiberTow(**VTMS_args)
 # debug_info=make_debug_info(
 #     flags = [
 #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
