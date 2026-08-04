@@ -770,7 +770,7 @@ def solve_nonlinear_step(
 
     def line_search(u_f, delta_u, R_f, residual_func, initial_alpha, max_backtracks):
         norm_R0 = jnp.linalg.norm(R_f)
-        accepted_residual_growth_scale = 1.01
+        accepted_residual_growth_scale = 1.0
 
         def cond_fun(state):
             alpha, u_trial, R_trial, n, accepted = state
