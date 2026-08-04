@@ -263,7 +263,7 @@ def run_mold(
         fabric_n=fabric_n,
         n_load_steps=pseudoT,
         dir_step=dir_step,
-        schedule=("LOAD"),
+        schedule=("LOAD","RELAX"),
     )
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
@@ -299,10 +299,10 @@ def run_mold(
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             nonlinear_max_iter=75,
             linear_max_iter=200,
-            damp_Newton_diag=0.0,
+            damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             max_linear_displacement=0.02,
-            max_backtracks=1,
+            max_backtracks=20,
             # linear_absolute_tol=3.16e-3,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -323,7 +323,7 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Jul30/uhm_quadratic_dampedDiag_BICGSTAB_NL4',
+    'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75',
     # 'filename_base': None,
     'pseudoT': 30,
     'cylinder_points': np.array([
@@ -344,7 +344,7 @@ args = {
     # ]),
     'cylinder_diameter': 1.0,
     'dir_step':-0.02,
-    'pre_strain':-0.141373887*5,
+    'pre_strain':-0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
