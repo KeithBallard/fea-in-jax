@@ -257,6 +257,7 @@ def run_tension(
     """ """
 
     fabric = refine_fabric(fabric,dX=0.25)
+    fabric = refine_tow(fabric, [2,3,2])
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
@@ -276,8 +277,8 @@ def run_tension(
     # )
     dyn_bcs = [make_boundary_conditions(fabric)]*pseudoT
 
-    d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
-    min_dist = d[d.nonzero()].min()
+    # d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
+    # min_dist = d[d.nonzero()].min()
 
 
     # dyn_bcs = []
@@ -308,9 +309,9 @@ def run_tension(
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=150,
+            nonlinear_max_iter=250,
             linear_max_iter=200,
-            damp_Newton_diag=0.0,
+            damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             # max_linear_displacement=0.5,
             max_backtracks=20,
@@ -334,9 +335,9 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'FabricExample/Aug4/tensioning_higherPreStrain_tanh',
+    'filename_base': 'FabricExample/Aug4/tensioning_higherPreStrain_damped_NL250_tanh_refined_tow_planar',
     # 'filename_base': None,
-    'pseudoT': 5,
+    'pseudoT': 1,
     'pre_strain':-0.141373887*20,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
