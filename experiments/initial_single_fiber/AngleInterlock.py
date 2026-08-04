@@ -191,8 +191,41 @@ def refine_fiber(
 
 
 
-def refine_tow():
-    pass
+def refine_tow(fabric_in,pattern):
+    def circle_pack(pattern,outer_diameter):
+        centers = build_custom_hex(pattern,1.0)
+        temp_diam = 2*(np.linalg.norm(centers,axis=1).max()+0.5)
+        diam = outer_diameter/temp_diam
+        centers = build_custom_hex(pattern,diam)
+        return centers,diam
+    refined_N = sum(pattern)
+
+    point_list = []
+    diameters = []
+    for i in range(fabric_in.get_n_bundles()):
+        c,d =  circle_pack(pattern,fabric_in.get_diameter(i))
+        for center in c:
+            p = fabric_in.get_fiber_points(i,0)
+            if fabric_in.get_material_id(i) == 1 or fabric_in.get_material_id(i) == 2:
+                point_list.append(p + np.array([0,center[0],center[1]]))
+            elif fabric_in.get_material_id(i) == 3:
+                point_list.append(p + np.array([center[0],center[1],0]))
+            else:
+                raise(RuntimeError("material id not recognized"))
+        diameters.append(d)
+
+    fiber_offsets = np.concatenate([[0],np.cumsum([point_set.shape[0] for point_set in point_list])])
+    points = np.vstack(point_list)
+    diameters = np.array(diameters)
+    fabric = VTMSFabric(
+        name="RefinedTowsInFabric",
+        material_ids=np.array([fabric_in.get_material_id(i) for i in range(fabric_in.get_n_bundles())]),
+        diameters=diameters,
+        points=points,
+        fiber_offsets=fiber_offsets,
+        bundle_offsets=refined_N*fabric_in.bundle_offsets,
+    )
+    return fabric
 
 def refine_fabric(fabric_in, dX, tow_n = 1, n_elements = None):
     point_list = [refine_fiber(fabric_in.get_fiber_points(i,0),n_elements=n_elements,dX=dX) for i in range(fabric_in.get_n_bundles())]
@@ -292,23 +325,23 @@ def run_tension(
         debug_info.file.close()
     return u,fabric,dyn_bcs
 
-args = {
-    'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'rigid_mold/EZ_Jul30/uhm_quadratic_dampedDiag_BICGSTAB_NL4',
-    # 'filename_base': None,
-    'pseudoT': 30,
-    'pre_strain':-0.141373887,
-    'contact_params': ContactParams(
-        self_adjacency_block    = 10000,
-        contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
-        D_stiffness_to_E_ratio  = 4.0,
-        # M_stiffness_to_E_ratio  = 1e-6,
-        M_stiffness_to_E_ratio  = 0.0,
-        M_to_D_ratio            = 1.00,
-        C_to_D_ratio            = 0.5,
-        contact_search_alpha    = 2.0,
-    ),
-}
+# args = {
+#     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
+#     'filename_base': 'rigid_mold/EZ_Jul30/uhm_quadratic_dampedDiag_BICGSTAB_NL4',
+#     # 'filename_base': None,
+#     'pseudoT': 30,
+#     'pre_strain':-0.141373887,
+#     'contact_params': ContactParams(
+#         self_adjacency_block    = 10000,
+#         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
+#         D_stiffness_to_E_ratio  = 4.0,
+#         # M_stiffness_to_E_ratio  = 1e-6,
+#         M_stiffness_to_E_ratio  = 0.0,
+#         M_to_D_ratio            = 1.00,
+#         C_to_D_ratio            = 0.5,
+#         contact_search_alpha    = 2.0,
+#     ),
+# }
 
 # debug_info=make_debug_info(
 #     flags = [
