@@ -202,16 +202,19 @@ def refine_tow(fabric_in,pattern):
 
     point_list = []
     diameters = []
+
+    e1 = np.array([1,0,0])
     for i in range(fabric_in.get_n_bundles()):
+        p = fabric_in.get_fiber_points(i,0)
+        grad = np.gradient(p, axis = 0, edge_order=2)
+        grad /= np.linalg.norm(grad, axis =1,keepdims=True)
+        rots = [sp.spatial.transform.Rotation.align_vectors([g],[e1])[0] for g in grad]
+        mats = np.stack([r.as_matrix() for r in rots])
+
         c,d =  circle_pack(pattern,fabric_in.get_diameter(i))
         for center in c:
-            p = fabric_in.get_fiber_points(i,0)
-            if fabric_in.get_material_id(i) == 1 or fabric_in.get_material_id(i) == 2:
-                point_list.append(p + np.array([0,center[0],center[1]]))
-            elif fabric_in.get_material_id(i) == 3:
-                point_list.append(p + np.array([center[0],center[1],0]))
-            else:
-                raise(RuntimeError("material id not recognized"))
+            rotated_center = mats @ np.array([0,center[0],center[1]])
+            point_list.append(p + rotated_center)
         diameters.append(d)
 
     fiber_offsets = np.concatenate([[0],np.cumsum([point_set.shape[0] for point_set in point_list])])
