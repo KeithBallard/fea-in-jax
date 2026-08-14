@@ -264,7 +264,7 @@ args = {
         D_stiffness_to_E_ratio     = 1.,
         M_to_D_ratio               = 1.05,
         C_to_D_ratio               = 1.0,
-        M_stiffness_to_E_ratio     = 0.0001,
+        M_stiffness_to_E_ratio     = 0.0005,
         contact_search_alpha       = 1.4,
     ),
 }

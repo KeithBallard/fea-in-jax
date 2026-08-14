@@ -1,5 +1,5 @@
 from fe_jax.helper import *
-jax.config.update("jax_disable_jit", True)
+# jax.config.update("jax_disable_jit", True)
 
 deb = DebugInfo(
     flags=[

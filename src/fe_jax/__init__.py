@@ -19,5 +19,6 @@ from .constraints import *
 from .contact import *
 from .postprocess import *
 from .paths import *
+from .diagnostic_tools import *
 
 from .fiber_mechanics import *

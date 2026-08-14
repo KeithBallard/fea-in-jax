@@ -871,6 +871,8 @@ def solve_nonlinear_step(
 
         if debug_info.contains(DebugOutputQuantities.GLOBAL_JACOBIAN_COO):
             jacobian_func_wo_constraints(u_f)
+            debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "dep_dofs", constraints.dep_dofs)
+            debug_info.output(DebugOutputQuantities.GLOBAL_JACOBIAN_COO, "n_dofs", jnp.array([u_f.shape[0]]))
 
         return (
             nl_iteration + 1,

@@ -60,5 +60,6 @@ addopts = [
 ]
 markers = [
     "truss: truss-element regression and integration tests",
+    "pseudotime: pseudotime regression and integration tests",
     "slow: tests that are too expensive for the default fast suite",
 ]
