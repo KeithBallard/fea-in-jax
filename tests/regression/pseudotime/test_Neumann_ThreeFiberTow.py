@@ -1,9 +1,14 @@
 from fe_jax.helper import *
+import pytest
 import matplotlib.pyplot as plt
 import numpy as np
 from copy import deepcopy
 # jax.config.update("jax_disable_jit", True)
+import jax.extend
 
+
+if __name__ == '__main__':
+    print(jax.extend.backend.get_backend().platform)
 
 def make_single_fiber(
     n_elements: int,
@@ -139,15 +144,16 @@ def run_threeFiberTow(
         plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
-        debug_info=make_debug_info(
-            flags = [
-                (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.TIME_STEP),
-                (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.TIME_STEP),
-                (DebugOutputQuantities.ELEMENT_JACOBIAN,DebugOutputStage.NONLINEAR_SOLVE),
-                (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-            ],
-            filename = 'test_hdf5/PseudoThreeFiberTow.h5'
-        )
+        debug_info = None,
+        # debug_info=make_debug_info(
+        #     flags = [
+        #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.TIME_STEP),
+        #         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.TIME_STEP),
+        #         (DebugOutputQuantities.ELEMENT_JACOBIAN,DebugOutputStage.NONLINEAR_SOLVE),
+        #         (DebugOutputQuantities.ELEMENT_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+        #     ],
+        #     filename = 'test_hdf5/PseudoThreeFiberTow.h5'
+        # )
     )
     u = u.reshape((-1,3))
     fabric.points = fabric.points + u
@@ -156,53 +162,38 @@ def run_threeFiberTow(
     min_d = D_D[D_D.nonzero()].min()
     return u,fabric,min_d
 
-# u,f = run_threeFiberTow(
-#     n_elements=[10, 10, 10],
-#     X0=[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
-#     XN=[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-#     contact_search_radius=0.25,
-#     NeumannForce = 1E5
-# )
-args = {
-    'n_elements':[40]*3,
-    'X0':[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
-    'XN':[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
-    'NeumannForce':[(i+1)*1e5 for i in range(10)],
-    # 'NeumannForce':[i*1e4 for i in range(10,101)],
-    # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
-    'filename_base': 'UpdatedContact/Exponential_Neumann',
-    'contact_params': ContactParams(
-        self_adjacency_block    = 10000,
-        contact_stiffness_model = __contact_stiffness_exponential,
-        D_stiffness_to_E_ratio  = 0.25,
-        contact_search_radius   = 0.5,
-        M_to_D_ratio            = 1.25,
-        M_stiffness_to_E_ratio  = 1.0/100.0
-    ),
-}
+def get_args():
+    args = {
+        'n_elements':[40]*3,
+        'X0':[[0, 0, -1], [0.1, 0, -1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, -1]],
+        'XN':[[0, 0, 1], [0.1, 0, 1], [0.5 * 0.1, np.sqrt(3) / 2 * 0.1, 1]],
+        'NeumannForce':[(i+1)*1e5 for i in range(10)],
+        # 'NeumannForce':[i*1e4 for i in range(10,101)],
+        # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
+        'filename_base': None,
+        'contact_params': ContactParams(
+            self_adjacency_block       = 10000,
+            contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
+            D_stiffness_to_E_ratio     = 0.25,
+            M_to_D_ratio               = 1.0,
+            C_to_D_ratio               = 0.75,
+            M_stiffness_to_E_ratio     = 0.0000001,
+            contact_search_alpha       = 3,
+        ),
+    }
+    return args
 
-# args['contact_stiffness_model'] = contact_stiffness_linear
-ul,fl,dl = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_piecewise_linear
-# up,fp,dp = run_threeFiberTow(**args)
-# args['contact_stiffness_model'] = contact_stiffness_exponential
-# ue,fe,de = run_threeFiberTow(**args)
-
-def get_min(fabric,i,j):
-    fi = fabric.get_fiber_points(0,i)
-    fj = fabric.get_fiber_points(0,j)
-    D = np.linalg.norm(fi[None,:,:] - fj[:,None,:],axis=-1)
-    return D[D.nonzero()].min()
-
-def get_mins(fabric):
-    n = fe.get_n_fibers_in_bundle(0)
-    M = []
-    for i in range(n):
-        for j in range(i+1,n):
-            print(f"({i},{j}) - {get_min(fabric,i,j)}")
-            M.append(get_min(fabric,i,j))
-    return np.array(M).min()
-
-# get_mins(fl)
-# get_mins(fp)
-# get_mins(fe)
+@pytest.mark.slow
+@pytest.mark.pseudotime
+def test_PseudoThreeFiberTow():
+    args = get_args()
+    X = []
+    N = [10,20,40,80]
+    for i in N:
+        args['NeumannForce'] = np.linspace(1e5,1e6,i)
+        X.append(run_threeFiberTow(**args))
+    for i in range(len(X)):
+        for j in range(i+1,len(X)):
+            assert jnp.allclose(X[i][0],X[j][0], rtol=1e-11, atol=1e-12), (
+                f"Solutions with {N[i]} and {N[j]} loading steps do not match."
+            )
