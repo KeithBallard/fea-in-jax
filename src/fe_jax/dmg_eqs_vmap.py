@@ -31,8 +31,8 @@ def calc_dmg_crit(eps_d,material_params_m):
     input: 
         J2: second invariant of the deviatoric stress 
         I1: first invariant of the stress 
-        sigmay_c: yield strengths of the epoxy under compression
-        sigmay_t: yield strengths of the epoxy under tension
+        sigmay_c: dmg strengths of the epoxy under compression
+        sigmay_t: dmg strengths of the epoxy under tension
     ouput: yield_criterion
     '''        
     eps_c = material_params_m[5]

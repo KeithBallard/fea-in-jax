@@ -676,12 +676,12 @@ def solve_nonlinear_step(
         nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
         absolute_error = jnp.linalg.norm(R_f)
         relative_error = absolute_error / initial_R_f_norm
-        jax.debug.print(
-            "End of iteration {x} rel error {y}, abs error {z}",
-            x=nl_iteration - 1,
-            y=relative_error,
-            z=absolute_error,
-        )
+        # jax.debug.print(
+        #     "End of iteration {x} rel error {y}, abs error {z}",
+        #     x=nl_iteration - 1,
+        #     y=relative_error,
+        #     z=absolute_error,
+        # )
         """
         jax.debug.print(
             "Convergence criteria: {} {} {}",
@@ -811,14 +811,17 @@ def convert_external_load_to_system(
         )
 
     dep_dofs = np.empty(n_loads, dtype=np.int32)
-    loads = np.empty(n_loads, dtype=np.float32)
+    loads_list = []
 
     for i, el in enumerate(external_load):
         dep_dofs[i] = el.dep_dof
-        loads[i] = el.value
+        loads_list.append(jnp.array(el.value))
+
+    loads = jnp.stack(jnp.broadcast_arrays(*loads_list), axis=-1)
+
     return LoadSystem(
         dep_dofs=jnp.array(dep_dofs, dtype=jnp.int32),
-        loads=jnp.array(loads, dtype=jnp.float32),
+        loads=loads,
     )
 
 
@@ -873,6 +876,7 @@ def preprocess_bvp(
     boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
+    jacobian_nnz: int | None = None,
 ):
     """
     Converts information from a user-facing format to a JAX-ameniable format.
@@ -952,9 +956,10 @@ def preprocess_bvp(
     # Compute the anticipated number of non-zeros for the assembled Jacobian, which
     # is only needed for solvers that actually form the Jacobian in memory.
     # NOTE: we need a concrete value to specialize for JIT of other functions
-    jacobian_nnz = int(
-        _calculate_jacobian_unique_nnz(ebc=ebc)
-    )  # n_vertices=V, ebc=ebc))
+    if jacobian_nnz is None:
+        jacobian_nnz = int(
+            _calculate_jacobian_unique_nnz(ebc=ebc)
+        )  # n_vertices=V, ebc=ebc))
 
     constraint_system, f_ext = convert_boundary_conditions(
         boundary_conditions=boundary_conditions,
@@ -1106,6 +1111,10 @@ def solve_nonlinear_quasi_step(
     f_ext,
 ):
     """
+    #TODO this can likely be merged with solve_nonlinear_step. The main diference is here we use scan with a jax.cond
+    the reason is reverse auto-diff has issues with while cond. 
+    
+    #-------------------------------------------
     Solve the linearized system of equations emerging from the governing equations.
     This can be used within an outer loop to solve linear PDEs across time steps with different
     boundary conditions or to solve a nonlinear problem (via Newton's method for example).
@@ -1185,38 +1194,14 @@ def solve_nonlinear_quasi_step(
     R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_0_g)
     initial_R_f_norm = jnp.linalg.norm(R_f)
 
-    def while_cond(args) -> bool:
-        nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
-        absolute_error = jnp.linalg.norm(R_f)
-        relative_error = absolute_error / initial_R_f_norm
-        # jax.debug.print(
-        #     "End of iteration {x} rel error {y}, abs error {z}",
-        #     x=nl_iteration + 1,
-        #     y=relative_error,
-        #     z=absolute_error,
-        # )
-        """
-        jax.debug.print(
-            "Convergence criteria: {} {} {}",
-            nl_iteration < solver_options.nonlinear_max_iter,
-            relative_error > solver_options.nonlinear_relative_tol,
-            absolute_error > solver_options.nonlinear_absolute_tol,
-        )
-        """
-        return (
-            (nl_iteration < solver_options.nonlinear_max_iter)
-            & (relative_error > solver_options.nonlinear_relative_tol)
-            & (absolute_error > solver_options.nonlinear_absolute_tol)
-        )
-
     print(
         "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
     )
 
-    def while_body(
-        args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo],
-    ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo]:
-        nl_iteration, u_f, R_f, new_internal_state_beqi, info = args
+    def do_step(
+        args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo, Any],
+    ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo, Any]:
+        nl_iteration, u_f, R_f, new_internal_state_beqi, info, _ = args
 
         delta_u, info = linear_solve(
             residual=Residual(
@@ -1239,39 +1224,58 @@ def solve_nonlinear_quasi_step(
             f_ext=f_ext,
         )
 
-        u_f = u_f + delta_u
-        # u_f = constraints.apply_to_solution(u_f)
-        R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f)
+        u_f_new = u_f + delta_u
+        # u_f_new = constraints.apply_to_solution(u_f_new)
+        R_f_new, new_internal_state_beqi = residual_isv_func_w_constraints(u_f=u_f_new)
+
+        absolute_error = jnp.linalg.norm(R_f_new)
+        relative_error = absolute_error / initial_R_f_norm
+        converged = (relative_error <= solver_options.nonlinear_relative_tol) | (
+            absolute_error <= solver_options.nonlinear_absolute_tol
+        )
 
         return (
             nl_iteration + 1,
-            u_f,
-            R_f,
+            u_f_new,
+            R_f_new,
             new_internal_state_beqi,
             info.increment_nl_iteration(),
+            converged,
         )
 
-    _, u_f, R_f, new_internal_state_beqi, info = jax.lax.while_loop(
-        cond_fun=while_cond,
-        body_fun=while_body,
-        init_val=(
-            0,
-            u_0_g,
-            R_f,
-            new_internal_state_beqi,
-            init_solver_info(solver_options),
-        ),
+    def skip_step(
+        args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo, Any],
+    ) -> tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo, Any]:
+        return args
+
+    def scan_body(carry, _):
+        converged = carry[5]
+        new_carry = jax.lax.cond(converged, skip_step, do_step, carry)
+        return new_carry, None
+
+    initial_converged = initial_R_f_norm <= solver_options.nonlinear_absolute_tol
+    init_val = (
+        0,
+        u_0_g,
+        R_f,
+        new_internal_state_beqi,
+        init_solver_info(solver_options),
+        initial_converged,
     )
+
+    final_val, _ = jax.lax.scan(
+        f=jax.checkpoint(scan_body),
+        init=init_val,
+        xs=None,
+        length=solver_options.nonlinear_max_iter,
+    )
+
+    _, u_f, R_f, new_internal_state_beqi, info, _ = final_val
 
     absolute_error = jnp.linalg.norm(R_f)
     relative_error = absolute_error / initial_R_f_norm
 
-    # return (u_f, new_internal_state_beqi, R_f, relative_error, info)
-    
-    flat_internal_state = jnp.hstack([isv.ravel() for isv in new_internal_state_beqi])
-    new_ebc = ebc.replace(internal_state=flat_internal_state)
-    ISV_be = compute_ISV_be(new_internal_state_beqi)
-    return (u_f, new_ebc, ISV_be, R_f, relative_error, info)
+    return (u_f, new_internal_state_beqi, R_f, relative_error, info)
 
 def compute_ISV_be(internal_state_beqi):
     ISV_be = []
@@ -1281,14 +1285,14 @@ def compute_ISV_be(internal_state_beqi):
         strain_q = state_q[:, :, 0:3]
         stress_eff_q = state_q[:, :, 3:6]
         damage_q = state_q[:, :, 6]
-        
+        stress_dmg_q = stress_eff_q * (1 - damage_q[:, :, jnp.newaxis])
         # Apply damage to stress at each quadrature point (idx < 2 is matrix)
         # Using lax.cond or jnp.where is not strictly necessary if idx is known at compile time
         # since this loop is unrolled during JIT tracing.
-        stress_dmg_q = jax.lax.cond(
-            idx < 2,
-            lambda _: stress_eff_q * (1 - damage_q[:, :, jnp.newaxis]),
-            lambda _: stress_eff_q,
+        damage_q = jax.lax.cond(
+            state_q.shape[-1] < 8,  # Apply only to fibers
+            lambda _: damage_q*0 - 0.2,
+            lambda _: damage_q,
             operand=None
         )
         
@@ -1300,3 +1304,129 @@ def compute_ISV_be(internal_state_beqi):
         ISV_be.append(avg_state)
         
     return ISV_be
+
+
+def solve_bvp_quasi(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: jax.tree_util.Partial,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
+    u_0_g: jnp.ndarray | None = None,
+    solver_options: SolverOptions = SolverOptions(),
+    profile_memory: bool = False,
+    jacobian_nnz: int | None = None,
+) -> tuple[jnp.ndarray, list[jnp.ndarray]]:
+    """
+    Solve a quasi-static boundary value problem across time steps using `jax.lax.scan`.
+
+    Parameters
+    ----------
+    vertices_vd          : vertices needed for all cells on the rank, ndarray[float, (V, D)]
+    element_batches      : batch of elements for this rank
+    element_residual_func: residual function emerging from weak form of governing equations
+    boundary_conditions  : Dirichlet, Neumann, or Periodic boundary conditions (can have array values for time series)
+    multipoint_constraints : Linear constraints between degrees of freedom, list[MultiPointConstraint]
+    global_values        : Length of list indicates number of global solution vector-values that will
+                           added to the global system (e.g. for periodic BCs).
+    u_0_g                : initial guess for the solution at the first step, ndarray[float, (V * D)] or None (default, zeros will be used)
+    solver_options       : options for the linear/nonlinear solvers
+    profile_memory       : indicates if GPU memory usage should be profiled, which will create *.prof
+                           files in the current directory
+
+    Returns
+    -------
+    u_history      : displacement solution history across time steps, ndarray[float, (T, V * D)]
+    ISV_be_history : averaged internal state variable history across time steps for each element batch
+    """
+    if boundary_conditions is None:
+        boundary_conditions = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
+
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
+        jacobian_nnz=jacobian_nnz,
+    )
+
+    n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
+
+    # If an initial guess was not provided, then use zeros
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(n_total_dofs,))
+    else:
+        assert u_0_g.shape == (n_total_dofs,)
+
+    solve_nonlinear_step_jit = jax.jit(
+        solve_nonlinear_step,
+        static_argnames=["solver_options", "jacobian_nnz"],
+    )
+
+    all_g = constraint_system.g
+    if all_g.ndim == 1:
+        all_g = all_g[None, :]
+        
+    all_loads = f_ext.loads
+    if all_loads.ndim == 1:
+        all_loads = jnp.broadcast_to(all_loads[None, :], (all_g.shape[0], all_loads.shape[0]))
+        
+    if all_loads.shape[0] > all_g.shape[0]:
+        if all_g.shape[0] == 1:
+            all_g = jnp.broadcast_to(all_g, (all_loads.shape[0], all_g.shape[1]))
+        else:
+            raise ValueError("Inconsistent time steps between Dirichlet and Neumann BCs")
+
+    def step_fn(carry, xs):
+        u_prev, ebc_curr = carry
+        g_i, loads_i = xs
+        
+        constraint_system_i = constraint_system.replace(g=g_i)
+        f_ext_i = f_ext.replace(loads=loads_i)
+        
+        u, new_internal_state_beqi, residual, relative_error, info = solve_nonlinear_step_jit(
+            element_residual_func=element_residual_func,
+            ebc=ebc_curr,
+            assembly_map_b=assembly_map_b,
+            jacobian_nnz=jacobian_nnz,
+            u_0_g=u_prev,
+            constraints=constraint_system_i,
+            solver_options=solver_options,
+            f_ext=f_ext_i,
+        )
+
+        flat_internal_state = jnp.hstack([isv.ravel() for isv in new_internal_state_beqi])
+        ebc_next = ebc_curr.replace(internal_state=flat_internal_state)
+        ISV_be = compute_ISV_be(new_internal_state_beqi)
+        
+        return (u, ebc_next), (u, ISV_be)
+
+    # capture memory usage before
+    if profile_memory:
+        start_memory_profile("solve_bvp_quasi")
+
+    init_carry = (u_0_g, ebc)
+    final_carry, (u_history, ISV_be_history) = jax.lax.scan(step_fn, init_carry, (all_g, all_loads))
+
+    # capture memory usage after and analyze
+    if profile_memory:
+        u_history.block_until_ready()
+        stop_memory_profile("solve_bvp_quasi")
+
+    return (u_history, ISV_be_history)
+
+

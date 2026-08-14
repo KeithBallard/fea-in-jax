@@ -8,6 +8,7 @@ jax.config.update("jax_compilation_cache_dir", str(pathlib.Path(__file__).parent
 from .np_types import *
 from .basis_quadrature import *
 from .fea import *
+from .implicit_differentiation import *
 from .linear_elasticity_dmg import *
 from .hyperelasticity import *
 from .profiling import *

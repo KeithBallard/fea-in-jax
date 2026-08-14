@@ -3,11 +3,10 @@ import jax.numpy as jnp
 import numpy as np
 
 def write2VTK_ISV(args,vtk_mesh,u,ISV_be,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id):
-    '''This is the version that uses only all quadrature for saving and average value of all quadratures'''
+    '''ISV_be[idx] has shape (num_elements, 7) and is already averaged with damage applied'''
     # Displacement
     vtk_mesh['displacement'][:,:2] = u.reshape(-1, 2)
     for idx, id in enumerate([matrix_tri_id,matrix_quad_id,fiber_tri_id,fiber_quad_id]):
-        # ISV_be[idx] has shape (num_elements, 7) and is already averaged with damage applied
         avg_state = np.array(ISV_be[idx])
         
         avg_strain = avg_state[:, 0:3]
@@ -39,6 +38,7 @@ def write2VTK_avg(args,vtk_mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fib
         stress_eff_q = state_q[:, :, 3:6]
         damage_q = state_q[:, :, 6]
         
+        # TODO double check if this is still needed. might be double dipping in fea.py
         # Apply damage to stress at each quadrature point (only for matrix elements)
         if idx < 2:
             stress_dmg_q = stress_eff_q * (1 - damage_q[:, :, np.newaxis])

@@ -914,3 +914,19 @@ if PYPARDISO_AVAILABLE:
         # return buffer_callback(
         #    __pypardiso_solve_impl, result_info, command_buffer_compatible=False
         # )(A.data, A.row, A.col, b)
+
+jax.tree_util.register_pytree_node(
+    SolverOptions,
+    lambda x: ((), x),
+    lambda aux, _: aux
+)
+jax.tree_util.register_pytree_node(
+    LinearSolverType,
+    lambda x: ((), x),
+    lambda aux, _: aux
+)
+jax.tree_util.register_pytree_node(
+    PreconditionerType,
+    lambda x: ((), x),
+    lambda aux, _: aux
+)
