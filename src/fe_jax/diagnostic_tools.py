@@ -26,6 +26,7 @@ def sparse_l1_cond_estimate(A):
 
 def read_free_jacobian_coo(f,ts,nl):
     p = f'ts_{ts}/nl_{nl}/GLOBAL_JACOBIAN_COO/'
+    print(p)
     n_dofs = f[f'{p}n_dofs'][:][0]
     A = scipy.sparse.coo_matrix(
         (
@@ -41,6 +42,7 @@ def read_free_jacobian_coo(f,ts,nl):
 
 def plot_Jac_cond(db_file):
     pseudo_steps = [int(i.strip('ts_')) for i in list(db_file.keys())]
+    pseudo_steps.sort()
     nl_steps = []
     for t in pseudo_steps:
         temp = [int(i.strip('nl_')) for i in list(db_file[f'ts_{t}'].keys())]
@@ -49,10 +51,11 @@ def plot_Jac_cond(db_file):
     C = []
     next_stage=[]
     for pseudo_stage in pseudo_steps:
-        next_stage.append(nl_steps[pseudo_stage][-1])
-        for nl_stage in nl_steps[pseudo_stage]:
-            A = read_free_jacobian_coo(db_file,pseudo_stage,nl_stage)
-            C.append(sparse_l1_cond_estimate(A))
+        if len(nl_steps[pseudo_stage])>1:
+            next_stage.append(nl_steps[pseudo_stage][-1])
+            for nl_stage in nl_steps[pseudo_stage]:
+                A = read_free_jacobian_coo(db_file,pseudo_stage,nl_stage)
+                C.append(sparse_l1_cond_estimate(A))
     fig, ax = plt.subplots()
 
     ax.semilogy(C)

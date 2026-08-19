@@ -282,18 +282,31 @@ def elastic_truss(
     """
 
     eps_pre = internal_state_i[...,0] if internal_state_i.size != 0 else 0
+    eps_accum = internal_state_i[...,1] if internal_state_i.size != 0 else 0
 
     E = material_params_m[..., 0]
     A = material_params_m[..., 1]
     # Assumes the node number puts the endpoints as first and last entries. 
-    dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
-    l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
+    dx_cur = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
+    L_cur = jnp.linalg.norm(dx_cur)
+    l_cur = dx_cur/L_cur
 
-    P_dd = jnp.outer(l_d,l_d)
-    eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
-    stress_dd = E*A*(eps_a-eps_pre)*P_dd
+    dx_ref = x_nd[-1,:]-x_nd[0,:]
+    L_ref = jnp.linalg.norm(dx_ref)
+    l_ref = dx_ref/L_ref
 
-    return stress_dd, jnp.array([])  # no internal state
+    P_dd = jnp.outer(l_ref,l_cur)
+    eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_cur)
+
+    # eps_a = L_cur / L_ref - 1.0
+
+    eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
+    stress_dd = E*A*(eps_total_internal + eps_pre)*P_dd
+
+
+    internal_state_i = internal_state_i.at[...,1].set(eps_total_internal)
+    return stress_dd, internal_state_i  # no internal state
+    # return stress_dd, jnp.array([])  # no internal state
 
 @jax.tree_util.Partial
 @jax.jit

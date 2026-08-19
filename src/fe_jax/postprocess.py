@@ -61,7 +61,7 @@ def write_fabric_mold_contact(
         )
 
     if mold is not None:
-        points = np.concatenate([fabrickk.points,mold.points])
+        points = np.concatenate([fabric.points,mold.points])
         cells = np.concatenate([fabric_cells,mold.connections+fabric.points.shape[0]])
     else:
         points = fabric.points

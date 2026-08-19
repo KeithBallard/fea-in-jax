@@ -110,6 +110,7 @@ def run_threeFiberTow(
     contact_params: ContactParams,
     NeumannForce,
     filename_base = 'PseudoTimeNeumann_in_y/incrementalLoad',
+    pre_strain = None,
 ):
     """ """
     fabric, bcs = make_bundle(n_elements=n_elements, X0=X0, XN=XN,NeumannForce=NeumannForce)
@@ -145,6 +146,7 @@ def run_threeFiberTow(
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
         debug_info = None,
+        pre_strain=pre_strain,
         # debug_info=make_debug_info(
         #     flags = [
         #         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.TIME_STEP),
@@ -180,6 +182,7 @@ def get_args():
             M_stiffness_to_E_ratio     = 0.0000001,
             contact_search_alpha       = 3,
         ),
+        'pre_strain':0.0,
     }
     return args
 
@@ -187,6 +190,7 @@ def get_args():
 @pytest.mark.pseudotime
 def test_PseudoThreeFiberTow():
     args = get_args()
+    args['filename_base']=None
     X = []
     N = [10,20,40,80]
     for i in N:
