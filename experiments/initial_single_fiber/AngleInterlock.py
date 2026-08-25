@@ -252,10 +252,12 @@ def run_tension(
     filename_base =None,
     pre_strain: float | None = None,
     debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
+    rigid_mold = None,
 ):
     """ """
 
     fabric = refine_fabric(fabric,dX=0.25)
+    fabric = refine_tow(fabric, [2,3,2])
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
@@ -275,8 +277,8 @@ def run_tension(
     # )
     dyn_bcs = [make_boundary_conditions(fabric)]*pseudoT
 
-    d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
-    min_dist = d[d.nonzero()].min()
+    # d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
+    # min_dist = d[d.nonzero()].min()
 
 
     # dyn_bcs = []
@@ -294,8 +296,11 @@ def run_tension(
         fabric=fabric,
         rigid_mold=rigid_mold,
         materials=[
-            VTMSFiberMaterial(id=0, E=E, A=tow_A),
-            VTMSFiberMaterial(id=1, E=E, A=cylinder_A),
+            VTMSFiberMaterial(
+                id=fabric.get_material_id(i),
+                E=E,
+                A=np.pi*(fabric.get_diameter(i)/2)**2,
+            ) for i in range(fabric.get_n_bundles())
         ],
         boundary_conditions=dyn_bcs,
         contact_options=contact_params,
@@ -306,10 +311,10 @@ def run_tension(
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             nonlinear_max_iter=75,
             linear_max_iter=200,
-            damp_Newton_diag=0.0,
+            damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
-            # max_linear_displacement=0.02,
-            max_backtracks=1,
+            # max_linear_displacement=0.5,
+            max_backtracks=20,
             # linear_absolute_tol=3.16e-3,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -328,28 +333,29 @@ def run_tension(
         debug_info.file.close()
     return u,fabric,dyn_bcs
 
-# args = {
-#     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-#     'filename_base': 'rigid_mold/EZ_Jul30/uhm_quadratic_dampedDiag_BICGSTAB_NL4',
-#     # 'filename_base': None,
-#     'pseudoT': 30,
-#     'pre_strain':-0.141373887,
-#     'contact_params': ContactParams(
-#         self_adjacency_block    = 10000,
-#         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
-#         D_stiffness_to_E_ratio  = 4.0,
-#         # M_stiffness_to_E_ratio  = 1e-6,
-#         M_stiffness_to_E_ratio  = 0.0,
-#         M_to_D_ratio            = 1.00,
-#         C_to_D_ratio            = 0.5,
-#         contact_search_alpha    = 2.0,
-#     ),
-# }
+args = {
+    'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
+    'filename_base': 'FabricExample/Aug25/tensioning_higherPreStrain_damped_NL250_tanh_refined_tow_planar',
+    # 'filename_base': None,
+    'pseudoT': 1,
+    'pre_strain':0.141373887*20,
+    'contact_params': ContactParams(
+        self_adjacency_block    = 10000,
+        contact_constitutive_model = elastic_contact_truss_tanh,
+        D_stiffness_to_E_ratio  = 6.0,
+        # M_stiffness_to_E_ratio  = 1e-6,
+        M_stiffness_to_E_ratio  = 0.001,
+        M_to_D_ratio            = 1.00,
+        C_to_D_ratio            = 0.8,
+        contact_search_alpha    = 2.0,
+    ),
+}
 
-# debug_info=make_debug_info(
-#     flags = [
-#         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
-#         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-#     ],
-#     filename = args['filename_base'] + '.h5'
-# )
+debug_info=make_debug_info(
+    flags = [
+        (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+    ],
+    filename = args['filename_base'] + '.h5'
+)
