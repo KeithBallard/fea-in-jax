@@ -295,12 +295,14 @@ def elastic_truss(
     L_ref = jnp.linalg.norm(dx_ref)
     l_ref = dx_ref/L_ref
 
+    # P_dd = jnp.outer(l_cur,l_cur)
     P_dd = jnp.outer(l_ref,l_cur)
-    eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_cur)
+    # eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
 
-    # eps_a = L_cur / L_ref - 1.0
+    eps_a = L_cur / L_ref - 1.0
 
     eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
+    # eps_total_internal = eps_accum + eps_a
     stress_dd = E*A*(eps_total_internal + eps_pre)*P_dd
 
 
