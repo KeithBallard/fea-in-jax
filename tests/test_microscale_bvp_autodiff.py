@@ -15,7 +15,7 @@ def test_microscale_bvp():
     # initialise_tracking()
 
     # Read in the mesh
-    mesh = meshio.read(get_mesh("microscale_2D_r0.vtk"))
+    mesh = meshio.read(get_mesh("microscale_2D_r2.vtk"))
     points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
     cells = np.array(mesh.cells[0].data, dtype=np.uint64)
     mesh.cell_data["DomainIDs"][0] = np.array(
@@ -177,40 +177,167 @@ def test_microscale_bvp():
         )
 
 
-    """
+
     petsc_result, _, _ = time_solve("PETSc solve_bvp_PETSc", run_petsc, n_calls=3)
     u_petsc, residual_petsc, _ = petsc_result
-    print("|R| PETSc = ", jnp.linalg.norm(residual_petsc))
 
-    exit(1)
-    """
-
-    """
     jax_result, _, _ = time_solve("JAX solve_bvp", run_jax, n_calls=2)
     u, residual, element_batches = jax_result
-    print("|R| JAX   = ", jnp.linalg.norm(residual))
 
-
-
-
-
-
-
-
-
-
-    print("|R| PETSc = ", jnp.linalg.norm(residual_petsc))
-    print("|R| JAX   = ", jnp.linalg.norm(residual))
+    residual_petsc_norm = jnp.linalg.norm(residual_petsc)
+    residual_jax_norm = jnp.linalg.norm(residual)
+    print("|R| PETSc = ", residual_petsc_norm)
+    print("|R| JAX   = ", residual_jax_norm)
     print("|u_petsc - u_jax| = ", jnp.linalg.norm(u_petsc - u))
+
+    diff_options = jetsci.SolverOptions(
+                        nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
+                        linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
+                        linear_solve_type=jetsci.PETScLinearSolverType.CG,
+                        nonlinear_relative_tol=1e-6,
+                        nonlinear_absolute_tol=1e-14,
+                        linear_max_iter=10000,
+                        linear_relative_tol=1e-6,
+                        linear_absolute_tol=1e-14,
+                    )
+    
+    solve_phi, phi_0, x_0, _, diff_options = build_differentiable_bvp_PETSc_solve(
+        vertices_vd=points,
+        element_batches=make_element_batches(),
+        element_residual_func=linear_elasticity_residual,
+        boundary_conditions=bcs,
+        multipoint_constraints=None,
+        u_0_g=u_0,
+        diagnostics=False,
+        petsc_solver_options=diff_options,
+    )
+
+    try:
+        response_weights = jnp.linspace(
+            0.5,
+            1.5,
+            x_0.shape[0],
+            dtype=x_0.dtype,
+        )
+        response_weights = response_weights / jnp.linalg.norm(response_weights)
+        phi_direction = jnp.sin(
+            jnp.arange(phi_0.shape[0], dtype=phi_0.dtype) + 1.0
+        )
+        phi_dot = 1e-3 * phi_0 * phi_direction
+
+        def scalar_response(active_phi):
+            u_active = solve_phi(active_phi, x_0)
+            return jnp.vdot(response_weights, u_active)
+
+        def make_element_batches_from_phi(active_phi):
+            matrix_size = matrix_mat_params_eqm.size
+            matrix_phi = active_phi[:matrix_size].reshape(matrix_mat_params_eqm.shape)
+            fiber_phi = active_phi[matrix_size:].reshape(fiber_mat_params_eqm.shape)
+            return [
+                ElementBatch(
+                    fe_type=fe_type,
+                    n_dofs_per_basis=2,
+                    connectivity_en=matrix_cells,
+                    constitutive_model=elastic_isotropic,
+                    material_params=matrix_phi,
+                ),
+                ElementBatch(
+                    fe_type=fe_type,
+                    n_dofs_per_basis=2,
+                    connectivity_en=fiber_cells,
+                    constitutive_model=elastic_orthotropic,
+                    material_params=fiber_phi,
+                ),
+            ]
+
+        def jax_scalar_response(active_phi):
+            u_active, _, _ = solve_bvp(
+                element_residual_func=linear_elasticity_residual,
+                vertices_vd=points,
+                element_batches=make_element_batches_from_phi(active_phi),
+                u_0_g=u_0,
+                boundary_conditions=bcs,
+                solver_options=SolverOptions(
+                    linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+                    linear_precond_type=PreconditionerType.JACOBI,
+                    nonlinear_relative_tol=1e-6,
+                    nonlinear_absolute_tol=1e-14,
+                    linear_max_iter=10000,
+                    linear_relative_tol=1e-6,
+                    linear_absolute_tol=1e-14,
+                ),
+            )
+            return jnp.vdot(response_weights, u_active)
+
+        PETScStartTime = time.time()
+        response, response_dot = jax.jvp(
+            scalar_response,
+            (phi_0,),
+            (phi_dot,),
+        )
+        response.block_until_ready()
+        response_dot.block_until_ready()
+        PETScDiffTime = time.time() - PETScStartTime
+
+        eps = 1.0
+        response_plus = scalar_response(phi_0 + eps * phi_dot)
+        response_minus = scalar_response(phi_0 - eps * phi_dot)
+        finite_difference_dot = (response_plus - response_minus) / (2.0 * eps)
+        finite_difference_dot.block_until_ready()
+
+        JaxStartTime = time.time()
+        jax_response, jax_response_dot = jax.jvp(
+            jax_scalar_response,
+            (phi_0,),
+            (phi_dot,),
+        )
+        jax_response.block_until_ready()
+        jax_response_dot.block_until_ready()
+        JaxDiffTime = time.time() - PETScStartTime
+
+        derivative_abs_error = jnp.abs(response_dot - finite_difference_dot)
+        derivative_rel_error = derivative_abs_error / (
+            jnp.abs(finite_difference_dot) + 1e-14
+        )
+        finite_difference_signal = jnp.abs(response_plus - response_minus)
+        expected_finite_difference_signal = jnp.abs(2.0 * eps * response_dot)
+        petsc_jax_abs_error = jnp.abs(response_dot - jax_response_dot)
+        petsc_jax_rel_error = petsc_jax_abs_error / (
+            jnp.abs(jax_response_dot) + 1e-14
+        )
+        print("PETSc d response / d phi dot =", response_dot)
+        print("JAX d response / d phi dot =", jax_response_dot)
+        print("Finite-difference d response / d phi dot =", finite_difference_dot)
+        print("Finite-difference response signal =", finite_difference_signal)
+        print("Expected finite-difference response signal =", expected_finite_difference_signal)
+        print("PETSc vs finite-difference abs error =", derivative_abs_error)
+        print("PETSc vs finite-difference rel error =", derivative_rel_error)
+        print("PETSc vs JAX abs error =", petsc_jax_abs_error)
+        print("PETSc vs JAX rel error =", petsc_jax_rel_error)
+        print("PETSc vs Jax time:",PETScDiffTime,"vs",JaxDiffTime)
+        assert (float(petsc_jax_abs_error) < 1e-10) or (
+            float(petsc_jax_rel_error) < 5e-2
+        )
+        if float(expected_finite_difference_signal) > 1e-10:
+            assert (float(derivative_abs_error) < 1e-10) or (
+                float(derivative_rel_error) < 5e-2
+            )
+        else:
+            print(
+                "Skipping finite-difference assertion because the expected response "
+                "difference is below the solve-noise threshold."
+            )
+    finally:
+        solver_key = diff_options.solver_key
+        if solver_key is not None:
+            jetsci.petsc_snes.differentiable_snes.unregister_primitive_context(solver_key)
+            jetsci.petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
 
     # Make sure the solution matches at the Dirichlet BCs
     dirichlet_dofs = np.array([U * bc.index + bc.component for bc in bcs])
     dirichlet_values = np.array([bc.value for bc in bcs])
     assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
 
-    # Write output
-    mesh.point_data["u"] = u.reshape((points.shape[0], U))
-    mesh.write(get_output("test_microscale_bvp_out.vtk"))
-    """
 
 test_microscale_bvp()
+

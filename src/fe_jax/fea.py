@@ -1112,6 +1112,50 @@ def solve_bvp_PETSc(
     return_petsc_solver_options: bool = False,
     ):
 
+    solve, phi, u_0_g, residual_for_phi, options = build_differentiable_bvp_PETSc_solve(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
+        u_0_g=u_0_g,
+        diagnostics=diagnostics,
+        petsc_solver_options=petsc_solver_options,
+    )
+
+    solver_key = options.solver_key
+    try:
+        output = solve(phi=phi,x0=u_0_g)
+        residual_at_output = residual_for_phi(output)
+        if return_petsc_solver_options:
+            return output, residual_at_output, element_batches, options
+        return output, residual_at_output, element_batches
+    finally:
+        if solver_key is not None:
+            petsc_snes.differentiable_snes.unregister_primitive_context(solver_key)
+        if destroy_solver and solver_key is not None:
+            petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
+
+
+def build_differentiable_bvp_PETSc_solve(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: jax.tree_util.Partial,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
+    u_0_g: jnp.ndarray | None = None,
+    diagnostics: bool = False,
+    petsc_solver_options: jetsci.SolverOptions | None = None,
+    ):
+    """Build a differentiable PETSc-backed BVP solve closure.
+
+    Returns `(solve, phi, x0, residual_for_phi, options)`, where `solve(phi, x0)`
+    is the custom-JVP SNES primitive and `phi` is the flattened material
+    parameter vector from the preprocessed element batch collection.
+    """
+
     if boundary_conditions is None:
         boundary_conditions = []
     if multipoint_constraints is None:
@@ -1181,22 +1225,8 @@ def solve_bvp_PETSc(
             jacobian=jacobian,
             solver_key=options.solver_key,
         )
-
-
-
-    solver_key = options.solver_key
-    try:
-        solve = petsc_snes.differentiable_snes.make_differentiable_snes_solve(primitive)
-        output = solve(phi=phi,x0=u_0_g)
-        residual_at_output = residual_for_phi(output)
-        if return_petsc_solver_options:
-            return output, residual_at_output, element_batches, options
-        return output, residual_at_output, element_batches
-    finally:
-        if solver_key is not None:
-            petsc_snes.differentiable_snes.unregister_primitive_context(solver_key)
-        if destroy_solver and solver_key is not None:
-            petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
+    solve = petsc_snes.differentiable_snes.make_differentiable_snes_solve(primitive)
+    return solve, phi, u_0_g, residual_for_phi, options
 
 
 

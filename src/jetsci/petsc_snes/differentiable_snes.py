@@ -327,8 +327,6 @@ def _differentiable_snes_solve_jvp(primals, tangents, *, solver_key: int):
     phi, x0 = primals
     phi_dot, _x0_dot = tangents
 
-    jax.debug.print("we're in here actually")
-
     primitive = _primitive_context(solver_key)
     hook_start = perf_counter()
     nonlinear_solve, linear_solve, _ = _hooks_from_solver_key(
