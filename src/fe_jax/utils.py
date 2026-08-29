@@ -219,3 +219,46 @@ def tensor_to_voigt_indices(tensor_shape: tuple[int, ...]) -> tuple[int, ...]:
         raise RuntimeError(
             "The tensor must be 1D, 2D or 3D to convert to Voigt notation."
         )
+
+def get_element_areas(conn, points):
+    p = points[conn]
+    if conn.shape[1] == 3:
+        area = 0.5 * jnp.abs(p[:,0,0]*(p[:,1,1]-p[:,2,1]) + 
+                             p[:,1,0]*(p[:,2,1]-p[:,0,1]) + 
+                             p[:,2,0]*(p[:,0,1]-p[:,1,1]))
+    elif conn.shape[1] == 4:
+        area = 0.5 * jnp.abs((p[:,0,0]*p[:,1,1] - p[:,0,1]*p[:,1,0]) + 
+                             (p[:,1,0]*p[:,2,1] - p[:,1,1]*p[:,2,0]) + 
+                             (p[:,2,0]*p[:,3,1] - p[:,2,1]*p[:,3,0]) + 
+                             (p[:,3,0]*p[:,0,1] - p[:,3,1]*p[:,0,0]))
+    return area
+
+
+def compute_stress_strain_curve(ISV_be_history, element_batches, points):
+    w_s11_sum = 0
+    w_s22_sum = 0
+    w_s12_sum = 0
+    total_area = 0
+    for idx, ISV in enumerate(ISV_be_history):
+        # ISV has shape (time, num_cells, Q, num_state_vars)
+        # Average over Q for each cell
+        s11_cell = ISV[..., 3] # (time, num_cells)
+        s22_cell = ISV[..., 4] # (time, num_cells)
+        s12_cell = ISV[..., 5] # (time, num_cells)
+        
+        conn = element_batches[idx].connectivity_en
+        area = get_element_areas(conn, points)
+        
+        w_s11_t = jnp.sum(s11_cell * area[None, :], axis=1)
+        w_s22_t = jnp.sum(s22_cell * area[None, :], axis=1)
+        w_s12_t = jnp.sum(s12_cell * area[None, :], axis=1)
+        
+        w_s11_sum += w_s11_t
+        w_s22_sum += w_s22_t
+        w_s12_sum += w_s12_t
+        total_area += jnp.sum(area)
+        
+    s11_global = w_s11_sum / total_area
+    s22_global = w_s22_sum / total_area
+    s12_global = w_s12_sum / total_area
+    return s11_global, s22_global, s12_global
