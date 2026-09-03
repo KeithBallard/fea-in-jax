@@ -1,0 +1,15 @@
+
+Alberto's Machine
+Sep 4 2026
+BICGSTAB - NL 75 max
+Quadratic contact model 
+total Lagrangian
+2h 40min 7s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
+Alberto's Machine
+Sep 4 2026
+BICGSTAB - NL 75 max
+Quadratic contact model 
+updated Lagrangian
+52min 10s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
