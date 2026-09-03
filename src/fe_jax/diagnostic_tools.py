@@ -3,7 +3,8 @@ import numpy  as np
 import matplotlib.pyplot as plt
 
 def sparse_l2_cond_estimate(A,dense=False):
-    if A.shape[0]>1000:
+    A = (A+A.T)/2
+    if A.shape[0]>1000 & dense == True:
         print('Matrix is larger than 1000x1000, reverting to sparse algorithms even though you requested "dense=False"')
     else:
         if dense:
@@ -14,7 +15,7 @@ def sparse_l2_cond_estimate(A,dense=False):
 
 
 def sparse_l1_cond_estimate(A,dense=False):
-    if A.shape[0]>1000:
+    if A.shape[0]>1000 & dense == True:
         print('Matrix is larger than 1000x1000, reverting to sparse algorithms even though you requested "dense=False"')
     else:
         if dense:
@@ -81,3 +82,4 @@ def plot_Jac_cond(db_file,cond_metric=1, dense=False,ax=None, color='k', label=N
     ax.set_xlabel('nonlinear iterations')
     ax.set_ylabel(f'l{cond_metric} - condtion number')
     # plt.show()
+    return C

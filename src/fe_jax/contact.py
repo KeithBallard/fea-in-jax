@@ -4,6 +4,8 @@ from jax import numpy as jnp
 import numpy as np
 import scipy as sp
 
+import newton
+import warp as wp
 from fe_jax.basis_quadrature import FiniteElementType
 
 @dataclass
@@ -18,6 +20,115 @@ class ContactParams:
     C_to_D_ratio: float # C is distance to have a hard stiffness set.
     contact_search_alpha: float # dimensionless value for search_radius = contact_search_alpha*(radius1+radius2)
     # It should be C_to_D_ratio<M_to_D_ratio<contact_search_alpha
+
+@dataclass
+class NewtonContactContext:
+    model: object
+    state: object
+    collision_pipe: object
+    contacts: object
+    shape_to_node: jnp.ndarray
+    contact_capacity: int
+
+
+def build_newton_node_cloud_contact(
+    points,
+    point_diameters,
+    contact_search_alpha,
+    self_adjacency_block,
+    point_fiber_ids,
+    *,
+    rigid_contact_max=None,
+) -> NewtonContactContext:
+    builder = newton.ModelBuilder()
+
+    for node_id, x in enumerate(np.asarray(points)):
+        r=0.5*point_diameters[node_id]
+        gap=(contact_search_alpha-1.0)*r
+
+        cfg=newton.ModelBuilder.ShapeConfig(gap=gap)
+        body=builder.add_body(xform=wp.transform(wp.vec3(*x)))
+        builder.add_shape_sphere(
+            body=body,
+            radius=r,
+            cfg=cfg,
+            label=f"node_{node_id}",
+        )
+
+    # Match current self-contact exclusion.
+    for i in range(len(points)):
+        for j in range(i+1, len(points)):
+            if point_fiber_ids[i] == point_fiber_ids[j] and j-i <= self_adjacency_block:
+                builder.add_shape_collision_filter_pair(i,j)
+
+    model=builder.finalize()
+    state=model.state()
+
+    # ModelBuilder.finalize() precomputes model.shape_contact_pairs for Newton's
+    # default explicit broad phase. For node-cloud contact this can be O(N^2) and
+    # consume a large amount of GPU memory. We use broad_phase="sap" below, which
+    # builds candidate pairs from AABB overlap at collide time, so the explicit pair
+    # array is not needed. Drop the reference here to avoid carrying that memory.
+    model.shape_contact_pairs = wp.zeros(0, dtype=wp.vec2i, device=model.device)
+    model.shape_contact_pair_count = 0
+
+    n_points = len(points)
+    pipe=newton.CollisionPipeline(
+        model,
+        broad_phase="sap",
+        shape_pairs_max=100*n_points,
+        rigid_contact_max=rigid_contact_max,
+    )
+    contacts = pipe.contacts()
+
+    return NewtonContactContext(
+        model=model,
+        state=state,
+        collision_pipe=pipe,
+        contacts=contacts,
+        shape_to_node=jax.device_put(
+            jnp.arange(len(points), dtype=jnp.int32),
+            wp.device_to_jax(model.device),
+        ),
+        contact_capacity=contacts.rigid_contact_max,
+    )
+
+@wp.kernel
+def _update_node_body_positions_3d(
+    points: wp.array2d[wp.float32],
+    body_q: wp.array[wp.transform],
+):
+    i=wp.tid()
+    x=wp.vec3(points[i,0],points[i,1],points[i,2])
+    body_q[i]=wp.transform(x,wp.quat_identity())
+
+def update_newton_node_body_positions(ctx, current_points):
+    current_points_jax = jnp.asarray(current_points, dtype=jnp.float32)
+    current_points_jax = jax.device_put(
+        current_points_jax,
+        wp.device_to_jax(ctx.model.device),
+    )
+    points_wp=wp.from_jax(current_points_jax)
+    wp.launch(
+        _update_node_body_positions_3d,
+        dim=current_points_jax.shape[0],
+        inputs=[points_wp, ctx.state.body_q],
+        device=ctx.model.device,
+    )
+
+def NewtonContactSearch(ctx: NewtonContactContext, current_points_jax: jnp.ndarray):
+    update_newton_node_body_positions(ctx=ctx, current_points=current_points_jax)
+    ctx.collision_pipe.collide(ctx.state, ctx.contacts)
+
+    shape0=wp.to_jax(ctx.contacts.rigid_contact_shape0)
+    shape1=wp.to_jax(ctx.contacts.rigid_contact_shape1)
+    count=wp.to_jax(ctx.contacts.rigid_contact_count)[0]
+
+    node0=ctx.shape_to_node[shape0]
+    node1=ctx.shape_to_node[shape1]
+    active=jnp.arange(ctx.contact_capacity) < count
+
+    return node0, node1, active, count
 
 @dataclass
 class ContactPreprocessConfig:
