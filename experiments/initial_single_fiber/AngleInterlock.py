@@ -309,7 +309,7 @@ def run_tension(
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=250,
+            nonlinear_max_iter=75,
             linear_max_iter=200,
             damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
@@ -335,26 +335,27 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'FabricExample/Aug4/tensioning_higherPreStrain_damped_NL250_tanh_refined_tow_planar',
+    'filename_base': 'FabricExample/Aug4/tensioning_higherPreStrain_damped_NL250_tanh_refined_tow_planar_totalLagrangian',
     # 'filename_base': None,
     'pseudoT': 1,
     'pre_strain':-0.141373887*20,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_tanh,
-        D_stiffness_to_E_ratio  = 4.0,
+        D_stiffness_to_E_ratio  = 6.0,
         # M_stiffness_to_E_ratio  = 1e-6,
         M_stiffness_to_E_ratio  = 0.001,
         M_to_D_ratio            = 1.00,
-        C_to_D_ratio            = 0.5,
+        C_to_D_ratio            = 0.8,
         contact_search_alpha    = 2.0,
     ),
 }
 
-# debug_info=make_debug_info(
-#     flags = [
-#         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
-#         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-#     ],
-#     filename = args['filename_base'] + '.h5'
-# )
+debug_info=make_debug_info(
+    flags = [
+        (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+    ],
+    filename = args['filename_base'] + '.h5'
+)

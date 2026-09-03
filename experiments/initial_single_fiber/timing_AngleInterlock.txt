@@ -1,0 +1,12 @@
+Alberto's GPU
+Sep 7 2026
+quadratic contact model
+updated Lagrangian
+17min 59s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
+Alberto's GPU
+Sep 8 2026
+quadratic contact model
+total Lagrangian
+22min 54s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
