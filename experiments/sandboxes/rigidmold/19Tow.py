@@ -263,7 +263,8 @@ def run_mold(
         fabric_n=fabric_n,
         n_load_steps=pseudoT,
         dir_step=dir_step,
-        schedule=("LOAD","RELAX"),
+        # schedule=("LOAD","RELAX"),
+        schedule=("LOAD",),
     )
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
@@ -323,7 +324,7 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75',
+    'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75_total',
     # 'filename_base': None,
     'pseudoT': 30,
     'cylinder_points': np.array([
@@ -361,6 +362,7 @@ debug_info=make_debug_info(
     flags = [
         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
     ],
     filename = args['filename_base'] + '.h5'
 )
