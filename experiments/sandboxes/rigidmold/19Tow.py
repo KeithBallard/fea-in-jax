@@ -158,7 +158,7 @@ def make_bc_schedule(
     fabric_n: int,
     n_load_steps: int,
     dir_step: float,
-    schedule: list[str] | tuple[str, ...] = ("LOAD", "RELAX"),
+    schedule: list[str] | tuple[str, ...] = ("LOAD",),
 ):
     dyn_bcs = []
     labels = []
@@ -263,7 +263,7 @@ def run_mold(
         fabric_n=fabric_n,
         n_load_steps=pseudoT,
         dir_step=dir_step,
-        schedule=("LOAD"),
+        schedule=("LOAD",),
     )
 
     d = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
@@ -323,7 +323,7 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Jul30/uhm_quadratic_dampedDiag_BICGSTAB_NL4',
+    'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75_updated',
     # 'filename_base': None,
     'pseudoT': 30,
     'cylinder_points': np.array([
@@ -344,7 +344,7 @@ args = {
     # ]),
     'cylinder_diameter': 1.0,
     'dir_step':-0.02,
-    'pre_strain':-0.141373887*5,
+    'pre_strain':-0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
@@ -361,6 +361,7 @@ debug_info=make_debug_info(
     flags = [
         (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
         (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+        (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
     ],
     filename = args['filename_base'] + '.h5'
 )
