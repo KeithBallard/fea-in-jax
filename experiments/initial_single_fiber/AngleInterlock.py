@@ -335,13 +335,13 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'FabricExample/Aug25/tensioning_higherPreStrain_damped_NL250_tanh_refined_tow_planar',
+    'filename_base': 'FabricExample/Sep7/quadratic_pardiso_updated',
     # 'filename_base': None,
     'pseudoT': 1,
     'pre_strain':0.141373887*20,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
-        contact_constitutive_model = elastic_contact_truss_tanh,
+        contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
         D_stiffness_to_E_ratio  = 6.0,
         # M_stiffness_to_E_ratio  = 1e-6,
         M_stiffness_to_E_ratio  = 0.001,

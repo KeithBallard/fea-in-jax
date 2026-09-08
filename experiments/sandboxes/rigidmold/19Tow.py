@@ -164,7 +164,7 @@ def make_bc_schedule(
     labels = []
 
     for k in range(1, n_load_steps + 1):
-        pin_y = k * dir_step
+        pin_y = dir_step
 
         for stage in schedule:
             stage = stage.upper()
@@ -299,10 +299,10 @@ def run_mold(
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
             nonlinear_max_iter=75,
             linear_max_iter=200,
-            damp_Newton_diag=0.0,
+            damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             max_linear_displacement=0.02,
-            max_backtracks=1,
+            max_backtracks=20,
             # linear_absolute_tol=3.16e-3,
             # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
         ),
@@ -344,7 +344,7 @@ args = {
     # ]),
     'cylinder_diameter': 1.0,
     'dir_step':-0.02,
-    'pre_strain':-0.141373887,
+    'pre_strain':0.141373887,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
