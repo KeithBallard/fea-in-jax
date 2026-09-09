@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "fenics-basix",
     "flax",
+    "h5py",
     "jax",
     "jaxopt",
     "libigl",
