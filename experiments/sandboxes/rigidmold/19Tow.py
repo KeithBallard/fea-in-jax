@@ -356,12 +356,13 @@ args = {
         contact_search_alpha    = 2.0,
     ),
 }
-
-debug_info=make_debug_info(
-    flags = [
-        (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
-        (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-        (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
-    ],
-    filename = args['filename_base'] + '.h5'
-)
+def get_debug():
+    debug_info=make_debug_info(
+        flags = [
+            (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
+            (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
+            (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
+        ],
+        filename = args['filename_base'] + '.h5'
+    )
+    return debug_info

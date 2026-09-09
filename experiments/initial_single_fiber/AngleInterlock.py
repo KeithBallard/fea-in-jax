@@ -335,7 +335,7 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'FabricExample/Sep7/quadratic_pardiso_updated',
+    'filename_base': 'FabricExample/Sep7/quadratic_pardiso_damp1p0_updated',
     # 'filename_base': None,
     'pseudoT': 1,
     'pre_strain':0.141373887*20,

@@ -4,9 +4,27 @@ from jax import numpy as jnp
 import numpy as np
 import scipy as sp
 
-import newton
-import warp as wp
+try:
+    import newton
+    import warp as wp
+except ImportError as exc:
+    newton = None
+    wp = None
+    _NEWTON_WARP_IMPORT_ERROR = exc
+else:
+    _NEWTON_WARP_IMPORT_ERORR = None
 from fe_jax.basis_quadrature import FiniteElementType
+
+NEWTON_WARP_AVAILABLE = newton is not None and wp is not None
+
+def _require_newton_warp():
+    if NEWTON_WARP_AVAILABLE:
+        return
+    raise ImportError(
+        "The Newton/Warp contact searhc path requires optional dependencies "
+        "`newton` and `warp`. Use the SciPy cHDTree contact path or install "
+        "those packages."
+    ) from _NEWTON_WARP_IMPORT_ERROR
 
 @dataclass
 class ContactParams:
@@ -40,6 +58,7 @@ def build_newton_node_cloud_contact(
     *,
     rigid_contact_max=None,
 ) -> NewtonContactContext:
+    _require_newton_warp()
     builder = newton.ModelBuilder()
 
     for node_id, x in enumerate(np.asarray(points)):
@@ -93,16 +112,20 @@ def build_newton_node_cloud_contact(
         contact_capacity=contacts.rigid_contact_max,
     )
 
-@wp.kernel
-def _update_node_body_positions_3d(
-    points: wp.array2d[wp.float32],
-    body_q: wp.array[wp.transform],
-):
-    i=wp.tid()
-    x=wp.vec3(points[i,0],points[i,1],points[i,2])
-    body_q[i]=wp.transform(x,wp.quat_identity())
+if NEWTON_WARP_AVAILABLE:
+    @wp.kernel
+    def _update_node_body_positions_3d(
+        points: wp.array2d[wp.float32],
+        body_q: wp.array[wp.transform],
+    ):
+        i=wp.tid()
+        x=wp.vec3(points[i,0],points[i,1],points[i,2])
+        body_q[i]=wp.transform(x,wp.quat_identity())
+else:
+    _update_node_body_positions_3d = None
 
 def update_newton_node_body_positions(ctx, current_points):
+    _require_newton_warp()
     current_points_jax = jnp.asarray(current_points, dtype=jnp.float32)
     current_points_jax = jax.device_put(
         current_points_jax,
@@ -117,6 +140,7 @@ def update_newton_node_body_positions(ctx, current_points):
     )
 
 def NewtonContactSearch(ctx: NewtonContactContext, current_points_jax: jnp.ndarray):
+    _require_newton_warp()
     update_newton_node_body_positions(ctx=ctx, current_points=current_points_jax)
     ctx.collision_pipe.collide(ctx.state, ctx.contacts)
 
