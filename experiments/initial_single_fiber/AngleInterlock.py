@@ -301,13 +301,13 @@ def run_tension(
         boundary_conditions=dyn_bcs,
         contact_options=contact_params,
         solver_options=SolverOptions(
-            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
-            linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=75,
-            linear_max_iter=200,
-            damp_Newton_diag=1.0,
+            # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
+            nonlinear_max_iter=5,
+            linear_max_iter=50,
+            # damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             # max_linear_displacement=0.5,
             max_backtracks=20,
@@ -331,7 +331,8 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    'filename_base': 'FabricExample/Sep7/quadratic_pardiso_damp1p0_updated',
+    # 'filename_base': 'FabricExample/Sep10_JacSymmetryTest/quadratic_pardiso_damp1p0_updated',
+    'filename_base': 'Sep10_JacSymmetryTest/AngleInterlock_quadratic_CG_NoForcedSymmetry',
     # 'filename_base': None,
     'pseudoT': 1,
     'pre_strain':0.141373887*20,
@@ -350,7 +351,7 @@ args = {
 def get_debug():
     debug_info=make_debug_info(
         flags = [
-            (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
+            # (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
             (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
             (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
         ],

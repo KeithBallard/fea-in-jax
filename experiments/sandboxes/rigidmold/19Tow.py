@@ -293,11 +293,11 @@ def run_mold(
         boundary_conditions=dyn_bcs,
         contact_options=contact_params,
         solver_options=SolverOptions(
-            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+            linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
-            linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
+            # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=75,
+            nonlinear_max_iter=15,
             linear_max_iter=200,
             damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
@@ -323,9 +323,10 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75_updated',
+    'filename_base': 'Sep10_JacSymmetryTest/19Tow_cg_NL15_updated',
+    # 'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75_updated',
     # 'filename_base': None,
-    'pseudoT': 30,
+    'pseudoT': 2,
     'cylinder_points': np.array([
         [5.000000000, 0.860000000,  2.000000000],
         [5.000000000, 0.860000000,  1.200000006],
@@ -361,7 +362,7 @@ def get_debug():
         flags = [
             (DebugOutputQuantities.NODE_SOLUTION,DebugOutputStage.NONLINEAR_SOLVE),
             (DebugOutputQuantities.NODE_RESIDUAL,DebugOutputStage.NONLINEAR_SOLVE),
-            (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
+            # (DebugOutputQuantities.GLOBAL_JACOBIAN_COO,DebugOutputStage.NONLINEAR_SOLVE),
         ],
         filename = args['filename_base'] + '.h5'
     )
