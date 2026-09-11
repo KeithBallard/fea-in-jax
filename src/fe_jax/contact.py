@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import jax
 from jax import numpy as jnp
+from enum import Enum
 import numpy as np
 import scipy as sp
 
@@ -14,6 +15,20 @@ except ImportError as exc:
 else:
     _NEWTON_WARP_IMPORT_ERORR = None
 from fe_jax.basis_quadrature import FiniteElementType
+
+class ContactBackend(Enum):
+    SCIPY_KDTREE = "scipy_kdtree"
+    NEWTON_WARP = "newton_warp"
+    AUTO = "auto"
+
+def resolve_contact_backend(backend: ContactBackend | str) -> ContactBackend:
+    if isinstance(backend,str):
+        backend = ContactBackend(backend)
+    if backend == ContactBackend.AUTO:
+        return (ContactBackend.NEWTON_WARP if NEWTON_WARP_AVAILABLE else ContactBackend.SCIPY_KDTREE)
+    if backend == ContactBackend.NEWTON_WARP:
+        _require_newton_warp()
+    return backend
 
 NEWTON_WARP_AVAILABLE = newton is not None and wp is not None
 
@@ -37,6 +52,7 @@ class ContactParams:
     M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
     C_to_D_ratio: float # C is distance to have a hard stiffness set.
     contact_search_alpha: float # dimensionless value for search_radius = contact_search_alpha*(radius1+radius2)
+    contact_backend: ContactBackend = ContactBackend.AUTO
     # It should be C_to_D_ratio<M_to_D_ratio<contact_search_alpha
 
 @dataclass
@@ -392,7 +408,7 @@ def self_fiber_node2node(
 
     return self_contacts
 
-def contact_batch(
+def scipy_contact_batch(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
     adjacency_block: int,
@@ -472,3 +488,18 @@ def contact_batch(
     self_cells = self_cells[self_cells[:,1]-self_cells[:,0]>adjacency_block]
 
     return np.vstack([distinct_cells, self_cells])
+
+def contact_batch(
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    adjacency_block: int,
+    point_diameters: np.ndarray,
+    search2radius_ratio: float,
+) -> np.ndarray:
+    return scipy_contact_batch(
+        points=points,
+        point_fiber_ids=point_fiber_ids,
+        adjacency_block=adjacency_block,
+        point_diameters=point_diameters,
+        search2radius_ratio=search2radius_ratio,
+    )
