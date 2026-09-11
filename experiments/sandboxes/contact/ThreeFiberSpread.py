@@ -171,10 +171,11 @@ def run_threeFiberTow(
     if solver_options is None:
         solver_options=SolverOptions(
             linear_solve_type=linear_solve_type,
-            nonlinear_max_iter=100,
+            nonlinear_max_iter=15,
             linear_max_iter=200,
-            max_linear_displacement=min(min_dist,fabric.diameters[0])/10,
-            max_backtracks=20,
+            max_linear_displacement=min(min_dist,fabric.diameters[0])/4,
+            max_backtracks=6,
+            line_search_fallback_alpha=0.25,
             damp_Newton_diag=damp_Newton_diag,
         )
     if not isinstance(debug_info, NullDebugInfo):

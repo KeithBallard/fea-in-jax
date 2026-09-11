@@ -116,6 +116,8 @@ class SolverOptions:
     nonlinear_absolute_tol: float = 1e-8
     max_linear_displacement: float = jnp.inf
     max_backtracks:  int = 20
+    line_search_fallback_alpha: float = 1
+    line_search_residual_growth_scale: float = 1
     damp_Newton_diag: float = 0.
 
     def __post_init__(self):

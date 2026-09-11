@@ -448,10 +448,21 @@ def __elastic_contact_truss_kernel(
     # radius = material_params_m[..., 2]
     # E = lambda d: jnp.where(d<radius,E_max - E_max/radius*d,0)
     # Assumes the node number puts the endpoints as first and last entries. 
-    dx_d = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
-    l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
+    dx_cur = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
+    L_cur = jnp.linalg.norm(dx_cur)
+    l_cur = dx_cur/L_cur
 
-    P_dd = jnp.outer(l_d,l_d)
+    dx_ref_state = x_nd[-1,:]-x_nd[0,:]
+    L_ref_state = jnp.linalg.norm(dx_ref_state)
+    l_ref_state = dx_ref_state/L_ref_state
+
+    # P_dd = jnp.outer(l_cur,l_cur)
+    P_dd = jnp.outer(l_ref_state,l_cur)
+
+    # dx_d   = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
+    # l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
+
+    # P_dd = jnp.outer(l_d,l_d)
     # eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
 
     total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
@@ -460,14 +471,15 @@ def __elastic_contact_truss_kernel(
     L_ref = jnp.maximum(
         search_radius,
         # ramp_up_distance,
-        jnp.linalg.norm(x_nd[-1,:] - x_nd[0,:]), #distance at first contact
+        L_ref_state, #distance at first contact
     )
     # eps_a = (L_ref - jnp.linalg.norm(dx_d))/L_ref
     # eps_a = jnp.maximum(0,L_ref - jnp.linalg.norm(dx_d))
     # eps_a = jnp.minimum(0,jnp.linalg.norm(dx_d) - L_ref)/L_ref #unilateral compression
-    eps_a = (jnp.linalg.norm(dx_d) - L_ref)/L_ref # bilateral
+    eps_a = (L_cur - L_ref)/L_ref # bilateral
 
-    stress_dd = contact_stiffness_model(jnp.linalg.norm(dx_d),material_params_m)*A*eps_a*P_dd
+    stress_dd = contact_stiffness_model(L_cur,material_params_m)*A*eps_a*P_dd
+
     # jax.debug.print(
     #     'x_nd = {x}\nd = {d}, E = {E}, E*eps_a = {EA}\n',
     #     x = x_nd,

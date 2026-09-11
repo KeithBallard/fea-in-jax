@@ -711,6 +711,7 @@ def solve_nonlinear_step(
         partial(__extract_first_element, residual_isv_func_w_constraints)
     )
 
+
     # Function that produces J(u) without Dirichlet BCs and MPCs applied
     jacobian_func_wo_constraints = jax.jit(
         partial(
@@ -724,6 +725,7 @@ def solve_nonlinear_step(
         )
     )
 
+    # breakpoint()
     # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
     jacobian_diag_func_wo_constraints = jax.jit(
         partial(
@@ -768,9 +770,8 @@ def solve_nonlinear_step(
         "WARNING: If using a solver that requires a Jacobian, Dirichlet BCs are being applied but multi-point constraints are NOT."
     )
 
-    def line_search(u_f, delta_u, R_f, residual_func, initial_alpha, max_backtracks):
+    def line_search(u_f, delta_u, R_f, residual_func, initial_alpha, max_backtracks, fallback_alpha, accepted_residual_growth_scale):
         norm_R0 = jnp.linalg.norm(R_f)
-        accepted_residual_growth_scale = 1.01
 
         def cond_fun(state):
             alpha, u_trial, R_trial, n, accepted = state
@@ -783,7 +784,8 @@ def solve_nonlinear_step(
             R_trial = residual_func(u_trial)
             accepted = jnp.linalg.norm(R_trial) <= accepted_residual_growth_scale*norm_R0
             jax.debug.print(
-                'alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}, ||delta_u|| = {du}',
+                'n = {n}, alpha = {a}, ||R_trial|| = {Rt}, ||R_f|| = {Rf}, ||delta_u|| = {du}',
+                n = n,
                 a = alpha,
                 Rt = jnp.linalg.norm(R_trial),
                 Rf = norm_R0,
@@ -796,9 +798,35 @@ def solve_nonlinear_step(
         R_trial = residual_func(u_trial)
         accepted = jnp.linalg.norm(R_trial) <= accepted_residual_growth_scale*norm_R0
 
-        init = (alpha, u_trial, R_trial, jnp.array(0.0), accepted)
-        alpha, u_trial, R_trial, _, _ = jax.lax.while_loop(cond_fun, body_fun, init)
-        return u_trial, R_trial, alpha
+        init = (alpha, u_trial, R_trial, jnp.array(0, dtype=jnp.int32), accepted)
+        alpha, u_trial, R_trial, _, accepted = jax.lax.while_loop(cond_fun, body_fun, init)
+        def accept_branch(args):
+            u_trial, R_trial, alpha = args
+            return u_trial, R_trial, alpha
+        def fallback_branch(args):
+            _, _, _ = args
+            # raise RuntimeError(
+            #     "Backtracking line search failed to find an acceptable step after "
+            #     f"{max_backtracks} backtracks."
+            #     "User should decrease incremental load."
+            # )
+
+            alpha = jnp.asarray(fallback_alpha, dtype=delta_u.dtype)
+            u_trial = u_f + alpha*delta_u
+            R_trial = residual_func(u_trial)
+
+            jax.debug.print(
+                "WARNING: Backtracking line search failed after {n} backtracks. "
+                "Using fallback alpha={a}. ||R_trial||={Rt}, ||R_0||={R0}",
+                n=max_backtracks,
+                a=alpha,
+                Rt=jnp.linalg.norm(R_trial),
+                R0=norm_R0,
+            )
+
+            return u_trial, R_trial, alpha
+        return jax.lax.cond(accepted,accept_branch,fallback_branch,operand = (u_trial,R_trial,alpha),)
+
 
     def while_body(
         args: tuple[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, SolverResultInfo, jnp.ndarray],
@@ -861,6 +889,8 @@ def solve_nonlinear_step(
             initial_alpha=1.0,
             # initial_alpha=previous_alpha,
             max_backtracks=solver_options.max_backtracks,
+            fallback_alpha=solver_options.line_search_fallback_alpha,
+            accepted_residual_growth_scale=solver_options.line_search_residual_growth_scale,
         )
         R_f, new_internal_state_beqi = residual_isv_func_w_constraints(u_f)
 
