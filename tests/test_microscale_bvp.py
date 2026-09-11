@@ -1,6 +1,7 @@
 from helper import *
 import pytest
 import time
+import jetsci
 
 pytestmark = pytest.mark.slow
 
@@ -142,16 +143,15 @@ def test_microscale_bvp():
         )
         return result, first_call_time, times
 
-
-    def run_petsc():
-        return solve_bvp_PETSc(
-            vertices_vd=points,
-            element_batches=make_element_batches(),
-            element_residual_func=linear_elasticity_residual,
-            boundary_conditions=bcs,
-            multipoint_constraints=None,
-            u_0_g=u_0,
-            diagnostics=False,
+    petsc_solver = build_bvp_solver(
+        vertices_vd=points,
+        element_batches=make_element_batches(),
+        element_residual_func=linear_elasticity_residual,
+        boundary_conditions=bcs,
+        multipoint_constraints=None,
+        u_0_g=u_0,
+        options=UnifiedBVPOptions(
+            backend=BVPBackend.PETSC,
             petsc_solver_options=jetsci.SolverOptions(
                 nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
                 linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
@@ -161,42 +161,32 @@ def test_microscale_bvp():
                 linear_relative_tol=1e-6,
                 linear_absolute_tol=1e-14,
             ),
-        )
-
-    def run_jax():
-        return solve_bvp(
-            element_residual_func=linear_elasticity_residual,
-            vertices_vd=points,
-            element_batches=make_element_batches(),
-            u_0_g=u_0,
-            boundary_conditions=bcs,
-            solver_options=SolverOptions(
+        ),
+    )
+    jax_solver = build_bvp_solver(
+        vertices_vd=points,
+        element_batches=make_element_batches(),
+        element_residual_func=linear_elasticity_residual,
+        boundary_conditions=bcs,
+        multipoint_constraints=None,
+        u_0_g=u_0,
+        options=UnifiedBVPOptions(
+            backend=BVPBackend.JAX,
+            jax_solver_options=SolverOptions(
                 linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
                 linear_precond_type=PreconditionerType.JACOBI,
             ),
-        )
+        ),
+    )
 
+    try:
+        petsc_result, _, _ = time_solve("PETSc UnifiedBVPSolver", petsc_solver.solve, n_calls=3)
+    finally:
+        petsc_solver.destroy()
 
-
-    petsc_result, _, _ = time_solve("PETSc solve_bvp_PETSc", run_petsc, n_calls=3)
-    u_petsc, residual_petsc, _ = petsc_result
-    print("|R| PETSc = ", jnp.linalg.norm(residual_petsc))
-
-    exit(1)
-
-    """
-    jax_result, _, _ = time_solve("JAX solve_bvp", run_jax, n_calls=2)
+    jax_result, _, _ = time_solve("JAX UnifiedBVPSolver", jax_solver.solve, n_calls=2)
     u, residual, element_batches = jax_result
-    print("|R| JAX   = ", jnp.linalg.norm(residual))
-
-
-
-
-
-
-
-
-
+    u_petsc, residual_petsc, _ = petsc_result
 
     print("|R| PETSc = ", jnp.linalg.norm(residual_petsc))
     print("|R| JAX   = ", jnp.linalg.norm(residual))
@@ -210,6 +200,5 @@ def test_microscale_bvp():
     # Write output
     mesh.point_data["u"] = u.reshape((points.shape[0], U))
     mesh.write(get_output("test_microscale_bvp_out.vtk"))
-    """
 
 test_microscale_bvp()
