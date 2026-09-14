@@ -21,11 +21,21 @@ class ContactBackend(Enum):
     NEWTON_WARP = "newton_warp"
     AUTO = "auto"
 
-def resolve_contact_backend(backend: ContactBackend | str) -> ContactBackend:
+def normalize_contact_backend(backend: ContactBackend | str) -> ContactBackend:
     if isinstance(backend,str):
         backend = ContactBackend(backend)
+    if not isinstance(backend,ContactBackend):
+        raise TypeError("backend must be a ContactBackend or contact backend string")
+    return backend
+
+def resolve_contact_backend(backend: ContactBackend | str, auto_uses_newton_warp: bool = True) -> ContactBackend:
+    backend = normalize_contact_backend(backend)
     if backend == ContactBackend.AUTO:
-        return (ContactBackend.NEWTON_WARP if NEWTON_WARP_AVAILABLE else ContactBackend.SCIPY_KDTREE)
+        return (
+            ContactBackend.NEWTON_WARP
+            if NEWTON_WARP_AVAILABLE and auto_uses_newton_warp
+            else ContactBackend.SCIPY_KDTREE
+        )
     if backend == ContactBackend.NEWTON_WARP:
         _require_newton_warp()
     return backend

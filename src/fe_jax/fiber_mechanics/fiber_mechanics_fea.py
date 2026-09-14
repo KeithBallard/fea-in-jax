@@ -122,6 +122,17 @@ def solve_fiber_mechanics_bvp(
             "M_to_D_ratio must be greater than C_to_D_ratio."
         )
 
+    contact_backend = resolve_contact_backend(
+        contact_options.contact_backend,
+        auto_uses_newton_warp=False,
+    )
+    if contact_backend == ContactBackend.NEWTON_WARP:
+        raise NotImplementedError(
+            "The Newton/Warp contact backend is not wired into "
+            "solve_fiber_mechanics_bvp yet. Use ContactBackend.SCIPY_KDTREE "
+            "or ContactBackend.AUTO to preserve the current CPU fallback path."
+        )
+
     point_diameters = []
     global_fiber_i = 0
     for b_i in range(fabric.get_n_bundles()):
@@ -169,10 +180,10 @@ def solve_fiber_mechanics_bvp(
         'surface_contact_alpha': contact_options.contact_search_alpha,
     }
 
-    def contact_pair_generator(u_ref) -> list[ElementBatch] | None:
+    def scipy_contact_pair_generator(u_ref) -> list[ElementBatch] | None:
         if u_ref is None:
             u_ref = jnp.zeros((vertices_vd.shape[0]*vertices_vd.shape[1],))
-        contact_cells = contact_batch(
+        contact_cells = scipy_contact_batch(
             points=vertices_vd + np.array(u_ref).reshape(vertices_vd.shape),
             point_fiber_ids=point_fiber_ids,
             adjacency_block=self_adjacency_block,
@@ -281,7 +292,7 @@ def solve_fiber_mechanics_bvp(
             boundary_conditions=boundary_conditions[i],
             solver_options=solver_options,
             plot_convergence=plot_convergence,
-            contact_batch_generator=contact_pair_generator,
+            contact_batch_generator=scipy_contact_pair_generator,
             debug_info=debug_info,
             time_step = i,
         )
