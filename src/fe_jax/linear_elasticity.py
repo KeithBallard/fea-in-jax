@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-
+from . import contact
 from .utils import (
     rank2_tensor_to_voigt,
     rank2_voigt_to_tensor,
@@ -316,8 +316,8 @@ def __contact_stiffness_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_max = material_params_m[..., 0]
-    radius = material_params_m[..., 2] + material_params_m[..., 3]
+    E_max = material_params_m[..., contact.CONTACT_E_C_PARAM]
+    radius = material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
     E = jnp.where(d<radius,E_max - E_max/radius*d,0)
     return E
 
@@ -327,7 +327,7 @@ def __contact_stiffness_constant(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_max = material_params_m[..., 0]
+    E_max = material_params_m[..., contact.CONTACT_E_C_PARAM]
     return E_max
 
 @jax.tree_util.Partial
@@ -336,14 +336,14 @@ def __contact_stiffness_piecewise_linear(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact 
-    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
+    E_c= material_params_m[..., contact.CONTACT_E_C_PARAM] # stiffness at physical contact 
+    total_radius =  material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
 
-    ramp_up_distance      = total_radius*material_params_m[...,4]
-    hard_contact_distance = total_radius*material_params_m[...,5]
-    search_radius         = total_radius*material_params_m[..., 6] # search_radius
+    ramp_up_distance      = total_radius*material_params_m[...,contact.CONTACT_M_TO_D_PARAM]
+    hard_contact_distance = total_radius*material_params_m[...,contact.CONTACT_C_TO_D_PARAM]
+    search_radius         = total_radius*material_params_m[..., contact.CONTACT_SEARCH_ALPHA_PARAM] # search_radius
 
-    E_min = material_params_m[...,7]
+    E_min = material_params_m[...,contact.CONTACT_E_MIN_PARAM]
 
     seg1 = E_c + (E_c-E_min)/(hard_contact_distance - ramp_up_distance)*(d-hard_contact_distance)
     seg2 = E_min/(ramp_up_distance-search_radius)*(d-search_radius)
@@ -361,14 +361,14 @@ def __contact_stiffness_piecewise_quadratic(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact 
-    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
+    E_c= material_params_m[..., contact.CONTACT_E_C_PARAM] # stiffness at physical contact 
+    total_radius =  material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
 
-    ramp_up_distance      = total_radius*material_params_m[...,4]
-    hard_contact_distance = total_radius*material_params_m[...,5]
-    search_radius         = total_radius*material_params_m[..., 6] # search_radius
+    ramp_up_distance      = total_radius*material_params_m[..., contact.CONTACT_M_TO_D_PARAM]
+    hard_contact_distance = total_radius*material_params_m[..., contact.CONTACT_C_TO_D_PARAM]
+    search_radius         = total_radius*material_params_m[..., contact.CONTACT_SEARCH_ALPHA_PARAM] # search_radius
 
-    E_min = material_params_m[...,7]
+    E_min = material_params_m[..., contact.CONTACT_E_MIN_PARAM]
 
     mu = E_min/(ramp_up_distance-search_radius)
     alpha = (E_c - E_min + mu*(ramp_up_distance-hard_contact_distance))/((hard_contact_distance-ramp_up_distance)**2)
@@ -391,13 +391,13 @@ def __contact_stiffness_exponential(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact
-    total_radius = material_params_m[..., 2] + material_params_m[..., 3]
+    E_c= material_params_m[..., contact.CONTACT_E_C_PARAM] # stiffness at physical contact
+    total_radius = material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
 
-    ramp_up_distance      = total_radius*material_params_m[...,4]
-    hard_contact_distance = total_radius*material_params_m[...,5]
+    ramp_up_distance      = total_radius*material_params_m[..., contact.CONTACT_M_TO_D_PARAM]
+    hard_contact_distance = total_radius*material_params_m[..., contact.CONTACT_C_TO_D_PARAM]
 
-    E_min = material_params_m[...,7]
+    E_min = material_params_m[..., contact.CONTACT_E_MIN_PARAM]
 
     alpha =  jnp.exp((hard_contact_distance*jnp.log(E_min) - ramp_up_distance*jnp.log(E_c))/(hard_contact_distance-ramp_up_distance))
     r = (jnp.log(E_min)-jnp.log(E_c))/(hard_contact_distance-ramp_up_distance)
@@ -409,13 +409,13 @@ def __contact_stiffness_tanh(
     d: jnp.ndarray,
     material_params_m: jnp.ndarray
 ) -> float:
-    E_c= material_params_m[..., 0] # stiffness at physical contact
-    total_radius = material_params_m[..., 2] + material_params_m[..., 3]
+    E_c= material_params_m[..., contact.CONTACT_E_C_PARAM] # stiffness at physical contact
+    total_radius = material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
 
-    ramp_up_distance      = total_radius*material_params_m[...,4]
-    hard_contact_distance = total_radius*material_params_m[...,5]
+    ramp_up_distance      = total_radius*material_params_m[..., contact.CONTACT_M_TO_D_PARAM]
+    hard_contact_distance = total_radius*material_params_m[..., contact.CONTACT_C_TO_D_PARAM]
 
-    E_min = material_params_m[...,7]
+    E_min = material_params_m[..., contact.CONTACT_E_MIN_PARAM]
 
     sharpness_factor = 2/(hard_contact_distance - ramp_up_distance)*jnp.arctanh(2*E_min/E_c - 1)
     return E_c/2*(jnp.tanh(-sharpness_factor*(d-(ramp_up_distance + hard_contact_distance)/2)) + 1)
@@ -444,20 +444,26 @@ def __elastic_contact_truss_kernel(
     """
 
     # E_max = material_params_m[..., 0]
-    A = material_params_m[..., 1]
+    # A = material_params_m[..., 1]
+    active = material_params_m[..., contact.CONTACT_ACTIVE_PARAM]
+    A = material_params_m[...,contact.CONTACT_AREA_PARAM]*active
+
     # radius = material_params_m[..., 2]
     # E = lambda d: jnp.where(d<radius,E_max - E_max/radius*d,0)
     # Assumes the node number puts the endpoints as first and last entries. 
-    dx_cur = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
-    L_cur = jnp.linalg.norm(dx_cur)
-    l_cur = dx_cur/L_cur
+    dx_cur_state = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
+    L_cur_state = jnp.linalg.norm(dx_cur_state)
+    safe_eps = jnp.finfo(L_cur_state.dtype).eps
+    L_cur_state_safe = jnp.maximum(L_cur_state, safe_eps)
+    l_cur_state = dx_cur_state/L_cur_state_safe
 
     dx_ref_state = x_nd[-1,:]-x_nd[0,:]
     L_ref_state = jnp.linalg.norm(dx_ref_state)
-    l_ref_state = dx_ref_state/L_ref_state
+    L_ref_state_safe = jnp.maximum(L_ref_state, safe_eps)
+    l_ref_state = dx_ref_state/L_ref_state_safe
 
     # P_dd = jnp.outer(l_cur,l_cur)
-    P_dd = jnp.outer(l_ref_state,l_cur)
+    P_dd = jnp.outer(l_ref_state,l_cur_state)
 
     # dx_d   = (x_nd+u_nd)[-1,:]-(x_nd+u_nd)[0,:]
     # l_d = dx_d/jnp.sqrt(jnp.dot(dx_d,dx_d))
@@ -465,20 +471,21 @@ def __elastic_contact_truss_kernel(
     # P_dd = jnp.outer(l_d,l_d)
     # eps_a = jnp.einsum("i,ij,j->", l_d, eps_dd, l_d)
 
-    total_radius =  material_params_m[..., 2] + material_params_m[..., 3]
-    search_radius         = total_radius*material_params_m[..., 6] # search_radius
-    ramp_up_distance      = total_radius*material_params_m[...,4]
+    total_radius =  material_params_m[..., contact.CONTACT_RADIUS_0_PARAM] + material_params_m[..., contact.CONTACT_RADIUS_1_PARAM]
+    search_radius         = total_radius*material_params_m[..., contact.CONTACT_SEARCH_ALPHA_PARAM] # search_radius
+    ramp_up_distance      = total_radius*material_params_m[...,contact.CONTACT_M_TO_D_PARAM]
     L_ref = jnp.maximum(
         search_radius,
         # ramp_up_distance,
-        L_ref_state, #distance at first contact
+        L_ref_state_safe, #distance at first contact
     )
     # eps_a = (L_ref - jnp.linalg.norm(dx_d))/L_ref
     # eps_a = jnp.maximum(0,L_ref - jnp.linalg.norm(dx_d))
     # eps_a = jnp.minimum(0,jnp.linalg.norm(dx_d) - L_ref)/L_ref #unilateral compression
-    eps_a = (L_cur - L_ref)/L_ref # bilateral
+    eps_a = (L_cur_state - L_ref)/L_ref # bilateral
 
-    stress_dd = contact_stiffness_model(L_cur,material_params_m)*A*eps_a*P_dd
+    stress_dd = contact_stiffness_model(L_cur_state_safe,material_params_m)*A*eps_a*P_dd
+    stress_dd = jnp.where(active > 0.0, stress_dd, jnp.zeros_like(stress_dd))
 
     # jax.debug.print(
     #     'x_nd = {x}\nd = {d}, E = {E}, E*eps_a = {EA}\n',

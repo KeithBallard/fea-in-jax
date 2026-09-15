@@ -4,6 +4,7 @@ from jax import numpy as jnp
 from enum import Enum
 import numpy as np
 import scipy as sp
+from flax import struct
 
 try:
     import newton
@@ -13,13 +14,16 @@ except ImportError as exc:
     wp = None
     _NEWTON_WARP_IMPORT_ERROR = exc
 else:
-    _NEWTON_WARP_IMPORT_ERORR = None
+    _NEWTON_WARP_IMPORT_ERROR = None
 from fe_jax.basis_quadrature import FiniteElementType
 
 class ContactBackend(Enum):
     SCIPY_KDTREE = "scipy_kdtree"
     NEWTON_WARP = "newton_warp"
     AUTO = "auto"
+
+class ContactCapacityError(OverflowError):
+    pass
 
 def normalize_contact_backend(backend: ContactBackend | str) -> ContactBackend:
     if isinstance(backend,str):
@@ -61,9 +65,19 @@ class ContactParams:
 
     M_to_D_ratio: float # M is distance to start ramping up stiffness, so this is the ratio between M and the fiber diameter (M/D)
     C_to_D_ratio: float # C is distance to have a hard stiffness set.
+    # It should be C_to_D_ratio<M_to_D_ratio<contact_search_alpha
     contact_search_alpha: float # dimensionless value for search_radius = contact_search_alpha*(radius1+radius2)
     contact_backend: ContactBackend = ContactBackend.AUTO
-    # It should be C_to_D_ratio<M_to_D_ratio<contact_search_alpha
+    rigid_contact_max: int | None = None
+
+@struct.dataclass
+class ContactMaterialSpec:
+    E_c: float
+    area: float
+    M_to_D_ratio: float
+    C_to_D_ratio: float
+    search_alpha: float
+    E_min: float
 
 @dataclass
 class NewtonContactContext:
@@ -72,7 +86,118 @@ class NewtonContactContext:
     collision_pipe: object
     contacts: object
     shape_to_node: jnp.ndarray
+    shape_to_node_wp: object
+    contact_search_jax_callable: object
     contact_capacity: int
+
+CONTACT_E_C_PARAM = 0
+CONTACT_AREA_PARAM = 1
+CONTACT_RADIUS_0_PARAM = 2
+CONTACT_RADIUS_1_PARAM = 3
+CONTACT_M_TO_D_PARAM = 4
+CONTACT_C_TO_D_PARAM = 5
+CONTACT_SEARCH_ALPHA_PARAM = 6
+CONTACT_E_MIN_PARAM = 7
+CONTACT_ACTIVE_PARAM = 8
+CONTACT_MATERIAL_PARAM_COUNT = 9
+
+def find_nonzero_length_dummy_contact_pair(points: np.ndarray) -> np.ndarray:
+    points = np.asarray(points)
+    for i in range(points.shape[0]):
+        for j in range(i+1, points.shape[0]):
+            if np.linalg.norm(points[j] - points[i])>0.0:
+                return np.array([i,j],dtype=np.int32)
+    raise ValueError("fixed-capacity contact requires at least one nonzero-length dummy pair")
+
+def newton_fixed_contact_cells(
+    ctx: NewtonContactContext,
+    current_points_jax: jnp.ndarray,
+    dummy_pair: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    node0, node1, active, count = NewtonContactSearch(ctx, current_points_jax)
+
+    return pack_fixed_contact_cells(
+        node0=node0,
+        node1=node1,
+        active=active,
+        count=count,
+        capacity=ctx.contact_capacity,
+        dummy_pair=dummy_pair,
+    )
+
+@jax.jit
+def pack_fixed_contact_cells(
+    node0: jnp.ndarray,
+    node1: jnp.ndarray,
+    active: jnp.ndarray,
+    count: jnp.ndarray,
+    capacity: int,
+    dummy_pair: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    capacity_exhausted = count >= capacity
+
+    contact_cells = jnp.stack([node0,node1],axis=1).astype(jnp.int32)
+    dummy_pair = jnp.asarray(dummy_pair, dtype=contact_cells.dtype)
+    contact_cells = jnp.where(active[:, None], contact_cells, dummy_pair[None, :])
+
+    return contact_cells, active, count, capacity_exhausted
+
+def build_contact_material_params(
+    contact_cells: jnp.ndarray,
+    point_radii: jnp.ndarray,
+    spec: ContactMaterialSpec,
+    active: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    contact_cells = jnp.asarray(contact_cells, dtype=jnp.int32)
+    point_radii = jnp.asarray(point_radii)
+
+    n_contact = contact_cells.shape[0]
+    dtype = point_radii.dtype
+
+    if active is None:
+        active = jnp.ones((n_contact,), dtype=dtype)
+    else:
+        active = jnp.asarray(active, dtype=dtype)
+
+    params = jnp.zeros((n_contact, CONTACT_MATERIAL_PARAM_COUNT), dtype=dtype)
+    params = params.at[:, CONTACT_E_C_PARAM].set(spec.E_c)
+    params = params.at[:, CONTACT_AREA_PARAM].set(spec.area)
+    params = params.at[:, CONTACT_RADIUS_0_PARAM].set(point_radii[contact_cells[:, 0]])
+    params = params.at[:, CONTACT_RADIUS_1_PARAM].set(point_radii[contact_cells[:, 1]])
+    params = params.at[:, CONTACT_M_TO_D_PARAM].set(spec.M_to_D_ratio)
+    params = params.at[:, CONTACT_C_TO_D_PARAM].set(spec.C_to_D_ratio)
+    params = params.at[:, CONTACT_SEARCH_ALPHA_PARAM].set(spec.search_alpha)
+    params = params.at[:, CONTACT_E_MIN_PARAM].set(spec.E_min)
+    params = params.at[:, CONTACT_ACTIVE_PARAM].set(active)
+
+    return params
+
+# def fixed_contact_material_params(
+#     contact_cells: jnp.ndarray,
+#     active: jnp.ndarray,
+#     point_radii: jnp.ndarray,
+#     contact_E_c: float,
+#     contact_A: float,
+#     M_to_D_ratio: float,
+#     C_to_D_ratio: float,
+#     contact_search_alpha: float,
+#     contact_E_min: float,
+# ) -> jnp.ndarray:
+#     active_f = active.astype(point_radii.dtype)
+#     r0 = point_radii[contact_cells[:, 0]]
+#     r1 = point_radii[contact_cells[:, 1]]
+
+#     return jnp.column_stack([
+#         jnp.full_like(active_f, contact_E_c),
+#         jnp.where(active, contact_A, 0.0),
+#         r0,
+#         r1,
+#         jnp.full_like(active_f, M_to_D_ratio),
+#         jnp.full_like(active_f, C_to_D_ratio),
+#         jnp.full_like(active_f, contact_search_alpha),
+#         jnp.full_like(active_f,  contact_E_min),
+#         active_f,
+#     ])
 
 
 def build_newton_node_cloud_contact(
@@ -126,14 +251,30 @@ def build_newton_node_cloud_contact(
     )
     contacts = pipe.contacts()
 
+    shape_to_node_np = np.arange(len(points), dtype=np.int32)
+    shape_to_node_jax = jax.device_put(
+        jnp.asarray(shape_to_node_np, dtype=jnp.int32),
+        wp.device_to_jax(model.device),
+    )
+    shape_to_node_wp = wp.array(
+        shape_to_node_np,
+        dtype=wp.int32,
+        device=model.device,
+    )
+
     return NewtonContactContext(
         model=model,
         state=state,
         collision_pipe=pipe,
         contacts=contacts,
-        shape_to_node=jax.device_put(
-            jnp.arange(len(points), dtype=jnp.int32),
-            wp.device_to_jax(model.device),
+        shape_to_node=shape_to_node_jax,
+        shape_to_node_wp=shape_to_node_wp,
+        contact_search_jax_callable=_build_newton_contact_search_jax_callable(
+            state=state,
+            collision_pipe=pipe,
+            contacts=contacts,
+            shape_to_node_wp=shape_to_node_wp,
+            contact_capacity=contacts.rigid_contact_max,
         ),
         contact_capacity=contacts.rigid_contact_max,
     )
@@ -147,8 +288,84 @@ if NEWTON_WARP_AVAILABLE:
         i=wp.tid()
         x=wp.vec3(points[i,0],points[i,1],points[i,2])
         body_q[i]=wp.transform(x,wp.quat_identity())
+
+    @wp.kernel
+    def _copy_newton_contacts_to_fixed_buffers(
+        rigid_contact_shape0: wp.array[wp.int32],
+        rigid_contact_shape1: wp.array[wp.int32],
+        rigid_contact_count: wp.array[wp.int32],
+        shape_to_node: wp.array[wp.int32],
+        node0_out: wp.array[wp.int32],
+        node1_out: wp.array[wp.int32],
+        active_out: wp.array[wp.int32],
+        count_out: wp.array[wp.int32],
+    ):
+        i = wp.tid()
+        count = rigid_contact_count[0]
+
+        if i == 0:
+            count_out[0] = count
+
+        if i < count:
+            node0_out[i] = shape_to_node[rigid_contact_shape0[i]]
+            node1_out[i] = shape_to_node[rigid_contact_shape1[i]]
+            active_out[i] = 1
+        else:
+            node0_out[i] = 0
+            node1_out[i] = 0
+            active_out[i] = 0
+
 else:
     _update_node_body_positions_3d = None
+    _copy_newton_contacts_to_fixed_buffers = None
+
+def _build_newton_contact_search_jax_callable(
+    *,
+    state,
+    collision_pipe,
+    contacts,
+    shape_to_node_wp,
+    contact_capacity: int,
+):
+    _require_newton_warp()
+
+    def _newton_contact_search_callable(
+        current_points: wp.array2d[wp.float32],
+        node0_out: wp.array[wp.int32],
+        node1_out: wp.array[wp.int32],
+        active_out: wp.array[wp.int32],
+        count_out: wp.array[wp.int32],
+    ):
+        wp.launch(
+            _update_node_body_positions_3d,
+            dim=current_points.shape[0],
+            inputs=[current_points, state.body_q],
+        )
+        collision_pipe.collide(state, contacts)
+        wp.launch(
+            _copy_newton_contacts_to_fixed_buffers,
+            dim=contact_capacity,
+            inputs=[
+                contacts.rigid_contact_shape0,
+                contacts.rigid_contact_shape1,
+                contacts.rigid_contact_count,
+                shape_to_node_wp,
+            ],
+            outputs=[node0_out, node1_out, active_out, count_out],
+        )
+
+    return wp.jax_callable(
+        _newton_contact_search_callable,
+        num_outputs=4,
+        output_dims={
+            "node0_out": (contact_capacity,),
+            "node1_out": (contact_capacity,),
+            "active_out": (contact_capacity,),
+            "count_out": (1,),
+        },
+        has_side_effect=True,
+    )
+
 
 def update_newton_node_body_positions(ctx, current_points):
     _require_newton_warp()
@@ -165,7 +382,7 @@ def update_newton_node_body_positions(ctx, current_points):
         device=ctx.model.device,
     )
 
-def NewtonContactSearch(ctx: NewtonContactContext, current_points_jax: jnp.ndarray):
+def NewtonContactSearch_jitless(ctx: NewtonContactContext, current_points_jax: jnp.ndarray):
     _require_newton_warp()
     update_newton_node_body_positions(ctx=ctx, current_points=current_points_jax)
     ctx.collision_pipe.collide(ctx.state, ctx.contacts)
@@ -179,6 +396,27 @@ def NewtonContactSearch(ctx: NewtonContactContext, current_points_jax: jnp.ndarr
     active=jnp.arange(ctx.contact_capacity) < count
 
     return node0, node1, active, count
+
+def NewtonContactSearch(ctx: NewtonContactContext, current_points_jax: jnp.ndarray):
+    _require_newton_warp()
+    node0, node1, active_i32, count = ctx.contact_search_jax_callable(
+        jnp.asarray(current_points_jax, dtype=jnp.float32),
+    )
+    active = active_i32.astype(jnp.bool)
+    count=count[0]
+
+    return node0, node1, active, count
+
+def raise_if_contact_capacity_exhausted(
+    ctx: NewtonContactContext,
+    count: jnp.ndarray,
+    capacity_exhausted: jnp.ndarray,
+):
+    if bool(capacity_exhausted):
+        raise ContactCapacityError(
+            f"Newton/Warp contact search reached rigid_contact_max={ctx.contact_capacity} "
+            f"with count={int(count)}. Increase ContactParams.rigid_contact_max."
+        )
 
 @dataclass
 class ContactPreprocessConfig:

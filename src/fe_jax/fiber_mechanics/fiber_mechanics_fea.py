@@ -172,6 +172,14 @@ def solve_fiber_mechanics_bvp(
     contact_E_c = contact_options.D_stiffness_to_E_ratio * np.max(material_params[:,0])
     contact_A = np.max(material_params[:,1])
     contact_E_min = contact_options.M_stiffness_to_E_ratio * np.max(material_params[:,0])
+    contact_material_spec = ContactMaterialSpec(
+        E_c=contact_E_c,
+        area=contact_A,
+        M_to_D_ratio=contact_options.M_to_D_ratio,
+        C_to_D_ratio=contact_options.C_to_D_ratio,
+        search_alpha=contact_options.contact_search_alpha,
+        E_min=contact_E_min,
+    )
 
     contact_output_params = {
         'self_adjacency_block': self_adjacency_block,
@@ -191,18 +199,23 @@ def solve_fiber_mechanics_bvp(
             search2radius_ratio=contact_options.contact_search_alpha,
         )
         if contact_cells.shape[0] == 0: return []
-
         point_radii = 0.5 * point_diameters
-        contact_material_params = np.column_stack([
-            np.full((contact_cells.shape[0],), contact_E_c),
-            np.full((contact_cells.shape[0],), contact_A),
-            point_radii[contact_cells[:,0]],
-            point_radii[contact_cells[:,1]],
-            np.full((contact_cells.shape[0],), contact_options.M_to_D_ratio),
-            np.full((contact_cells.shape[0],), contact_options.C_to_D_ratio),
-            np.full((contact_cells.shape[0],), contact_options.contact_search_alpha),
-            np.full((contact_cells.shape[0],), contact_E_min),
-        ])
+        contact_material_params = build_contact_material_params(
+            contact_cells=contact_cells,
+            point_radii=point_radii,
+            spec=contact_material_spec,
+        )
+        # contact_material_params = np.column_stack([
+        #     np.full((contact_cells.shape[0],), contact_E_c),
+        #     np.full((contact_cells.shape[0],), contact_A),
+        #     point_radii[contact_cells[:,0]],
+        #     point_radii[contact_cells[:,1]],
+        #     np.full((contact_cells.shape[0],), contact_options.M_to_D_ratio),
+        #     np.full((contact_cells.shape[0],), contact_options.C_to_D_ratio),
+        #     np.full((contact_cells.shape[0],), contact_options.contact_search_alpha),
+        #     np.full((contact_cells.shape[0],), contact_E_min),
+        #     np.ones((contact_cells.shape[0],)),
+        # ])
         return [
             ElementBatch(
                 fe_type=contact_fe_type,
