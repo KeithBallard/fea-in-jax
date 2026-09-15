@@ -146,11 +146,10 @@ def convert_constraints_to_system(
 
     # Allocate numpy arrays
     dep_dofs = np.empty(n_constraints, dtype=np.int32)
-    g = np.empty(n_constraints, dtype=np.float32)
-
     rows = np.empty(nnz, dtype=np.int32)
     cols = np.empty(nnz, dtype=np.int32)
     data = np.empty(nnz, dtype=np.float32)
+    g_list = []
 
     # Second pass: fill arrays
     current_nnz_idx = 0
@@ -158,7 +157,7 @@ def convert_constraints_to_system(
     # Process MPCs
     for i, mpc in enumerate(multipoint_constraints):
         dep_dofs[i] = mpc.dep_dof
-        g[i] = mpc.get_total_constant()
+        g_list.append(jnp.array(mpc.get_total_constant()))
 
         for indep_dof, factor in mpc.indep_dof_terms.items():
             rows[current_nnz_idx] = i
@@ -170,8 +169,13 @@ def convert_constraints_to_system(
     for j, fpc in enumerate(fixed_point_constraints):
         idx = n_mpcs + j
         dep_dofs[idx] = fpc.dep_dof
-        g[idx] = fpc.value
+        g_list.append(jnp.array(fpc.value))
         # No P entries for fixed point constraints
+
+    if len(g_list) > 0:
+        g = jnp.stack(jnp.broadcast_arrays(*g_list), axis=-1)
+    else:
+        g = jnp.array([], dtype=jnp.float32)
 
     # Create JAX arrays from numpy arrays
     P_indices = (
@@ -179,7 +183,7 @@ def convert_constraints_to_system(
         if nnz > 0
         else jnp.zeros((0, 2), dtype=jnp.int32)
     )
-    P_data = jnp.array(data) if nnz > 0 else jnp.zeros((0,), dtype=jnp.float32)
+    P_data = jnp.array(data) if nnz > 0 else jnp.zeros((0,), dtype=float)
 
     P = jsparse.BCOO((P_data, P_indices), shape=(n_constraints, n_total_dofs))
 
