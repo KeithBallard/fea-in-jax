@@ -296,10 +296,14 @@ def elastic_truss(
     l_ref = dx_ref/L_ref
 
     # P_dd = jnp.outer(l_cur,l_cur)
-    P_dd = jnp.outer(l_ref,l_cur)
+    # P_dd = jnp.outer(l_ref,l_cur)
+    P_dd = jnp.outer(l_ref,l_ref)
     # eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
+    eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
 
-    eps_a = L_cur / L_ref - 1.0
+    # eps_a = L_cur / L_ref - 1.0
+    # eps_a = (L_cur**2 - L_ref**2)/L_ref**2
+    # eps_a = jnp.log(L_cur/L_ref)
 
     eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
     # eps_total_internal = eps_accum + eps_a
@@ -539,12 +543,14 @@ def linear_truss_residual(
     """
     J_qpd = jnp.einsum("nd,qnp->qpd", x_nd, dphi_dxi_qnp)
 
-    det_J_q = jnp.sqrt(jnp.linalg.det(jnp.einsum("qpd,qrd->qpr",J_qpd,J_qpd)))
-    def lstsq_one(J_pd,dphi_dxi_np):
-        dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
-        return dphi_dx_nd.T
+    g_q11 = jnp.einsum("qpd,qrd->qpr",J_qpd,J_qpd)
+    det_J_q = jnp.sqrt(jnp.linalg.det(g_q11))
+    dphi_dx_qnd = (dphi_dxi_qnp@J_qpd)/g_q11
+    # def lstsq_one(J_pd,dphi_dxi_np):
+    #     dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
+    #     return dphi_dx_nd.T
 
-    dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
+    # dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
@@ -670,7 +676,7 @@ def stiffness_residual(
     E = material_params[..., 0]
     A = material_params[..., 1]
     dx = x_nd[1,:]-x_nd[0,:]
-    L = jnp.linalg.norm(dx) 
+    L = jnp.linalg.norm(dx)
 
     T= jnp.vstack((jnp.hstack((dx/L,0*dx)),jnp.hstack((0*dx,dx/L))))
     K = E*A/L*jnp.array([[1,-1],[-1,1]])
