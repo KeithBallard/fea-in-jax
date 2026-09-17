@@ -171,7 +171,7 @@ def run_threeFiberTow(
     if solver_options is None:
         solver_options=SolverOptions(
             linear_solve_type=linear_solve_type,
-            nonlinear_max_iter=15,
+            nonlinear_max_iter=100,
             linear_max_iter=200,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/4,
             max_backtracks=6,
@@ -592,3 +592,4 @@ def plot_horizontal_displacement(filename,max_range,min_range=0):
     plt.tight_layout()
     plt.savefig(get_output(f"contact/{filename}_horizontal_displacement.pdf"))
     plt.close()
+run_threeFiberTow(**args)

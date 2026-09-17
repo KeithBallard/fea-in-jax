@@ -300,6 +300,7 @@ def elastic_truss(
     P_dd = jnp.outer(l_ref,l_ref)
     # eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
     eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
+    #jax.debug.print("eps_dd = \n{eps_dd}", eps_dd=eps_dd)
 
     # eps_a = L_cur / L_ref - 1.0
     # eps_a = (L_cur**2 - L_ref**2)/L_ref**2

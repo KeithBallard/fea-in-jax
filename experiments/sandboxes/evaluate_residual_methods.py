@@ -14,7 +14,7 @@ fe_type = FiniteElementType(
     basis_degree=1,
     lagrange_variant=LagrangeVariant.equispaced,
     quadrature_type=QuadratureType.default,
-    quadrature_degree=2,
+    quadrature_degree=3,
 )
 el = [ElementBatch(
     fe_type = fe_type,
@@ -122,11 +122,11 @@ def get_residuals(x,u,internal_state_qi = jnp.zeros((dphi_dxi.shape[0], 2))):
     )
     return R_stiff, R_linear_truss
 
-points = jnp.array([[0,0,0],[1,2,3]])
+points = jnp.array([[0,0,0],[1,0,0]])
 u1 = jnp.array([[0.1,0.1,0.1],[0.05,0.1,0.2]])
 u2 = jnp.array([[0.12,0.05,0.09],[0.2,0.3,0.4]])
 S1, L1 = get_residuals(x=points[connections[0]],u=u1)
-S2, _ = get_residuals(x=points[connections[0]],u=u1+u2)
-points += u1
-_, L2 = get_residuals(x=points[connections[0]],u=u2,internal_state_qi=L1[1])
-
+#S2, _ = get_residuals(x=points[connections[0]],u=u1+u2)
+#points += u1
+#S2, L2 = get_residuals(x=points[connections[0]],u=u2,internal_state_qi=L1[1])
+print(S1[0],L1[0])

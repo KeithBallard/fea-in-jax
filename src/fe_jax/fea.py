@@ -860,7 +860,7 @@ def solve_nonlinear_step(
             x_0=u_f,
             f_ext=f_ext,
         )
-        jax.debug.print('linear_iterations: {x}',x=info.linear_iterations_per_nonlinear_iteration)
+        # jax.debug.print('linear_iterations: {x}',x=info.linear_iterations_per_nonlinear_iteration)
 
         debug_info.begin_stage(
             time_step=time_step,

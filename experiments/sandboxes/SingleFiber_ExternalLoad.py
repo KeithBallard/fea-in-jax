@@ -70,7 +70,7 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannF
                 index=vertex_offset + int(n_el / 2) + s,
                 value=NeumannForce,
             )
-            for s in (-1, 0, 1)
+            for s in ( 0,)
         ]
         vertex_offset += points_i.shape[0]
 
@@ -148,34 +148,36 @@ def run_singleFiber(
         plot_convergence=False,
         filename_base=filename_base,
         pseudotime_iters=len(dyn_bcs),
-        # debug_info = debug_info,
+        debug_info = None,
         pre_strain=pre_strain,
-        debug_info=make_debug_info(
-            flags = [
-                (DebugOutputQuantities.NODE_RESIDUAL,       DebugOutputStage.NONLINEAR_SOLVE),
-                (DebugOutputQuantities.GLOBAL_JACOBIAN_COO, DebugOutputStage.NONLINEAR_SOLVE),
-                (DebugOutputQuantities.ELEMENT_JACOBIAN,    DebugOutputStage.NONLINEAR_SOLVE),
-                # (DebugOutputQuantities.ELEMENT_RESIDUAL,    DebugOutputStage.NONLINEAR_SOLVE),
-            ],
-            filename = filename_base + '.h5'
-        ) if filename_base is not None else None
+        # debug_info=make_debug_info(
+        #     flags = [
+        #         (DebugOutputQuantities.NODE_RESIDUAL,       DebugOutputStage.NONLINEAR_SOLVE),
+        #         (DebugOutputQuantities.GLOBAL_JACOBIAN_COO, DebugOutputStage.NONLINEAR_SOLVE),
+        #         (DebugOutputQuantities.ELEMENT_JACOBIAN,    DebugOutputStage.NONLINEAR_SOLVE),
+        #         # (DebugOutputQuantities.ELEMENT_RESIDUAL,    DebugOutputStage.NONLINEAR_SOLVE),
+        #     ],
+        #     filename = filename_base + '.h5'
+        # ) if filename_base is not None else None
     )
     u = u.reshape((-1,3))
-    fabric.points = fabric.points + u
+    #fabric.points = fabric.points + u
 
     D_D = np.linalg.norm(fabric.points[None,:,:]-fabric.points[:,None,:],axis=-1)
     min_d = D_D[D_D.nonzero()].min()
-    return u,fabric,min_d
+    return u,fabric,bcs
 
 def get_args():
     args = {
-        'n_elements':[40]*3,
+        'n_elements':[4]*3,
         'X0':[[0, 0, -1]],
         'XN':[[0, 0, 1]],
-        'NeumannForce':[(i+1)*1e5 for i in range(10)],
+        #'NeumannForce':[(i+1)*1e2 for i in range(10)],
+        'NeumannForce':[1],
         # 'NeumannForce':[i*1e4 for i in range(10,101)],
         # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
-        'filename_base':  'PseudoTimeNeumann_in_y/incrementalLoad',
+        # 'filename_base':  'PseudoTimeNeumann_in_y/incrementalLoad',
+        'filename_base': None,
         'contact_params': ContactParams(
             self_adjacency_block       = 10000,
             contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
