@@ -70,7 +70,7 @@ def make_bundle(n_elements: list[int], X0: list[tuple], XN: list[tuple],NeumannF
                 index=vertex_offset + int(n_el / 2) + s,
                 value=NeumannForce,
             )
-            for s in ( 0,)
+            for s in (-1, 0, 1)
         ]
         vertex_offset += points_i.shape[0]
 
@@ -144,6 +144,7 @@ def run_singleFiber(
             nonlinear_max_iter=100,
             linear_max_iter=500,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+            max_backtracks = 6,
         ),
         plot_convergence=False,
         filename_base=filename_base,
@@ -169,11 +170,11 @@ def run_singleFiber(
 
 def get_args():
     args = {
-        'n_elements':[4]*3,
+        'n_elements':[40]*3,
         'X0':[[0, 0, -1]],
         'XN':[[0, 0, 1]],
-        #'NeumannForce':[(i+1)*1e2 for i in range(10)],
-        'NeumannForce':[1],
+        'NeumannForce':[(i+1)*1e5 for i in range(10)],
+        # 'NeumannForce':[1e2],
         # 'NeumannForce':[i*1e4 for i in range(10,101)],
         # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
         # 'filename_base':  'PseudoTimeNeumann_in_y/incrementalLoad',
