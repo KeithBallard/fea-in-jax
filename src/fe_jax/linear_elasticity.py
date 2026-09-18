@@ -9,6 +9,9 @@ from .utils import (
     debug_print,
 )
 
+# STRAIN_MEASURE = "Linear"
+STRAIN_MEASURE = "GreenLagrange"
+
 
 @jax.tree_util.Partial
 @jax.jit
@@ -295,19 +298,32 @@ def elastic_truss(
     L_ref = jnp.linalg.norm(dx_ref)
     l_ref = dx_ref/L_ref
 
-    # P_dd = jnp.outer(l_cur,l_cur)
-    P_dd = jnp.outer(l_ref,l_cur)
+    P_dd = jnp.outer(l_cur,l_cur)
+    # P_dd = jnp.outer(l_ref,l_cur)
     # P_dd = jnp.outer(l_ref,l_ref)
-    # eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
-    # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
     #jax.debug.print("eps_dd = \n{eps_dd}", eps_dd=eps_dd)
 
-    eps_a = L_cur / L_ref - 1.0
-    # eps_a = (L_cur**2 - L_ref**2)/L_ref**2
-    # eps_a = jnp.log(L_cur/L_ref)
 
-    eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
-    # eps_total_internal = eps_accum + eps_a
+    if STRAIN_MEASURE == "GreenLagrange":
+        eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
+        # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
+        # eps_a = (L_cur**2 - L_ref**2)/(2*L_ref**2)
+
+        eps_total_internal = eps_accum + eps_a + 2*eps_accum*eps_a
+    elif STRAIN_MEASURE == "Linear":
+        eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
+        # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
+        
+        eps_total_internal = eps_accum + eps_a
+    elif STRAIN_MEASURE == "Engineering":
+        eps_a = L_cur / L_ref - 1.0
+        eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
+    elif STRAIN_MEASURE == "Logarithmic":
+        eps_a = jnp.log(L_cur/L_ref)
+        eps_total_internal = eps_accum + eps_a
+    else:
+        raise ValueError(f'Option {STRAIN_MEASURE} is not a valid choice for STRAIN_MEASURE.')
+
     stress_dd = E*A*(eps_total_internal + eps_pre)*P_dd
 
 
@@ -548,13 +564,18 @@ def linear_truss_residual(
     det_J_q = jnp.sqrt(jnp.linalg.det(g_q11))
     dphi_dx_qnd = (dphi_dxi_qnp@J_qpd)/g_q11
     # def lstsq_one(J_pd,dphi_dxi_np):
-    #     dphi_dx_nd = jnp.linalg.lstsq(J_pd, dphi_dxi_np.T)[0]
+    #     dphi_dx_nd = jnp.linalg.lstsq(J_pxit() dphi_dxi_np.T)[0]
     #     return dphi_dx_nd.T
 
     # dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
-    eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
+    if STRAIN_MEASURE == "GreenLagrange":
+        eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)) + du_dx_qdd.transpose((0, 2, 1))@du_dx_qdd )
+    elif STRAIN_MEASURE == "Linear":
+        eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
+    else: 
+        raise ValueError(f'Option {STRAIN_MEASURE} is not a valid choice for STRAIN_MEASURE.')
 
     constitutive_args = []
     in_axes = []
