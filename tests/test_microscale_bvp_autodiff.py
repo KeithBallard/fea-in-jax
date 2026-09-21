@@ -339,5 +339,7 @@ def test_microscale_bvp():
     assert jnp.isclose(u[dirichlet_dofs], dirichlet_values).all()
 
 
-test_microscale_bvp()
+if __name__ == "__main__":
+    test_microscale_bvp()
+
 

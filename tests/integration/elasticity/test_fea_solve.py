@@ -5,9 +5,30 @@ import numpy as np
 from helper import *
 
 def test_fea_solve_on_polygon_mesh():
-    # from jax_smi import initialise_tracking
-    # initialise_tracking()
+    """Verify solve_bvp computes linear elasticity solution on an irregular polygon mesh.
 
+    BVP Problem Description:
+    ------------------------
+    - Physical Problem: 2D linear isotropic elasticity on an irregular polygonal domain.
+    - Governing Differential Equation:
+        div(sigma) + b = 0 in Omega,   where sigma = C : eps (Hooke's law for plane elasticity)
+        and eps = 0.5 * (grad(u) + grad(u)^T).
+    - Constitutive Model:
+        * Isotropic linear elasticity (`elastic_isotropic`) with quadrature-point parameters
+          Young's modulus E = 100 GPa and Poisson's ratio nu = 0.25.
+    - Boundary Conditions:
+        * Inhomogeneous Dirichlet boundary conditions applied on all exterior boundary nodes.
+    - Discretization:
+        * Unstructured triangular mesh of linear P1 Lagrange elements with 2-point quadrature.
+
+    Targeted Features:
+    ------------------
+    - End-to-End Linear BVP Solve: Exercises `solve_bvp` with linear elasticity residual.
+    - JetSCI Solver Delegation: Solves the linear system using JetSCI's conjugate gradient solver
+      (`CG_JAX_SCIPY_W_INFO`) combined with Jacobi preconditioning (`PreconditionerType.JACOBI`).
+    - Verification: Validates that the converged residual norm is small and the solution
+      matches prescribed Dirichlet boundary conditions at constrained DOFs.
+    """
     # Read in the mesh
     mesh = meshio.read(get_mesh(f"polygon_mesh_{0.05}.vtk"))
     points = np.array(mesh.points, dtype=np.float32)[:, 0:2]

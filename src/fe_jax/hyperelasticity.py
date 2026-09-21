@@ -99,10 +99,11 @@ def hyperelasticity_residual(
     x_nd: jnp.ndarray,
     dphi_dxi_qnp: jnp.ndarray,
     W_q: jnp.ndarray,
-    material_params_qm: jnp.ndarray,
+    material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
     constitutive_model: Callable,
 ):
+    material_params_qm = material_params
     """
     Residual function that computes the residual for the weak form corresponding to hyperelasticity
 

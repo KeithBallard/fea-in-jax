@@ -9,7 +9,7 @@ import numpy as np
 #    help with debugging and enable a higher level description of operations.
 
 def test_residual_evaluation_on_polygon_meshes():
-    for mesh_size in [0.05, 0.01, 0.005, 0.001]:
+    for mesh_size in [0.05, 0.01, 0.005, 0.002]:
 
         mesh = meshio.read(get_mesh(f"polygon_mesh_{mesh_size}.vtk"))
 

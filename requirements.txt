@@ -17,5 +17,7 @@ fenics-basix
 psutil
 scipy
 flax
+# Standalone differentiable solver library
+jetsci
 # Intel MKL Pardiso solver (optional)
 #pypardiso

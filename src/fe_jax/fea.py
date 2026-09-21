@@ -986,12 +986,12 @@ def solve_bvp(
     multipoint_constraints: List[MultiPointConstraint] | None = None,
     global_values: List[int] | None = None,
     u_0_g: jnp.ndarray | None = None,
-    solver_options: SolverOptions = SolverOptions(),
+    solver_options: jetsci.SolverOptions | None = None,
     plot_convergence: bool = False,
     profile_memory: bool = False,
 ) -> tuple[jnp.ndarray, jnp.ndarray, list[ElementBatch]]:
     """
-    Solve a boundary value problem for static linear elasticity.
+    Solve a boundary value problem using JetSCI's nonlinear solver.
 
     Parameters
     ----------
@@ -1004,17 +1004,108 @@ def solve_bvp(
                            added to the global system (e.g. for periodic BCs). Each entry in the list
                            indicates the number of components for each vector-value.
     u_0_g                : initial guess for the solution, ndarray[float, (V * D)] or None (default, zeros will be used)
-    solver_options       : options for the linear/nonlinear solvers
-    plot_convergence     : indicates if the convergence history for the linear solver should be
-                           plotted via matplotlib as a figure
-    profile_memory       : indicates if GPU memory usage should be profiled, which will create *.prof
-                           files in the current directory
+    solver_options       : options for the linear/nonlinear solvers (JetSCI SolverOptions)
+    plot_convergence     : indicates if the convergence history for the linear solver should be plotted
+    profile_memory       : indicates if GPU memory usage should be profiled
 
     Returns
     -------
     u               : solution (displacement), ndarray[float, (V * D)]
     R               : residual vector evaluated at the solution, ndarray[float, (V * D)]
     element_batches : element batches with updated internal state variables
+    """
+    if boundary_conditions is None:
+        boundary_conditions = []
+    if multipoint_constraints is None:
+        multipoint_constraints = []
+    if global_values is None:
+        global_values = []
+    if solver_options is None:
+        solver_options = SolverOptions()
+
+    (
+        ebc,
+        assembly_map_b,
+        constraint_system,
+        jacobian_nnz,
+        element_residual_func,
+        f_ext,
+    ) = preprocess_bvp(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
+    )
+
+    n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
+
+    if u_0_g is None:
+        u_0_g = jnp.zeros(shape=(n_total_dofs,))
+    else:
+        assert u_0_g.shape == (n_total_dofs,)
+
+    R_w_dirichlet, J_w_dirichlet = build_nonlinear_objects(
+        element_residual_func=element_residual_func,
+        ebc=ebc,
+        assembly_map_b=assembly_map_b,
+        jacobian_nnz=jacobian_nnz,
+        u_0_g=u_0_g,
+        constraints=constraint_system,
+        f_ext=f_ext,
+    )
+
+    phi = ebc.material_params
+
+    if profile_memory:
+        start_memory_profile("solve_bvp")
+
+    u, updated_opts = jetsci.differentiable_solve(
+        solver_options,
+        R_w_dirichlet,
+        J_w_dirichlet,
+        u_0_g,
+        phi,
+    )
+    u = constraint_system.apply_to_solution(u)
+
+    residual, internal_state_beqi = calculate_residual_w_constraints(
+        u_f=u,
+        element_residual_func=element_residual_func,
+        ebc=ebc,
+        assembly_map_b=assembly_map_b,
+        constraints=constraint_system,
+        f_ext=f_ext,
+    )
+
+    for i in range(len(element_batches)):
+        element_batches[i] = element_batches[i].replace(
+            internal_state=internal_state_beqi[i]
+        )
+
+    if profile_memory:
+        u.block_until_ready()
+        stop_memory_profile("solve_bvp")
+
+    return (u, residual, element_batches)
+
+
+def build_differentiable_bvp_solve(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: jax.tree_util.Partial,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
+    u_0_g: jnp.ndarray | None = None,
+    diagnostics: bool = False,
+    solver_options: jetsci.SolverOptions | None = None,
+):
+    """Build a differentiable BVP solve closure using JetSCI.
+
+    Returns `(solve, phi, x0, residual_for_phi, options)`, where `solve(phi, x0)`
+    solves the BVP with Implicit Function Theorem differentiation.
     """
     if boundary_conditions is None:
         boundary_conditions = []
@@ -1040,62 +1131,77 @@ def solve_bvp(
     )
 
     n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
-
-    # If an initial guess was not provided, then use zeros
     if u_0_g is None:
         u_0_g = jnp.zeros(shape=(n_total_dofs,))
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
-    # inner_solve = solve_nonlinear_step
-    # if ebc.is_homogeneous:
-    #     print("Batches are homogeneous, using JIT compilation for solve_linear_step")
-    inner_solve = jax.jit(
-        solve_nonlinear_step,
-        # donate_argnames="internal_state_beqi",
-        static_argnames=["solver_options", "jacobian_nnz"],
-    )
-
-    # capture memory usage before
-    if profile_memory:
-        start_memory_profile("solve_linear_step")
-
-    u, internal_state_beqi, residual, relative_error, info = inner_solve(
+    R_w_dirichlet, J_w_dirichlet = build_nonlinear_objects(
         element_residual_func=element_residual_func,
         ebc=ebc,
         assembly_map_b=assembly_map_b,
         jacobian_nnz=jacobian_nnz,
         u_0_g=u_0_g,
         constraints=constraint_system,
-        solver_options=solver_options,
         f_ext=f_ext,
     )
 
-    # Update internal state variables for the element batches
-    # TODO need to update
-    # for i, b in enumerate(element_batches):
-    # #    b.internal_state = internal_state_beqi[i]
-    #    b = b.replace(internal_state=internal_state_beqi[i])
+    phi = ebc.material_params
+    residual_for_phi = jax.tree_util.Partial(R_w_dirichlet, phi)
 
-    # What Chennie did for last summer, it worked but not well tested
-    for i in range(len(element_batches)):
-        element_batches[i] = element_batches[i].replace(
-            internal_state=internal_state_beqi[i]
+    if solver_options is None:
+        solver_options = jetsci.SolverOptions(
+            nonlinear_solver_type=jetsci.NonlinearSolverType.JAX_NEWTON_RAPHSON,
+            linear_solve_type=jetsci.JAXLinearSolverType.CG_JAX_SCIPY_W_INFO,
+            linear_precond_type=jetsci.JAXPreconditionerType.NONE,
         )
 
-    # capture memory usage after and analyze
-    if profile_memory:
-        u.block_until_ready()
-        stop_memory_profile("solve_linear_step")
-
-    if info.cumulative_linear_iterations > 0:
-        print(
-            f"Cumulative # of linear solver iterations: {info.cumulative_linear_iterations}"
+    def solve(phi, x0):
+        u_solution, _ = jetsci.differentiable_solve(
+            solver_options,
+            R_w_dirichlet,
+            None,
+            x0,
+            phi,
         )
-        if plot_convergence:
-            plot_solver_info(opts=solver_options, info=info)
+        return constraint_system.apply_to_solution(u_solution)
 
-    return (u, residual, element_batches)
+    return solve, phi, u_0_g, residual_for_phi, solver_options
+
+
+def build_differentiable_bvp_PETSc_solve(
+    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
+    element_batches: list[ElementBatch],
+    element_residual_func: jax.tree_util.Partial,
+    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
+    multipoint_constraints: List[MultiPointConstraint] | None = None,
+    global_values: List[int] | None = None,
+    u_0_g: jnp.ndarray | None = None,
+    diagnostics: bool = False,
+    petsc_solver_options: jetsci.SolverOptions | None = None,
+):
+    """Backward-compatible wrapper for differentiable PETSc BVP solve."""
+    if petsc_solver_options is None:
+        petsc_solver_options = jetsci.SolverOptions(
+            nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
+            linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
+            linear_solve_type=jetsci.PETScLinearSolverType.CG,
+            nonlinear_absolute_tol=1e-14,
+            linear_max_iter=5000,
+            linear_relative_tol=1e-6,
+            linear_absolute_tol=1e-14,
+        )
+    return build_differentiable_bvp_solve(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
+        u_0_g=u_0_g,
+        diagnostics=diagnostics,
+        solver_options=petsc_solver_options,
+    )
 
 
 def solve_bvp_PETSc(
@@ -1110,97 +1216,10 @@ def solve_bvp_PETSc(
     petsc_solver_options: jetsci.SolverOptions | None = None,
     destroy_solver: bool = True,
     return_petsc_solver_options: bool = False,
-    ):
-
-    solve, phi, u_0_g, residual_for_phi, options = build_differentiable_bvp_PETSc_solve(
-        vertices_vd=vertices_vd,
-        element_batches=element_batches,
-        element_residual_func=element_residual_func,
-        boundary_conditions=boundary_conditions,
-        multipoint_constraints=multipoint_constraints,
-        global_values=global_values,
-        u_0_g=u_0_g,
-        diagnostics=diagnostics,
-        petsc_solver_options=petsc_solver_options,
-    )
-
-    solver_key = options.solver_key
-    try:
-        output = solve(phi=phi,x0=u_0_g)
-        residual_at_output = residual_for_phi(output)
-        if return_petsc_solver_options:
-            return output, residual_at_output, element_batches, options
-        return output, residual_at_output, element_batches
-    finally:
-        if solver_key is not None:
-            petsc_snes.differentiable_snes.unregister_primitive_context(solver_key)
-        if destroy_solver and solver_key is not None:
-            petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
-
-
-def build_differentiable_bvp_PETSc_solve(
-    vertices_vd: np.ndarray[Any, np.dtype[np.floating[Any]]],
-    element_batches: list[ElementBatch],
-    element_residual_func: jax.tree_util.Partial,
-    boundary_conditions: List[DirichletBC | NeumannBC | PeriodicBC] | None = None,
-    multipoint_constraints: List[MultiPointConstraint] | None = None,
-    global_values: List[int] | None = None,
-    u_0_g: jnp.ndarray | None = None,
-    diagnostics: bool = False,
-    petsc_solver_options: jetsci.SolverOptions | None = None,
-    ):
-    """Build a differentiable PETSc-backed BVP solve closure.
-
-    Returns `(solve, phi, x0, residual_for_phi, options)`, where `solve(phi, x0)`
-    is the custom-JVP SNES primitive and `phi` is the flattened material
-    parameter vector from the preprocessed element batch collection.
-    """
-
-    if boundary_conditions is None:
-        boundary_conditions = []
-    if multipoint_constraints is None:
-        multipoint_constraints = []
-    if global_values is None:
-        global_values = []
-    
-    (
-        ebc,
-        assembly_map_b,
-        constraint_system,
-        jacobian_nnz,
-        element_residual_func,
-        f_ext,
-    ) = preprocess_bvp(
-            vertices_vd=vertices_vd,
-            element_batches=element_batches,
-            element_residual_func=element_residual_func,
-            boundary_conditions=boundary_conditions,
-            multipoint_constraints=multipoint_constraints,
-            global_values=global_values,
-        )
-    
-    n_total_dofs = vertices_vd.shape[0] * ebc.U[0] + sum(global_values)
-    
-        # If an initial guess was not provided, then use zeros
-    if u_0_g is None:
-        u_0_g = jnp.zeros(shape=(n_total_dofs,))
-    else:
-        assert u_0_g.shape == (n_total_dofs,)
-
-    residual, jacobian = build_nonlinear_objects(
-            element_residual_func=element_residual_func,
-            ebc=ebc,
-            assembly_map_b=assembly_map_b,
-            jacobian_nnz=jacobian_nnz,
-            u_0_g=u_0_g,
-            constraints=constraint_system,
-            f_ext=f_ext)
-
-    phi = ebc.material_params
-    residual_for_phi = jax.tree_util.Partial(residual, phi)
-    jacobian_for_phi = jax.tree_util.Partial(jacobian, phi)
-
-    options = petsc_solver_options or jetsci.SolverOptions(
+):
+    """Solve BVP using PETSc SNES through the unified JetSCI solver interface."""
+    if petsc_solver_options is None:
+        petsc_solver_options = jetsci.SolverOptions(
             nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
             linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
             linear_solve_type=jetsci.PETScLinearSolverType.CG,
@@ -1209,24 +1228,21 @@ def build_differentiable_bvp_PETSc_solve(
             linear_relative_tol=1e-6,
             linear_absolute_tol=1e-14,
         )
-    
-    solver, options = petsc_snes.solver_lifecycle.build_petsc_solver_with_reuse(
-            options,
-            residual_for_phi,
-            jacobian_for_phi,
-        )
-    solver.diagnostics = diagnostics
-    if solver.callback_stats is not None:
-        solver.callback_stats["collect_diagnostics"] = diagnostics
 
-    
-    primitive = petsc_snes.differentiable_snes.DifferentiableSNESPrimitive(
-            residual=residual,
-            jacobian=jacobian,
-            solver_key=options.solver_key,
-        )
-    solve = petsc_snes.differentiable_snes.make_differentiable_snes_solve(primitive)
-    return solve, phi, u_0_g, residual_for_phi, options
+    u, residual, element_batches = solve_bvp(
+        vertices_vd=vertices_vd,
+        element_batches=element_batches,
+        element_residual_func=element_residual_func,
+        boundary_conditions=boundary_conditions,
+        multipoint_constraints=multipoint_constraints,
+        global_values=global_values,
+        u_0_g=u_0_g,
+        solver_options=petsc_solver_options,
+    )
+
+    if return_petsc_solver_options:
+        return u, residual, element_batches, petsc_solver_options
+    return u, residual, element_batches
 
 
 

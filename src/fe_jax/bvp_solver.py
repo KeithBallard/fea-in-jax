@@ -13,7 +13,12 @@ from jetsci import petsc_snes
 from .boundary_conditions import DirichletBC, NeumannBC, PeriodicBC
 from .constraints import MultiPointConstraint
 from .element_batch import ElementBatch
-from .fea import build_differentiable_bvp_PETSc_solve, solve_bvp, solve_bvp_PETSc
+from .fea import (
+    build_differentiable_bvp_PETSc_solve,
+    build_differentiable_bvp_solve,
+    solve_bvp,
+    solve_bvp_PETSc,
+)
 from .sparse_linear_solve import SolverOptions as JAXSolverOptions
 
 
@@ -27,6 +32,7 @@ class UnifiedBVPOptions:
     backend: BVPBackend = BVPBackend.JAX
     jax_solver_options: JAXSolverOptions | None = None
     petsc_solver_options: jetsci.SolverOptions | None = None
+    solver_options: jetsci.SolverOptions | None = None
     diagnostics: bool = False
 
 
@@ -83,8 +89,19 @@ class UnifiedBVPSolver:
     options: UnifiedBVPOptions = field(default_factory=UnifiedBVPOptions)
 
     def __post_init__(self):
-        if self.options.jax_solver_options is None:
-            self.options.jax_solver_options = JAXSolverOptions()
+        if self.options.solver_options is None:
+            if self.options.backend == BVPBackend.PETSC:
+                self.options.solver_options = self.options.petsc_solver_options or jetsci.SolverOptions(
+                    nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
+                    linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
+                    linear_solve_type=jetsci.PETScLinearSolverType.CG,
+                    nonlinear_absolute_tol=1e-14,
+                    linear_max_iter=5000,
+                    linear_relative_tol=1e-6,
+                    linear_absolute_tol=1e-14,
+                )
+            else:
+                self.options.solver_options = self.options.jax_solver_options or JAXSolverOptions()
 
     @property
     def phi(self) -> jnp.ndarray:
@@ -107,6 +124,14 @@ class UnifiedBVPSolver:
             element_batches = _replace_material_params(element_batches, material_params)
         x0 = self.x0 if u_0_g is None else u_0_g
 
+        opts = self.options.solver_options
+        if opts is None:
+            opts = (
+                self.options.petsc_solver_options
+                if self.options.backend == BVPBackend.PETSC
+                else self.options.jax_solver_options
+            )
+
         match self.options.backend:
             case BVPBackend.JAX:
                 return solve_bvp(
@@ -117,7 +142,7 @@ class UnifiedBVPSolver:
                     multipoint_constraints=self.multipoint_constraints,
                     global_values=self.global_values,
                     u_0_g=x0,
-                    solver_options=self.options.jax_solver_options,
+                    solver_options=opts,
                 )
             case BVPBackend.PETSC:
                 result = solve_bvp_PETSc(
@@ -129,25 +154,42 @@ class UnifiedBVPSolver:
                     global_values=self.global_values,
                     u_0_g=x0,
                     diagnostics=self.options.diagnostics,
-                    petsc_solver_options=self.options.petsc_solver_options,
+                    petsc_solver_options=opts,
                     destroy_solver=False,
                     return_petsc_solver_options=True,
                 )
                 self.options.petsc_solver_options = result[3]
+                self.options.solver_options = result[3]
                 return result[:3]
             case _:
                 raise ValueError(f"Unsupported BVP backend {self.options.backend!r}")
 
     def build_material_parameter_solve(self):
         """Return `(solve_phi, phi0, x0)` with backend-specific lifecycle attached."""
+        opts = self.options.solver_options
+        if opts is None:
+            opts = (
+                self.options.petsc_solver_options
+                if self.options.backend == BVPBackend.PETSC
+                else self.options.jax_solver_options
+            )
+
         match self.options.backend:
             case BVPBackend.JAX:
-
-                def solve_phi(phi, x0):
-                    u, _, _ = self.solve(material_params=phi, u_0_g=x0)
-                    return u
-
-                return solve_phi, self.phi, self.x0
+                solve_phi, phi0, x0, _, updated_opts = build_differentiable_bvp_solve(
+                    vertices_vd=self.vertices_vd,
+                    element_batches=self.element_batches,
+                    element_residual_func=self.element_residual_func,
+                    boundary_conditions=self.boundary_conditions,
+                    multipoint_constraints=self.multipoint_constraints,
+                    global_values=self.global_values,
+                    u_0_g=self.x0,
+                    diagnostics=self.options.diagnostics,
+                    solver_options=opts,
+                )
+                self.options.jax_solver_options = updated_opts
+                self.options.solver_options = updated_opts
+                return solve_phi, phi0, x0
 
             case BVPBackend.PETSC:
                 solve_phi, phi0, x0, _, petsc_options = build_differentiable_bvp_PETSc_solve(
@@ -159,20 +201,25 @@ class UnifiedBVPSolver:
                     global_values=self.global_values,
                     u_0_g=self.x0,
                     diagnostics=self.options.diagnostics,
-                    petsc_solver_options=self.options.petsc_solver_options,
+                    petsc_solver_options=opts,
                 )
                 self.options.petsc_solver_options = petsc_options
+                self.options.solver_options = petsc_options
                 return solve_phi, phi0, x0
             case _:
                 raise ValueError(f"Unsupported BVP backend {self.options.backend!r}")
 
     def destroy(self):
         solver_key = None
-        if self.options.petsc_solver_options is not None:
-            solver_key = self.options.petsc_solver_options.solver_key
+        for opt in (self.options.petsc_solver_options, self.options.solver_options):
+            if opt is not None and opt.solver_key is not None:
+                solver_key = opt.solver_key
+                break
         if solver_key is not None:
-            petsc_snes.differentiable_snes.unregister_primitive_context(solver_key)
-            petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
+            try:
+                petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
+            except Exception:
+                pass
             self.options.petsc_solver_options = None
 
 
