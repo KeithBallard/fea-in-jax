@@ -12,7 +12,6 @@ from .utils import (
 # STRAIN_MEASURE = "Linear"
 STRAIN_MEASURE = "GreenLagrange"
 
-
 @jax.tree_util.Partial
 @jax.jit
 def elastic_isotropic(eps_dd: jnp.ndarray, material_params_m: jnp.ndarray):
@@ -298,22 +297,18 @@ def elastic_truss(
     L_ref = jnp.linalg.norm(dx_ref)
     l_ref = dx_ref/L_ref
 
-    P_dd = jnp.outer(l_cur,l_cur)
-    # P_dd = jnp.outer(l_ref,l_cur)
+    # P_dd = jnp.outer(l_cur,l_cur)
+    P_dd = jnp.outer(l_ref,l_cur)
     # P_dd = jnp.outer(l_ref,l_ref)
     #jax.debug.print("eps_dd = \n{eps_dd}", eps_dd=eps_dd)
 
 
     if STRAIN_MEASURE == "GreenLagrange":
-        eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
         # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
-        # eps_a = (L_cur**2 - L_ref**2)/(2*L_ref**2)
-
+        eps_a = (L_cur**2 - L_ref**2)/(2*L_ref**2)
         eps_total_internal = eps_accum + eps_a + 2*eps_accum*eps_a
     elif STRAIN_MEASURE == "Linear":
-        eps_a = jnp.einsum("i,ij,j->", l_cur, eps_dd, l_cur)
-        # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
-        
+        eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
         eps_total_internal = eps_accum + eps_a
     elif STRAIN_MEASURE == "Engineering":
         eps_a = L_cur / L_ref - 1.0
@@ -329,7 +324,6 @@ def elastic_truss(
 
     internal_state_i = internal_state_i.at[...,1].set(eps_total_internal)
     return stress_dd, internal_state_i  # no internal state
-    # return stress_dd, jnp.array([])  # no internal state
 
 @jax.tree_util.Partial
 @jax.jit

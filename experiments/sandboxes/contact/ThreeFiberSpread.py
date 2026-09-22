@@ -592,4 +592,3 @@ def plot_horizontal_displacement(filename,max_range,min_range=0):
     plt.tight_layout()
     plt.savefig(get_output(f"contact/{filename}_horizontal_displacement.pdf"))
     plt.close()
-run_threeFiberTow(**args)

@@ -141,11 +141,11 @@ def run_singleFiber(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=25,
+            nonlinear_max_iter=50,
             linear_max_iter=50,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
             max_backtracks = 20,
-            damp_Newton_diag=10,
+            # damp_Newton_diag=None,
         ),
         plot_convergence=False,
         filename_base=filename_base,
@@ -174,8 +174,8 @@ def get_args():
         'n_elements':[40]*3,
         'X0':[[0, 0, -1]],
         'XN':[[0, 0, 1]],
-        # 'NeumannForce':[(i+1)*1e5 for i in range(10)],
-        'NeumannForce':[1e5],
+        'NeumannForce':[(i+1)*1e4 for i in range(10)],
+        # 'NeumannForce':[1e5],
         # 'NeumannForce':[i*1e4 for i in range(10,101)],
         # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
         # 'filename_base':  'PseudoTimeNeumann_in_y/incrementalLoad',
@@ -192,3 +192,11 @@ def get_args():
         'pre_strain':0.0,
     }
     return args
+
+
+# args10 = get_args()
+# args20 = get_args()
+# args20['NeumannForce'] = np.linspace(1e4,1e5,20)
+# X10 = run_singleFiber(**args10)
+# X20 = run_singleFiber(**args20)
+# print(f'drift error: {np.max(np.abs(X10[0]-X20[0]))}')
