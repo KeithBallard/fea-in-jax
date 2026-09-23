@@ -34,6 +34,8 @@ import jax.numpy as jnp
 #LinearSolve = Callable[[Array, Array, Array], Array]
 
 
+
+#We should probably change the name being used for this
 @dataclass(frozen=True)
 class DifferentiableSNESPrimitive:
     """Callables used by the differentiable nonlinear-solve boundary.
