@@ -36,6 +36,7 @@ def solve_fiber_mechanics_bvp(
     pre_strain: float | None = None,
     contact_options: ContactParams | None = None,
     debug_info: DebugInfo | None = None,
+    profile_memory: bool = False,
 ):
     if debug_info is None:
         debug_info = NULL_DEBUG_INFO
@@ -126,11 +127,10 @@ def solve_fiber_mechanics_bvp(
         contact_options.contact_backend,
         auto_uses_newton_warp=False,
     )
-    if contact_backend == ContactBackend.NEWTON_WARP:
-        raise NotImplementedError(
-            "The Newton/Warp contact backend is not wired into "
-            "solve_fiber_mechanics_bvp yet. Use ContactBackend.SCIPY_KDTREE "
-            "or ContactBackend.AUTO to preserve the current CPU fallback path."
+    if contact_backend == ContactBackend.NEWTON_WARP and contact_options.rigid_contact_max is None:
+        raise ValueError(
+            "ContactBackend.NEWTON_WARP requires ContactParams.rigid_contact_max "
+            "to define the fixed contact capacity."
         )
 
     point_diameters = []
@@ -226,6 +226,67 @@ def solve_fiber_mechanics_bvp(
             )
         ]
 
+    newton_contact_ctx = None
+    newton_dummy_pair = None
+    point_radii = 0.5 * point_diameters
+
+    if contact_backend == ContactBackend.NEWTON_WARP:
+        if vertices_vd.shape[1] != 3:
+            raise ValueError(
+                "ContactBackend.NEWTON_WARP currently requires 3D points because "
+                "the Newton/Warp node-cloud contact model uses wp.vec3 positions."
+            )
+        newton_contact_ctx = build_newton_node_cloud_contact(
+            points=vertices_vd,
+            point_diameters=point_diameters,
+            contact_search_alpha=contact_options.contact_search_alpha,
+            self_adjacency_block=self_adjacency_block,
+            point_fiber_ids=point_fiber_ids,
+            rigid_contact_max=contact_options.rigid_contact_max,
+        )
+        newton_dummy_pair = jnp.asarray(
+            find_nonzero_length_dummy_contact_pair(vertices_vd),
+            dtype=jnp.int32,
+        )
+
+    def newton_contact_pair_generator(u_ref) -> list[ElementBatch]:
+        if u_ref is None:
+            current_points = vertices_vd
+        else:
+            current_points = vertices_vd + np.asarray(u_ref).reshape(vertices_vd.shape)
+
+        contact_cells, active, count, capacity_exhausted = newton_fixed_contact_cells(
+            ctx=newton_contact_ctx,
+            current_points_jax=jnp.asarray(current_points),
+            dummy_pair=newton_dummy_pair,
+        )
+        raise_if_contact_capacity_exhausted(
+            ctx=newton_contact_ctx,
+            count=count,
+            capacity_exhausted=capacity_exhausted,
+        )
+        contact_material_params = build_contact_material_params(
+            contact_cells=contact_cells,
+            point_radii=point_radii,
+            spec=contact_material_spec,
+            active=active,
+        )
+        return [
+            ElementBatch(
+                fe_type=contact_fe_type,
+                n_dofs_per_basis=n_dofs_per_basis,
+                connectivity_en=np.asarray(contact_cells),
+                constitutive_model=contact_options.contact_constitutive_model,
+                material_params=jnp.array(contact_material_params),
+            )
+        ]
+
+    contact_pair_generator = (
+        scipy_contact_pair_generator
+        if contact_backend == ContactBackend.SCIPY_KDTREE
+        else newton_contact_pair_generator
+    )
+
     reference_frame_log = {
         "scheme": "updated_reference_per_pseudotime_step",
         "step_unknown": "incremental displacement from current reference vertices",
@@ -286,6 +347,7 @@ def solve_fiber_mechanics_bvp(
             )
 
     u_total = vertices_vd*0
+    preprocessed_bvp = None
     for i in range(pseudotime_iters):
         print(f"\n \n   pseudo-timestep i = {i+1}\n \n")
 
@@ -296,19 +358,54 @@ def solve_fiber_mechanics_bvp(
             current_stage=DebugOutputStage.TIME_STEP,
         )
 
-        du_truss, residual_truss, element_batches_truss = solve_bvp(
-            element_residual_func=linear_truss_residual,
-            vertices_vd=vertices_vd,
-            # u_0_g=None if i==0 else u_truss,
-            u_0_g = None,
-            element_batches=element_batches,
-            boundary_conditions=boundary_conditions[i],
-            solver_options=solver_options,
-            plot_convergence=plot_convergence,
-            contact_batch_generator=scipy_contact_pair_generator,
-            debug_info=debug_info,
-            time_step = i,
-        )
+        if contact_backend == ContactBackend.NEWTON_WARP:
+            if preprocessed_bvp is None:
+                preprocessed_bvp = preprocess_bvp_initial(
+                    element_residual_func=linear_truss_residual,
+                    vertices_vd=vertices_vd,
+                    u_0_g=None,
+                    element_batches=element_batches,
+                    boundary_conditions=boundary_conditions[i],
+                    contact_batch_generator=contact_pair_generator,
+                )
+            else:
+                preprocessed_bvp = preprocess_bvp_update(
+                    previous=preprocessed_bvp,
+                    vertices_vd=vertices_vd,
+                    element_batches=element_batches,
+                    boundary_conditions=boundary_conditions[i],
+                    contact_batch_generator=contact_pair_generator,
+                    u_0_g=None,
+                )
+
+            du_truss, residual_truss, element_batches_truss = solve_preprocessed_bvp(
+                preprocessed=preprocessed_bvp,
+                vertices_vd=vertices_vd,
+                u_0_g=None,
+                solver_options=solver_options,
+                plot_convergence=plot_convergence,
+                profile_memory=profile_memory,
+                element_diagnostic_outputs=None,
+                debug_info=debug_info,
+                time_step=i,
+            )
+        else:
+            du_truss, residual_truss, element_batches_truss = solve_bvp(
+                element_residual_func=linear_truss_residual,
+                vertices_vd=vertices_vd,
+                # u_0_g=None if i==0 else u_truss,
+                u_0_g = None,
+                element_batches=element_batches,
+                boundary_conditions=boundary_conditions[i],
+                solver_options=solver_options,
+                plot_convergence=plot_convergence,
+                contact_batch_generator=contact_pair_generator,
+                debug_info=debug_info,
+                time_step = i,
+            )
+        for b_i in range(len(element_batches)):
+            element_batches[b_i] = element_batches_truss[b_i]
+
         du_truss_vd = np.array(du_truss.reshape((-1,vertices_vd.shape[1])))
         vertices_vd = vertices_vd + du_truss_vd
         u_total = u_total + du_truss_vd

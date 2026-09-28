@@ -37,6 +37,7 @@ class PreprocessedBVP:
     n_vertices: int
     base_batch_count: int
     contact_batch_index: int | None
+    contact_connectivity_en: np.ndarray | None
 
 
 def _append_contact_batches(element_batches, contact_batch_generator, u_0_g):
@@ -1114,6 +1115,12 @@ def preprocess_bvp_initial(
         multipoint_constraints=multipoint_constraints,
     )
 
+    contact_connectivity_en = None
+    if contact_batch_index is not None:
+        contact_connectivity_en = np.asarray(
+            element_batches[contact_batch_index].connectivity_en
+        ).copy()
+
     return PreprocessedBVP(
         ebc=ebc,
         assembly_map_b=assembly_map_b,
@@ -1126,6 +1133,7 @@ def preprocess_bvp_initial(
         n_vertices=V,
         base_batch_count=base_batch_count,
         contact_batch_index=contact_batch_index,
+        contact_connectivity_en=contact_connectivity_en,
     )
 
 def preprocess_bvp_update(
@@ -1168,15 +1176,34 @@ def preprocess_bvp_update(
         dof_enumeration=previous.dof_enumeration,
     )
 
-    assembly_map_b = list(previous.assembly_map_b)
+    contact_connectivity_en = None
+    contact_topology_changed = False
+
     if previous.contact_batch_index is not None:
+        i = previous.contact_batch_index
+        contact_connectivity_en = np.asarray(
+            element_batches[i].connectivity_en
+        ).copy()
+        contact_topology_changed = (
+            previous.contact_connectivity_en is None
+            or not np.array_equal(
+                contact_connectivity_en,
+                previous.contact_connectivity_en,
+            )
+        )
+    assembly_map_b = list(previous.assembly_map_b)
+    if previous.contact_batch_index is not None and contact_topology_changed:
         i = previous.contact_batch_index
         assembly_map_b[i] = mesh_to_sparse_assembly_map(
             n_vertices=V,
             cells=element_batches[i].connectivity_en,
         )
 
-    jacobian_nnz = int(_calculate_jacobian_unique_nnz(ebc=ebc))
+    jacobian_nnz = (
+        int(_calculate_jacobian_unique_nnz(ebc=ebc))
+        if contact_topology_changed
+        else previous.jacobian_nnz
+    )
 
     constraint_system, f_ext = convert_boundary_conditions(
         boundary_conditions=boundary_conditions,
@@ -1196,6 +1223,7 @@ def preprocess_bvp_update(
             "jacobian_nnz": jacobian_nnz,
             "f_ext": f_ext,
             "element_batches": element_batches,
+            "contact_connectivity_en": contact_connectivity_en,
         }
     )
 
@@ -1357,8 +1385,7 @@ def solve_bvp(
         u_0_g=u_0_g,
     )
 
-    # return (u, residual, element_batches)
-    return solve_preprocessed_bvp(
+    u, residual, solved_element_batches = solve_preprocessed_bvp(
         preprocessed=preprocessed,
         vertices_vd=vertices_vd,
         u_0_g=u_0_g,
@@ -1369,4 +1396,9 @@ def solve_bvp(
         debug_info=debug_info,
         time_step=time_step,
     )
+
+    for i in range(len(element_batches)):
+        element_batches[i] = solved_element_batches[i]
+
+    return u, residual, element_batches
 
