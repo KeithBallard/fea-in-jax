@@ -1449,8 +1449,7 @@ def solve_bvp_PETSc(
     return_petsc_solver_options: bool = False,
     ):
 
-    solve, phi, u_0_g, residual_for_phi, options = build_differentiable_bvp_PETSc_solve(
-        vertices_vd=vertices_vd,
+    solve, phi, u_0_g, residual_for_phi, options, residual_isv_for_phi = build_differentiable_bvp_PETSc_solve(        vertices_vd=vertices_vd,
         element_batches=element_batches,
         element_residual_func=element_residual_func,
         boundary_conditions=boundary_conditions,
@@ -1464,6 +1463,11 @@ def solve_bvp_PETSc(
     solver_key = options.solver_key
     try:
         output = solve(phi=phi,x0=u_0_g)
+        _, new_internal_state_beqi = residual_isv_for_phi(phi, output)
+        for i in range(len(element_batches)):
+            element_batches[i] = element_batches[i].replace(
+                internal_state=new_internal_state_beqi[i]
+            )
         residual_at_output = residual_for_phi(output)
         if return_petsc_solver_options:
             return output, residual_at_output, element_batches, options
@@ -1524,7 +1528,7 @@ def build_differentiable_bvp_PETSc_solve(
     else:
         assert u_0_g.shape == (n_total_dofs,)
 
-    residual, jacobian = build_nonlinear_objects(
+    residual, jacobian, residual_isv_for_phi = build_nonlinear_objects(
             element_residual_func=element_residual_func,
             ebc=ebc,
             assembly_map_b=assembly_map_b,
@@ -1563,7 +1567,7 @@ def build_differentiable_bvp_PETSc_solve(
             solver_key=options.solver_key,
         )
     solve = petsc_snes.differentiable_snes.make_differentiable_snes_solve(primitive)
-    return solve, phi, u_0_g, residual_for_phi, options
+    return solve, phi, u_0_g, residual_for_phi, options, residual_isv_for_phi
 
 
 
@@ -1594,34 +1598,34 @@ def build_nonlinear_objects(
 
     residual_isv_func_w_constraints = jax.jit(residual_isv_func_w_constraints)
     
+    jit_residual_isv = jax.jit(residual_isv_func_w_constraints)
+    
         # Function that produces R(u)
     def residual_func_w_constraints(phi, x):
-        return residual_isv_func_w_constraints(phi, x)[0]
+        return jit_residual_isv(phi, jnp.array(x, copy=True))[0]
 
-    residual_func_w_constraints = jax.jit(residual_func_w_constraints)
+    jit_jacobian_wo_constraints = jax.jit(calculate_jacobian_wo_constraints, static_argnames=("precomputed_jacobian_nnz",))
     
         # Function that produces J(u) without Dirichlet BCs and MPCs applied
     def jacobian_func_wo_constraints(phi, x):
-        return calculate_jacobian_wo_constraints(
-            u_f=x,
+        return jit_jacobian_wo_constraints(
+            u_f=jnp.array(x, copy=True),
             element_residual_func=element_residual_func,
             ebc=ebc_with_material_params(phi),
             assembly_map_b=assembly_map_b,
             precomputed_jacobian_nnz=jacobian_nnz,
         )
 
-    jacobian_func_wo_constraints = jax.jit(jacobian_func_wo_constraints)
+    jit_jacobian_diag_wo_constraints = jax.jit(calculate_jacobian_diag_wo_constraints)
     
         # Function that produces diag(J(u)) without Dirichlet BCs and MPCs applied
     def jacobian_diag_func_wo_constraints(phi, x):
-        return calculate_jacobian_diag_wo_constraints(
-            u_f=x,
+        return jit_jacobian_diag_wo_constraints(
+            u_f=jnp.array(x, copy=True),
             element_residual_func=element_residual_func,
             ebc=ebc_with_material_params(phi),
             assembly_map_b=assembly_map_b,
         )
-
-    jacobian_diag_func_wo_constraints = jax.jit(jacobian_diag_func_wo_constraints)
 
     #these are from linear
     R_w_dirichlet = lambda phi, x: residual_func_w_constraints(
@@ -1633,4 +1637,4 @@ def build_nonlinear_objects(
                     jacobian_func_wo_constraints(phi, x, *args, **kwargs), constraints.dep_dofs
                 )
 
-    return R_w_dirichlet, J_w_dirichlet
+    return R_w_dirichlet, J_w_dirichlet, jit_residual_isv

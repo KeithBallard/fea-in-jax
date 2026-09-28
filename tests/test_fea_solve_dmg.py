@@ -16,9 +16,10 @@ from fe_jax.write_vtk import *
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = 1
-    args['t_total']  = 5
-    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib"
+    num_fib = 16
+    args['t_total']  = 500
+    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_jax"
+    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -243,9 +244,9 @@ def test_fea_solve_dmg():
             boundary_conditions=dirichlet_bcs,
             solver_options=SolverOptions(
                 # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-                # linear_precond_type=PreconditionerType.JACOBI,
-                # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-                linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+                linear_precond_type=PreconditionerType.JACOBI,
+                linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
+                # linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
             ),
         )
 
@@ -263,8 +264,8 @@ def test_fea_solve_dmg():
 if __name__ == "__main__":
     t_start = time.time()
 
-    with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
-        test_fea_solve_dmg()
+    # with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
+    test_fea_solve_dmg()
 
     t_end = time.time()
     print("Time used:", t_end - t_start)

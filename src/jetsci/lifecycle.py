@@ -18,5 +18,5 @@ def build_solver_with_reuse(
                 options,
                 R,
                 J_x,
-                x_0,
+                # x_0,
             )

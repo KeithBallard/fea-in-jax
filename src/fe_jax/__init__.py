@@ -9,6 +9,7 @@ from .np_types import *
 from .basis_quadrature import *
 from .fea import *
 from .implicit_differentiation import *
+# from .linear_elasticity import *
 from .linear_elasticity_dmg import *
 from .hyperelasticity import *
 from .profiling import *

@@ -150,7 +150,7 @@ class UnifiedBVPSolver:
                 return solve_phi, self.phi, self.x0
 
             case BVPBackend.PETSC:
-                solve_phi, phi0, x0, _, petsc_options = build_differentiable_bvp_PETSc_solve(
+                solve_phi, phi0, x0, _, petsc_options, _ = build_differentiable_bvp_PETSc_solve(
                     vertices_vd=self.vertices_vd,
                     element_batches=self.element_batches,
                     element_residual_func=self.element_residual_func,

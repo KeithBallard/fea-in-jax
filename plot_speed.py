@@ -56,7 +56,7 @@ plt.rcParams['font.size'] = 14
 plt.figure(figsize=(8, 6))
 plt.plot(IGFEM_DOFS, IGFEM_time, 'o-', color='#4DA6FF', linewidth=2.5, markersize=8, label='IGFEM')
 plt.plot(CG_DOFS, CG_time, 's-', color='#2CA02C', linewidth=2.5, markersize=8, label='JAX-FEM (CG)')
-plt.plot(dense_DOFS, dense_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JAX-FEM (Dense)')
+# plt.plot(dense_DOFS, dense_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JAX-FEM (Dense)')
 
 plt.xlabel('Degrees of Freedom (DOFs)')
 plt.ylabel('Time (seconds)')

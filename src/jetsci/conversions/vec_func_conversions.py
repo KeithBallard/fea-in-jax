@@ -18,6 +18,7 @@ import jax
 from petsc4py import PETSc
 
 import jax.numpy as jnp
+import numpy as np
 
 try:
     from cupyx.profiler import time_range as _cupy_time_range

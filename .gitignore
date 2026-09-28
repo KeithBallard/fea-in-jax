@@ -22,10 +22,10 @@ prof/
 tests/output/
 tests/IGFEM_ref/
 tests/__pycache__/
-jax-trace
-jax-trace_new
+jax-trace*
 PIGFEM*
 .env
 *.bp
 *adios*
 *.ipynb
+jetsci_git

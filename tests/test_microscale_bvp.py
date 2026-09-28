@@ -184,7 +184,7 @@ def test_microscale_bvp():
     finally:
         petsc_solver.destroy()
 
-    jax_result, _, _ = time_solve("JAX UnifiedBVPSolver", jax_solver.solve, n_calls=2)
+    jax_result, _, _ = time_solve("JAX UnifiedBVPSolver", jax_solver.solve, n_calls=3)
     u, residual, element_batches = jax_result
     u_petsc, residual_petsc, _ = petsc_result
 
