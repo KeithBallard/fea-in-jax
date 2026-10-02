@@ -152,6 +152,7 @@ def run_threeFiberTow(
     y_shift: np.ndarray | None = None,
     z_shift: np.ndarray | None = None,
     debug_info: DebugInfo | NullDebugInfo = NULL_DEBUG_INFO,
+    # linear_solve_type: LinearSolverType = LinearSolverType.CG_JAX_SCIPY_W_INFO,
     linear_solve_type: LinearSolverType = LinearSolverType.SPSOLVE_PYPARDISO,
     damp_Newton_diag: float = 0.,
     solver_options: SolverOptions | None = None,
@@ -267,7 +268,8 @@ args = {
         C_to_D_ratio               = 1.0,
         M_stiffness_to_E_ratio     = 0.0005,
         contact_search_alpha       = 1.4,
-        contact_backend = ContactBackend.NEWTON_WARP,
+        # contact_backend = ContactBackend.NEWTON_WARP,
+        contact_backend = ContactBackend.SCIPY_KDTREE,
         rigid_contact_max = 500,
     ),
 }

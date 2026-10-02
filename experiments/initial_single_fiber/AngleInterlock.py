@@ -253,7 +253,7 @@ def run_tension(
     """ """
 
     fabric = refine_fabric(fabric,dX=0.25)
-    fabric = refine_tow(fabric, [2,3,2])
+    # fabric = refine_tow(fabric, [2,3,2])
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
@@ -305,9 +305,9 @@ def run_tension(
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=5,
+            nonlinear_max_iter=10,
             linear_max_iter=50,
-            # damp_Newton_diag=1.0,
+            damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             # max_linear_displacement=0.5,
             max_backtracks=20,
@@ -332,9 +332,9 @@ def run_tension(
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
     # 'filename_base': 'FabricExample/Sep10_JacSymmetryTest/quadratic_pardiso_damp1p0_updated',
-    'filename_base': 'Sep10_JacSymmetryTest/AngleInterlock_quadratic_CG_NoForcedSymmetry',
-    # 'filename_base': None,
-    'pseudoT': 1,
+    # 'filename_base': 'Sep10_JacSymmetryTest/AngleInterlock_quadratic_CG_NoForcedSymmetry',
+    'filename_base': None,
+    'pseudoT': 5,
     'pre_strain':0.141373887*20,
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
@@ -345,6 +345,9 @@ args = {
         M_to_D_ratio            = 1.00,
         C_to_D_ratio            = 0.8,
         contact_search_alpha    = 2.0,
+        # contact_backend         = ContactBackend.SCIPY_KDTREE,
+        contact_backend         = ContactBackend.NEWTON_WARP,
+        rigid_contact_max       = 2200000
     ),
 }
 

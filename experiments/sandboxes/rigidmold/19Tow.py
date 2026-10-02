@@ -323,10 +323,10 @@ def run_mold(
 
 args = {
     'fabric': read_fib('experiments/sandboxes/rigidmold/pin_and_bundle.bdb'),
-    'filename_base': 'Sep10_JacSymmetryTest/19Tow_cg_NL15_updated',
+    'filename_base': None,
+    # 'filename_base': 'Sep29/PinBundle_WARP_PardisoNoDamp_NL15',
     # 'filename_base': 'rigid_mold/EZ_Aug3/BICGSTAB_NL75_updated',
-    # 'filename_base': None,
-    'pseudoT': 2,
+    'pseudoT': 30,
     'cylinder_points': np.array([
         [5.000000000, 0.860000000,  2.000000000],
         [5.000000000, 0.860000000,  1.200000006],
@@ -355,6 +355,9 @@ args = {
         M_to_D_ratio            = 1.00,
         C_to_D_ratio            = 0.5,
         contact_search_alpha    = 2.0,
+        contact_backend         = ContactBackend.SCIPY_KDTREE,
+        # contact_backend         = ContactBackend.NEWTON_WARP,
+        rigid_contact_max       = 30000
     ),
 }
 def get_debug():

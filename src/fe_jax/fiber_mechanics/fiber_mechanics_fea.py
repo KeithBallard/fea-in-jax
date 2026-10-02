@@ -255,7 +255,7 @@ def solve_fiber_mechanics_bvp(
         else:
             current_points = vertices_vd + np.asarray(u_ref).reshape(vertices_vd.shape)
 
-        contact_cells, active, count, capacity_exhausted = newton_fixed_contact_cells(
+        contact_cells, active, count, capacity_exhausted = warp_contact_batch(
             ctx=newton_contact_ctx,
             current_points_jax=jnp.asarray(current_points),
             dummy_pair=newton_dummy_pair,

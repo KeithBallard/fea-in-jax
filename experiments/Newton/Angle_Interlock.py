@@ -1,8 +1,8 @@
 from fe_jax.helper import *
 import matplotlib.pyplot as plt
 import numpy as np
-# import warp as wp
-# import newton
+import warp as wp
+import newton
 import jax.numpy as jnp
 
 fabric = read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab")
@@ -25,23 +25,33 @@ point_diameters=np.concatenate(
 self_adjacency_block=10
 contact_search_alpha=2.0
 
+def sort_contact(mat):
+    mat = np.array(mat)
+    mat = np.sort(mat, axis = 1)
+    idx = np.lexsort((mat[:,1], mat[:,0]))
+    return mat[idx]
+
 # KD-tree approach 
-contact_cells = contact_batch(
-    points=fabric.points,
-    point_fiber_ids=point_fiber_ids,
-    adjacency_block=self_adjacency_block,
-    point_diameters=point_diameters,
-    search2radius_ratio=contact_search_alpha,
-)
+def scipy_contact():
+    contact_cells = contact_batch(
+        points=fabric.points,
+        point_fiber_ids=point_fiber_ids,
+        adjacency_block=self_adjacency_block,
+        point_diameters=point_diameters,
+        search2radius_ratio=contact_search_alpha,
+    )
+    return sort_contact(contact_cells)
 
-# Newton-Warp approach 
-# ctx = build_newton_node_cloud_contact(
-#     points=points,
-#     point_diameters=point_diameters,
-#     contact_search_alpha=1,
-#     self_adjacency_block=20,
-#     point_fiber_ids=point_fiber_ids,
-#     rigid_contact_max=20*len(fabric,points),
-# )
+def warp_contact():
+    dummy_pair = find_nonzero_length_dummy_contact_pair(points=fabric.points)
+    ctx = build_newton_node_cloud_contact(
+        points=fabric.points,
+        point_diameters=point_diameters,
+        contact_search_alpha=contact_search_alpha,
+        self_adjacency_block=self_adjacency_block,
+        point_fiber_ids=point_fiber_ids,
+        rigid_contact_max=30*len(fabric.points),
+    )
 
-# n0, n1, active, count = NewtonContactSearch(ctx,points)
+    contact_cells, active, count, capacity_exhausted = warp_contact_batch(ctx,fabric.points,dummy_pair)
+    return sort_contact(contact_cells[active])
