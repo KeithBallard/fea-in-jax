@@ -18,7 +18,7 @@ import jetsci
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = '16'
+    num_fib = '49'
     args['t_total']  = 500
     args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_JetSCI"
     args['strain_max'] = 0.012
@@ -246,7 +246,7 @@ def test_fea_solve_dmg():
                 linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
                 linear_solve_type=jetsci.PETScLinearSolverType.CG,
                 nonlinear_absolute_tol=1e-14,
-                linear_max_iter=1000,
+                linear_max_iter=10000,
                 linear_relative_tol=1e-6,
                 linear_absolute_tol=1e-14,
             ),
