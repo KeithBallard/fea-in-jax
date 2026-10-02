@@ -9,6 +9,7 @@ from ..basis_quadrature import FiniteElementType
 class ContactBackend(Enum):
     SCIPY_KDTREE = "scipy_kdtree"
     NEWTON_WARP = "newton_warp"
+    JZTREE = "jztree"
     AUTO = "auto"
     
 def normalize_contact_backend(backend: ContactBackend | str) -> ContactBackend:
@@ -30,6 +31,9 @@ def resolve_contact_backend(backend: ContactBackend | str, auto_uses_newton_warp
     if backend == ContactBackend.NEWTON_WARP:
         from .warp_contact import _require_newton_warp
         _require_newton_warp()
+    elif backend == ContactBackend.JZTREE:
+        from .jztree_contact import _require_jztree
+        _require_jztree()
     return backend
 
 class ContactCapacityError(OverflowError):
@@ -49,6 +53,7 @@ class ContactParams:
     contact_search_alpha: float # dimensionless value for search_radius = contact_search_alpha*(radius1+radius2)
     contact_backend: ContactBackend = ContactBackend.AUTO
     rigid_contact_max: int | None = None
+    knn_k: int = 128
 
 @struct.dataclass
 class ContactMaterialSpec:

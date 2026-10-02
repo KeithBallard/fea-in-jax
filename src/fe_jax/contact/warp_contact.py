@@ -72,8 +72,9 @@ def build_newton_node_cloud_contact(
 
     # Match current self-contact exclusion.
     for i in range(len(points)):
-        for j in range(i+1, len(points)):
-            if point_fiber_ids[i] == point_fiber_ids[j] and j-i <= self_adjacency_block:
+        max_j = min(len(points), i + self_adjacency_block + 1)
+        for j in range(i+1, max_j):
+            if point_fiber_ids[i] == point_fiber_ids[j]:
                 builder.add_shape_collision_filter_pair(i,j)
 
     model=builder.finalize()
