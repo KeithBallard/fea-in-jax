@@ -10,7 +10,8 @@ from .dof_enumeration import *
 from .boundary_conditions import *
 
 import jetsci
-from jetsci import petsc_snes
+import jetsci.petsc_snes as petsc_snes
+from jetsci.petsc_snes import differentiable_snes
 
 import jax.numpy as jnp
 import jax
@@ -1561,7 +1562,7 @@ def build_differentiable_bvp_PETSc_solve(
         solver.callback_stats["collect_diagnostics"] = diagnostics
 
     
-    primitive = petsc_snes.differentiable_snes.DifferentiableSNESPrimitive(
+    primitive = differentiable_snes.DifferentiableSNESPrimitive(
             residual=residual,
             jacobian=jacobian,
             solver_key=options.solver_key,

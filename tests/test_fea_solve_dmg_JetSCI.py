@@ -243,8 +243,8 @@ def test_fea_solve_dmg():
             backend=BVPBackend.PETSC,
             petsc_solver_options=jetsci.SolverOptions(
                 nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
-                linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
-                linear_solve_type=jetsci.PETScLinearSolverType.CG,
+                linear_preconditioner_type=jetsci.PreconditionerType.PETSC_JACOBI,
+                linear_solver_type=jetsci.LinearSolverType.PETSC_CG,
                 nonlinear_absolute_tol=1e-14,
                 linear_max_iter=10000,
                 linear_relative_tol=1e-6,
