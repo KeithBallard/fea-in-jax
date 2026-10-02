@@ -269,8 +269,8 @@ def test_fea_solve_dmg():
         print("Time step =", i)
 
         # # write and save to vtk
-        vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
-        vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+        #vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+        #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
     n_total_dofs = u.shape[0]
 

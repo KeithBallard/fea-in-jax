@@ -280,6 +280,18 @@ def test_fea_solve_dmg():
     )
     n_total_dofs = u_history.shape[1]
 
+    print('Post-process')
+    for i, bc in enumerate(u_history):
+        time_step = i + 1
+        print("Time step =", i+1)
+        
+        # Extract the state at time i
+        u_i = u_history[i]
+        ISV_be_i = jax.tree_util.tree_map(lambda x: x[i], ISV_be_history)
+
+    s11_global, s22_global, s12_global = compute_stress_strain_curve(ISV_be_history, element_batches, points)
+
+    exit(1)
     # Post-process: write VTK files
     print('Post-process')
     for i, bc in enumerate(u_history):
@@ -295,7 +307,7 @@ def test_fea_solve_dmg():
         vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{time_step}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
 
-    s11_global, s22_global, s12_global = compute_stress_strain_curve(ISV_be_history, element_batches, points)
+    
     # Save param_hist and loss_hist
     np.save(os.path.join(args['out_dir'], "stress_strain_curve.npy"), np.array([dxs/length*100,s11_global]))
     np.save(os.path.join(args['out_dir'], "s_history.npy"), np.array([s11_global,s22_global,s12_global]))
