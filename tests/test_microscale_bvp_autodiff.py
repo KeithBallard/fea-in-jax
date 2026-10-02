@@ -15,7 +15,7 @@ def test_microscale_bvp():
     # initialise_tracking()
 
     # Read in the mesh
-    mesh = meshio.read(get_mesh("microscale_2D_r2.vtk"))
+    mesh = meshio.read(get_mesh("microscale_2D_r0.vtk"))
     points = np.array(mesh.points, dtype=np.float32)[:, 0:2]
     cells = np.array(mesh.cells[0].data, dtype=np.uint64)
     mesh.cell_data["DomainIDs"][0] = np.array(
@@ -102,7 +102,7 @@ def test_microscale_bvp():
                 fe_type=fe_type,
                 n_dofs_per_basis=2,
                 connectivity_en=matrix_cells,
-                constitutive_model=elastic_isotropic,
+                constitutive_model=damage_elastic_isotropic_vmap,
                 material_params=matrix_mat_params_eqm,
             ),
             ElementBatch(
