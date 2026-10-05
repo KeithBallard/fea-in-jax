@@ -228,7 +228,6 @@ def test_fea_solve_dmg():
 
     u_prev = jnp.array(jnp.reshape(vtk_mesh['displacement'][:,:2],-1), dtype=jnp.float64)
 
-
     print('Start Deformation Loop')
     # Keep these options across increments so JetSCI reuses the PETSc SNES/KSP
     # context. The solve itself intentionally goes through JetSCI's public
