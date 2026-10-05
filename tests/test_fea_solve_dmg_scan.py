@@ -2,6 +2,7 @@ import meshio
 import numpy as np
 
 from helper import *
+from igfem_mesh import *
 
 import os
 import pyvista as pv
@@ -40,37 +41,8 @@ def test_fea_solve_dmg():
     print("# DoFs = ", 2 * points.shape[0])
 
     num_cells = len(mesh.celltypes)
-    matrix_tri_cells, matrix_quad_cells = [],[]
-    matrix_tri_id, matrix_quad_id = [],[]
-    fiber_tri_cells, fiber_quad_cells = [],[]
-    fiber_tri_id, fiber_quad_id = [],[]
-
-    matrix_ID = jnp.max(mesh.cell_data['materials'])
-    for id, celltype in enumerate(mesh.celltypes):
-        materials_ID = mesh.cell_data['materials'][id]    # Fiber=0, matrix= largest in the 'material'
-        cell_nodes = mesh.get_cell(id).point_ids
-        cell_nodes = reorder_cell_basix(mesh, cell_nodes)
-        # Triangle
-        if celltype == 5:
-            if materials_ID == matrix_ID:
-                matrix_tri_cells.append(cell_nodes)
-                matrix_tri_id.append(id)
-            else:
-                fiber_tri_cells.append(cell_nodes)
-                fiber_tri_id.append(id)
-        # Quad
-        elif celltype == 9:
-            if materials_ID == matrix_ID:
-                matrix_quad_cells.append(cell_nodes)
-                matrix_quad_id.append(id)
-            else:
-                fiber_quad_cells.append(cell_nodes)
-                fiber_quad_id.append(id)
-
-    matrix_tri_cells,  matrix_quad_cells = np.array(matrix_tri_cells), np.array(matrix_quad_cells)
-    matrix_tri_id,     matrix_quad_id    = np.array(matrix_tri_id),    np.array(matrix_quad_id)
-    fiber_tri_cells,   fiber_quad_cells  = np.array(fiber_tri_cells),  np.array(fiber_quad_cells)
-    fiber_tri_id,      fiber_quad_id     = np.array(fiber_tri_id),     np.array(fiber_quad_id)
+    (matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id,
+     fiber_tri_cells,  fiber_quad_cells,  fiber_tri_id,  fiber_quad_id) = split_matrix_fiber_cells(mesh)
 
     length = (np.max(mesh.points[:,0]) - np.min(mesh.points[:,0]))
 

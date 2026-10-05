@@ -26,7 +26,7 @@ dense_DOFS, dense_time = [],[]
 for num_fiber in Fibers:
     filepath_IGFEM = f"tests/IGFEM_ref/{num_fiber}fib_t500/statistics.txt"
     filepath_CG = f"tests/output/nonlinear_IGFEM_vmap_t500_{num_fiber}fib_CG/statistics.txt"
-    filepath_dense = f"tests/output/nonlinear_IGFEM_vmap_t500_{num_fiber}fib_dense/statistics.txt"
+    filepath_dense = f"tests/output/nonlinear_IGFEM_vmap_t500_{num_fiber}fib_JetSCI/statistics.txt"
 
     try:
         dofs, solver_time = get_stats(filepath_IGFEM)
@@ -56,7 +56,7 @@ plt.rcParams['font.size'] = 14
 plt.figure(figsize=(8, 6))
 plt.plot(IGFEM_DOFS, IGFEM_time, 'o-', color='#4DA6FF', linewidth=2.5, markersize=8, label='IGFEM')
 plt.plot(CG_DOFS, CG_time, 's-', color='#2CA02C', linewidth=2.5, markersize=8, label='JAX-FEM (CG)')
-# plt.plot(dense_DOFS, dense_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JAX-FEM (Dense)')
+plt.plot(dense_DOFS, dense_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JetSCI')
 
 plt.xlabel('Degrees of Freedom (DOFs)')
 plt.ylabel('Time (seconds)')

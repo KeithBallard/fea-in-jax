@@ -2,6 +2,7 @@ import meshio
 import numpy as np
 
 from helper import *
+from igfem_mesh import *
 from typing import Any
 
 import os
@@ -42,47 +43,11 @@ def test_fea_solve_dmg():
     print("# DoFs = ", 2 * points.shape[0])
 
     num_cells = len(mesh.celltypes)
-    matrix_tri_cells, matrix_quad_cells = [],[]
-    matrix_tri_id, matrix_quad_id = [],[]
-    fiberA_tri_cells, fiberA_quad_cells = [],[]
-    fiberA_tri_id, fiberA_quad_id = [],[]
-    fiberB_tri_cells, fiberB_quad_cells = [],[]
-    fiberB_tri_id, fiberB_quad_id = [],[]
-
-    matrix_ID = jnp.max(mesh.cell_data['materials'])
-    for id, celltype in enumerate(mesh.celltypes):
-        materials_ID = mesh.cell_data['materials'][id]    # Fiber=0, matrix= largest in the 'material'
-        cell_nodes = mesh.get_cell(id).point_ids
-        cell_nodes = reorder_cell_basix(mesh, cell_nodes)
-        # Triangle
-        if celltype == 5:
-            if materials_ID == matrix_ID:
-                matrix_tri_cells.append(cell_nodes)
-                matrix_tri_id.append(id)
-            elif materials_ID % 2 == 1:
-                fiberA_tri_cells.append(cell_nodes)
-                fiberA_tri_id.append(id)
-            else:
-                fiberB_tri_cells.append(cell_nodes)
-                fiberB_tri_id.append(id)
-        # Quad
-        elif celltype == 9:
-            if materials_ID == matrix_ID:
-                matrix_quad_cells.append(cell_nodes)
-                matrix_quad_id.append(id)
-            elif materials_ID % 2 == 1:
-                fiberA_quad_cells.append(cell_nodes)
-                fiberA_quad_id.append(id)
-            else:
-                fiberB_quad_cells.append(cell_nodes)
-                fiberB_quad_id.append(id)
-
-    matrix_tri_cells,  matrix_quad_cells = np.array(matrix_tri_cells), np.array(matrix_quad_cells)
-    matrix_tri_id,     matrix_quad_id    = np.array(matrix_tri_id),    np.array(matrix_quad_id)
-    fiberA_tri_cells,  fiberA_quad_cells = np.array(fiberA_tri_cells), np.array(fiberA_quad_cells)
-    fiberA_tri_id,     fiberA_quad_id    = np.array(fiberA_tri_id),    np.array(fiberA_quad_id)
-    fiberB_tri_cells,  fiberB_quad_cells = np.array(fiberB_tri_cells), np.array(fiberB_quad_cells)
-    fiberB_tri_id,     fiberB_quad_id    = np.array(fiberB_tri_id),    np.array(fiberB_quad_id)
+    # Odd material IDs are fiber A, even are fiber B
+    cell_groups = sort_cells_by_material(mesh, fiber_group=lambda materials_ID: "fiberA" if materials_ID % 2 == 1 else "fiberB")
+    matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id = cell_groups["matrix"]
+    fiberA_tri_cells, fiberA_quad_cells, fiberA_tri_id, fiberA_quad_id = cell_groups["fiberA"]
+    fiberB_tri_cells, fiberB_quad_cells, fiberB_tri_id, fiberB_quad_id = cell_groups["fiberB"]
 
     length = (np.max(mesh.points[:,0]) - np.min(mesh.points[:,0]))
 
