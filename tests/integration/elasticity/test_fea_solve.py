@@ -94,6 +94,3 @@ def test_fea_solve_on_polygon_mesh():
     # Write output
     mesh.point_data["u"] = u.reshape((points.shape[0], U))
     mesh.write(get_output("test_fea_solve_out.vtk"))
-
-if __name__ == "__main__":
-    test_fea_solve_on_polygon_mesh()
