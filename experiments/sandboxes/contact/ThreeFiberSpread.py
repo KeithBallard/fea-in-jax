@@ -269,7 +269,9 @@ args = {
         M_stiffness_to_E_ratio     = 0.0005,
         contact_search_alpha       = 1.4,
         # contact_backend = ContactBackend.NEWTON_WARP,
-        contact_backend = ContactBackend.SCIPY_KDTREE,
+        # contact_backend = ContactBackend.JAX_HASH,
+        contact_backend = ContactBackend.AUTO,
+        # contact_backend = ContactBackend.SCIPY_KDTREE,
         rigid_contact_max = 500,
     ),
 }
