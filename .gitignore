@@ -4,7 +4,6 @@
 *.png
 *.npy
 *.log
-*.out
 .DS_Store
 
 __pycache__/
@@ -20,12 +19,4 @@ install/
 prof/
 *.egg-info/
 tests/output/
-tests/IGFEM_ref/
 tests/__pycache__/
-jax-trace*
-PIGFEM*
-.env
-*.bp
-*adios*
-*.ipynb
-jetsci_git
