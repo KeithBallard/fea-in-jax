@@ -7,33 +7,50 @@ import numpy as np
 from ..basis_quadrature import FiniteElementType
 
 class ContactBackend(Enum):
+    JAX_HASH = "jax_hash"
     SCIPY_KDTREE = "scipy_kdtree"
     NEWTON_WARP = "newton_warp"
     JZTREE = "jztree"
+    CUPYX_KDTREE = "cupyx_kdtree"
     AUTO = "auto"
     
 def normalize_contact_backend(backend: ContactBackend | str) -> ContactBackend:
-    if isinstance(backend,str):
+    if isinstance(backend, str):
+        normalized = backend.lower().strip()
+        if normalized in ("jaxhash", "jax_hash"):
+            return ContactBackend.JAX_HASH
+        if normalized in ("cupyx", "cupyx_kdtree"):
+            return ContactBackend.CUPYX_KDTREE
+        if normalized in ("scipy", "scipy_kdtree"):
+            return ContactBackend.SCIPY_KDTREE
+        if normalized in ("warp", "newton_warp"):
+            return ContactBackend.NEWTON_WARP
+        if normalized in ("jztree",):
+            return ContactBackend.JZTREE
+        if normalized in ("auto",):
+            return ContactBackend.AUTO
         backend = ContactBackend(backend)
-    if not isinstance(backend,ContactBackend):
+    if not isinstance(backend, ContactBackend):
         raise TypeError("backend must be a ContactBackend or contact backend string")
     return backend
 
-def resolve_contact_backend(backend: ContactBackend | str, auto_uses_newton_warp: bool = True) -> ContactBackend:
+def resolve_contact_backend(backend: ContactBackend | str, auto_uses_newton_warp: bool = False) -> ContactBackend:
     backend = normalize_contact_backend(backend)
     if backend == ContactBackend.AUTO:
-        from .warp_contact import NEWTON_WARP_AVAILABLE
-        return (
-            ContactBackend.NEWTON_WARP
-            if NEWTON_WARP_AVAILABLE and auto_uses_newton_warp
-            else ContactBackend.SCIPY_KDTREE
-        )
+        if auto_uses_newton_warp:
+            from .warp_contact import NEWTON_WARP_AVAILABLE
+            if NEWTON_WARP_AVAILABLE:
+                return ContactBackend.NEWTON_WARP
+        return ContactBackend.JAX_HASH
     if backend == ContactBackend.NEWTON_WARP:
         from .warp_contact import _require_newton_warp
         _require_newton_warp()
     elif backend == ContactBackend.JZTREE:
         from .jztree_contact import _require_jztree
         _require_jztree()
+    elif backend == ContactBackend.CUPYX_KDTREE:
+        from .cupyx_contact import _require_cupyx_kdtree
+        _require_cupyx_kdtree()
     return backend
 
 class ContactCapacityError(OverflowError):
@@ -54,6 +71,8 @@ class ContactParams:
     contact_backend: ContactBackend = ContactBackend.AUTO
     rigid_contact_max: int | None = None
     knn_k: int = 128
+    hash_pad_size: int = 2
+    cell_capacity_buffer: float = 1.5
 
 @struct.dataclass
 class ContactMaterialSpec:

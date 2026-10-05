@@ -50,52 +50,27 @@ def count_initial_contacts(
 def distinct_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    point_radii: jnp.ndarray
+    point_radii: jnp.ndarray | None = None,
+    radius: float | None = None,
 ) -> jnp.ndarray:
-    """
-    Find node-node contact candidates between distinct fibers.
-
-    Parameters
-    ----------
-    points : array-like, shape (N_total, D)
-        Global point coordinates. ``D`` may be 1, 2, or 3.
-    point_fiber_ids : array-like, shape (N_total,)
-        Fiber id for each point.
-    radius : float
-        Contact threshold. A node pair is considered in contact if the
-        distance between them is <= radius.
-
-    Returns
-    -------
-    tuple[jnp.ndarray, int, bool]
-        ``distinct_contacts`` with shape ``(capacity, 2)``, the number of valid
-        distinct contacts, and an overflow flag.
-    """
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
-    if radius <= 0:
-        raise ValueError("radius must be positive")
+    if radius is not None:
+        if radius <= 0:
+            raise ValueError("radius must be positive")
+        point_radii = np.full(points.shape[0], 0.5 * radius)
+    elif point_radii is not None:
+        point_radii = np.asarray(point_radii)
+    else:
+        raise ValueError("Either radius or point_radii must be provided")
 
     N = points.shape[0]
-
-    # d = points[:,None,:] - points[None,:,:]
-    # dist = jnp.linalg.norm(d,axis=-1)
-
-    # distinct_fiber_mask = point_fiber_ids[:,None] != point_fiber_ids[None,:]
-    # upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1)
-    # dist_mask = dist <= radius
-
-    # pair_mask = distinct_fiber_mask & upper_mask & dist_mask
-
-    # i_idx, j_idx = jnp.nonzero(pair_mask)
-    # distinct_contacts = jnp.stack([i_idx,j_idx], axis=1)
-
     candidates = []
     for i in range(N):
-        for j in range(i+1, N):
-            if point_fiber_ids[i] != point_fiber_ids[j] and np.linalg.norm(points[i]-points[j]) <= point_radii[i]+point_radii[j]:
-                candidates.append([i,j])
-    if len(candidates)==0:
-        distinct_contacts = np.zeros((0,2),dtype=np.int32)
+        for j in range(i + 1, N):
+            if point_fiber_ids[i] != point_fiber_ids[j] and np.linalg.norm(points[i] - points[j]) <= point_radii[i] + point_radii[j]:
+                candidates.append([i, j])
+    if len(candidates) == 0:
+        distinct_contacts = np.zeros((0, 2), dtype=np.int32)
     else:
         distinct_contacts = np.array(candidates, dtype=np.int32)
 
@@ -104,68 +79,36 @@ def distinct_fiber_node2node(
 def self_fiber_node2node(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
-    point_radii: jnp.ndarray,
-    adjacency_block: int
+    point_radii: jnp.ndarray | None = None,
+    adjacency_block: int = 1,
+    radius: float | None = None,
 ) -> jnp.ndarray:
-    """
-    Find node-node self-contact candidates within each fiber.
-
-    Parameters
-    ----------
-    points : array-like, shape (N_total, D)
-        Global point coordinates. ``D`` may be 1, 2, or 3.
-    point_fiber_ids : array-like, shape (N_total,)
-        Fiber id for each point.
-    radius : float
-        Contact threshold. A node pair is considered in contact if its Euclidean
-        distance is <= radius.
-    adjacency_block : int
-        Minimum index separation to allow self-contact. A value of ``k``
-        excludes pairs with ``j - i <= k``.
-
-    Returns
-    -------
-    tuple[jnp.ndarray, int, bool]
-        ``self_contacts`` with shape ``(capacity, 2)``, the number of valid
-        self-contact pairs, and an overflow flag.
-    """
     points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
-    if radius <= 0:
-        raise ValueError("radius must be positive")
+    if radius is not None:
+        if radius <= 0:
+            raise ValueError("radius must be positive")
+        point_radii = np.full(points.shape[0], 0.5 * radius)
+    elif point_radii is not None:
+        point_radii = np.asarray(point_radii)
+    else:
+        raise ValueError("Either radius or point_radii must be provided")
+
     if adjacency_block < 0:
         raise ValueError("adjacency_block must be nonnegative")
 
-    # N = points.shape[0]
-
-    # d = points[:,None,:] - points[None,:,:]
-    # dist = jnp.linalg.norm(d,axis=-1)
-
-    # same_fiber_mask = point_fiber_ids[:,None] == point_fiber_ids[None,:]
-    # upper_mask = jnp.triu(jnp.ones((N,N),dtype=bool), k=1 + adjacency_block)
-    # dist_mask = (dist <= radius)
-
-    # pair_mask = same_fiber_mask & upper_mask & dist_mask
-
-    # i_idx,j_idx = jnp.nonzero(pair_mask)
-    # self_contacts = jnp.stack([i_idx,j_idx], axis=1)
-
-    pair_thresholds = search2radius_ratio * (
-        point_radii[pairs[:, 0]] + point_radii[pairs[:, 1]]
-    )
     candidates = []
     for fiber_id in np.unique(point_fiber_ids):
-        global_indeces = np.where(point_fiber_ids == fiber_id)[0]
-        fiber_point_radii = point_radii[global_indeces]
-        fiber = points[global_indeces]
+        global_indices = np.where(point_fiber_ids == fiber_id)[0]
+        fiber_point_radii = point_radii[global_indices]
+        fiber = points[global_indices]
         for i in range(int(fiber.shape[0])):
-            for j in range(i+1+adjacency_block,int(fiber.shape[0])):
-                if np.linalg.norm(fiber[i]-fiber[j]) <= fiber_point_radii[i]+fiber_point_radii[j]:
-                    candidates.append([global_indeces[i],global_indeces[j]])
-    if len(candidates)==0:
-        self_contacts = np.zeros((0,2),dtype=np.int32)
+            for j in range(i + 1 + adjacency_block, int(fiber.shape[0])):
+                if np.linalg.norm(fiber[i] - fiber[j]) <= fiber_point_radii[i] + fiber_point_radii[j]:
+                    candidates.append([global_indices[i], global_indices[j]])
+    if len(candidates) == 0:
+        self_contacts = np.zeros((0, 2), dtype=np.int32)
     else:
         self_contacts = np.array(candidates, dtype=np.int32)
-
 
     return self_contacts
 

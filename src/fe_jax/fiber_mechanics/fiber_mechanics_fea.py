@@ -127,9 +127,15 @@ def solve_fiber_mechanics_bvp(
         contact_options.contact_backend,
         auto_uses_newton_warp=False,
     )
-    if contact_backend == ContactBackend.NEWTON_WARP and contact_options.rigid_contact_max is None:
+    fixed_capacity_backend = contact_backend in (
+        ContactBackend.JAX_HASH,
+        ContactBackend.NEWTON_WARP,
+        ContactBackend.JZTREE,
+        ContactBackend.CUPYX_KDTREE,
+    )
+    if fixed_capacity_backend and contact_options.rigid_contact_max is None:
         raise ValueError(
-            "ContactBackend.NEWTON_WARP requires ContactParams.rigid_contact_max "
+            f"{contact_backend} requires ContactParams.rigid_contact_max "
             "to define the fixed contact capacity."
         )
 
@@ -226,8 +232,14 @@ def solve_fiber_mechanics_bvp(
             )
         ]
 
+    shared_dummy_pair = None
+    if fixed_capacity_backend:
+        shared_dummy_pair = jnp.asarray(
+            find_nonzero_length_dummy_contact_pair(vertices_vd),
+            dtype=jnp.int32,
+        )
+
     newton_contact_ctx = None
-    newton_dummy_pair = None
     point_radii = 0.5 * point_diameters
 
     if contact_backend == ContactBackend.NEWTON_WARP:
@@ -244,10 +256,6 @@ def solve_fiber_mechanics_bvp(
             point_fiber_ids=point_fiber_ids,
             rigid_contact_max=contact_options.rigid_contact_max,
         )
-        newton_dummy_pair = jnp.asarray(
-            find_nonzero_length_dummy_contact_pair(vertices_vd),
-            dtype=jnp.int32,
-        )
 
     def newton_contact_pair_generator(u_ref) -> list[ElementBatch]:
         if u_ref is None:
@@ -258,7 +266,7 @@ def solve_fiber_mechanics_bvp(
         contact_cells, active, count, capacity_exhausted = warp_contact_batch(
             ctx=newton_contact_ctx,
             current_points_jax=jnp.asarray(current_points),
-            dummy_pair=newton_dummy_pair,
+            dummy_pair=shared_dummy_pair,
         )
         raise_if_contact_capacity_exhausted(
             ctx=newton_contact_ctx,
@@ -281,11 +289,145 @@ def solve_fiber_mechanics_bvp(
             )
         ]
 
-    contact_pair_generator = (
-        scipy_contact_pair_generator
-        if contact_backend == ContactBackend.SCIPY_KDTREE
-        else newton_contact_pair_generator
-    )
+    # Precompute grid geometry for JAX_HASH once on the initial reference configuration
+    jaxhash_grid = None
+    if contact_backend == ContactBackend.JAX_HASH:
+        query_radius = float(contact_options.contact_search_alpha * 2.0 * np.max(point_radii))
+        jaxhash_grid = pad_hash_cells(
+            points=vertices_vd,
+            query_radius=query_radius,
+            pad_size=contact_options.hash_pad_size,
+            cell_capacity_buffer=contact_options.cell_capacity_buffer,
+        )
+
+    def jaxhash_contact_pair_generator(u_ref) -> list[ElementBatch]:
+        if u_ref is None:
+            current_points = vertices_vd
+        else:
+            current_points = vertices_vd + np.asarray(u_ref).reshape(vertices_vd.shape)
+
+        domain_min, Nx, Ny, Nz, total_cells, C_max = jaxhash_grid
+        contact_cells, active, count, capacity_exhausted = jaxhash_contact_batch(
+            points=current_points,
+            point_fiber_ids=point_fiber_ids,
+            adjacency_block=self_adjacency_block,
+            point_diameters=point_diameters,
+            search2radius_ratio=contact_options.contact_search_alpha,
+            rigid_contact_max=contact_options.rigid_contact_max,
+            domain_min=domain_min,
+            Nx=Nx,
+            Ny=Ny,
+            Nz=Nz,
+            total_cells=total_cells,
+            C_max=C_max,
+            dummy_pair=shared_dummy_pair,
+        )
+        raise_if_jaxhash_contact_capacity_exhausted(
+            capacity=contact_options.rigid_contact_max,
+            count=count,
+            capacity_exhausted=capacity_exhausted,
+        )
+        contact_material_params = build_contact_material_params(
+            contact_cells=contact_cells,
+            point_radii=point_radii,
+            spec=contact_material_spec,
+            active=active,
+        )
+        return [
+            ElementBatch(
+                fe_type=contact_fe_type,
+                n_dofs_per_basis=n_dofs_per_basis,
+                connectivity_en=np.asarray(contact_cells),
+                constitutive_model=contact_options.contact_constitutive_model,
+                material_params=jnp.array(contact_material_params),
+            )
+        ]
+
+    def jztree_contact_pair_generator(u_ref) -> list[ElementBatch]:
+        if u_ref is None:
+            current_points = vertices_vd
+        else:
+            current_points = vertices_vd + np.asarray(u_ref).reshape(vertices_vd.shape)
+
+        contact_cells, active, count, capacity_exhausted = jztree_contact_batch(
+            points=current_points,
+            point_fiber_ids=point_fiber_ids,
+            adjacency_block=self_adjacency_block,
+            point_diameters=point_diameters,
+            search2radius_ratio=contact_options.contact_search_alpha,
+            rigid_contact_max=contact_options.rigid_contact_max,
+            dummy_pair=shared_dummy_pair,
+            k=contact_options.knn_k,
+        )
+        raise_if_jztree_contact_capacity_exhausted(
+            capacity=contact_options.rigid_contact_max,
+            count=count,
+            capacity_exhausted=capacity_exhausted,
+        )
+        contact_material_params = build_contact_material_params(
+            contact_cells=contact_cells,
+            point_radii=point_radii,
+            spec=contact_material_spec,
+            active=active,
+        )
+        return [
+            ElementBatch(
+                fe_type=contact_fe_type,
+                n_dofs_per_basis=n_dofs_per_basis,
+                connectivity_en=np.asarray(contact_cells),
+                constitutive_model=contact_options.contact_constitutive_model,
+                material_params=jnp.array(contact_material_params),
+            )
+        ]
+
+    def cupyx_contact_pair_generator(u_ref) -> list[ElementBatch]:
+        if u_ref is None:
+            current_points = vertices_vd
+        else:
+            current_points = vertices_vd + np.asarray(u_ref).reshape(vertices_vd.shape)
+
+        contact_cells, active, count, capacity_exhausted = cupyx_contact_batch(
+            points=current_points,
+            point_fiber_ids=point_fiber_ids,
+            adjacency_block=self_adjacency_block,
+            point_diameters=point_diameters,
+            search2radius_ratio=contact_options.contact_search_alpha,
+            rigid_contact_max=contact_options.rigid_contact_max,
+            dummy_pair=shared_dummy_pair,
+        )
+        raise_if_cupyx_kdtree_contact_capacity_exhausted(
+            capacity=contact_options.rigid_contact_max,
+            count=count,
+            capacity_exhausted=capacity_exhausted,
+        )
+        contact_material_params = build_contact_material_params(
+            contact_cells=contact_cells,
+            point_radii=point_radii,
+            spec=contact_material_spec,
+            active=active,
+        )
+        return [
+            ElementBatch(
+                fe_type=contact_fe_type,
+                n_dofs_per_basis=n_dofs_per_basis,
+                connectivity_en=np.asarray(contact_cells),
+                constitutive_model=contact_options.contact_constitutive_model,
+                material_params=jnp.array(contact_material_params),
+            )
+        ]
+
+    if contact_backend == ContactBackend.JAX_HASH:
+        contact_pair_generator = jaxhash_contact_pair_generator
+    elif contact_backend == ContactBackend.SCIPY_KDTREE:
+        contact_pair_generator = scipy_contact_pair_generator
+    elif contact_backend == ContactBackend.NEWTON_WARP:
+        contact_pair_generator = newton_contact_pair_generator
+    elif contact_backend == ContactBackend.JZTREE:
+        contact_pair_generator = jztree_contact_pair_generator
+    elif contact_backend == ContactBackend.CUPYX_KDTREE:
+        contact_pair_generator = cupyx_contact_pair_generator
+    else:
+        raise ValueError(f"Unsupported contact backend: {contact_backend}")
 
     reference_frame_log = {
         "scheme": "updated_reference_per_pseudotime_step",
@@ -358,7 +500,7 @@ def solve_fiber_mechanics_bvp(
             current_stage=DebugOutputStage.TIME_STEP,
         )
 
-        if contact_backend == ContactBackend.NEWTON_WARP:
+        if fixed_capacity_backend:
             if preprocessed_bvp is None:
                 preprocessed_bvp = preprocess_bvp_initial(
                     element_residual_func=linear_truss_residual,

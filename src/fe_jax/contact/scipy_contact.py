@@ -103,9 +103,33 @@ def contact_batch(
     points: jnp.ndarray,
     point_fiber_ids: jnp.ndarray,
     adjacency_block: int,
-    point_diameters: np.ndarray,
-    search2radius_ratio: float,
+    point_diameters: np.ndarray | None = None,
+    search2radius_ratio: float = 1.0,
+    radius: float | None = None,
+    distinct_fiber_fn = None,
+    self_fiber_fn = None,
 ) -> np.ndarray:
+    if radius is not None:
+        if radius <= 0:
+            raise ValueError("radius must be positive")
+        points, point_fiber_ids = _validate_point_cloud(points, point_fiber_ids)
+        if distinct_fiber_fn is not None and self_fiber_fn is not None:
+            distinct_contacts = distinct_fiber_fn(
+                points=points,
+                point_fiber_ids=point_fiber_ids,
+                radius=radius,
+            )
+            self_contacts = self_fiber_fn(
+                points=points,
+                point_fiber_ids=point_fiber_ids,
+                radius=radius,
+                adjacency_block=adjacency_block,
+            )
+            return jnp.concatenate([distinct_contacts, self_contacts], axis=0)
+        else:
+            point_diameters = np.full(points.shape[0], radius)
+            search2radius_ratio = 1.0
+
     return scipy_contact_batch(
         points=points,
         point_fiber_ids=point_fiber_ids,
