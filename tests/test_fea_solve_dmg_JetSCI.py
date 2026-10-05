@@ -13,7 +13,6 @@ from fe_jax.write_vtk import *
 # jax.config.update("jax_disable_jit", True)
 # jax.config.update("jax_log_compiles", True)
  
-from fe_jax.bvp_solver import build_bvp_solver, UnifiedBVPOptions, BVPBackend
 import jetsci
 
 def test_fea_solve_dmg():
@@ -231,46 +230,80 @@ def test_fea_solve_dmg():
 
 
     print('Start Deformation Loop')
-    # Create the Unified solver once to reuse its PETSc SNES context
-    petsc_solver = build_bvp_solver(
-        vertices_vd=points,
-        element_batches=element_batches,
-        element_residual_func=linear_elasticity_residual,
-        boundary_conditions=dirichlet_bcs,
-        multipoint_constraints=None,
-        u_0_g=u_prev,
-        options=UnifiedBVPOptions(
-            backend=BVPBackend.PETSC,
-            petsc_solver_options=jetsci.SolverOptions(
-                nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
-                linear_preconditioner_type=jetsci.PreconditionerType.PETSC_JACOBI,
-                linear_solver_type=jetsci.LinearSolverType.PETSC_CG,
-                nonlinear_absolute_tol=1e-14,
-                linear_max_iter=10000,
-                linear_relative_tol=1e-6,
-                linear_absolute_tol=1e-14,
-            ),
-        ),
+    # Keep these options across increments so JetSCI reuses the PETSc SNES/KSP
+    # context. The solve itself intentionally goes through JetSCI's public
+    # differentiable_solve API rather than the FEA-specific PETSc wrapper.
+    petsc_solver_options = jetsci.SolverOptions(
+        nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
+        linear_preconditioner_type=jetsci.PreconditionerType.PETSC_JACOBI,
+        linear_solver_type=jetsci.LinearSolverType.PETSC_CG,
+        nonlinear_absolute_tol=1e-14,
+        linear_max_iter=10000,
+        linear_relative_tol=1e-6,
+        linear_absolute_tol=1e-14,
     )
 
-    for i in range(1,args['t_total']+1):
-        dirichlet_values[n_LHS:n_vals] = strain_increment * i
-        for bc in range(len(dirichlet_bcs)):
-            dirichlet_bcs[bc].value = dirichlet_values[bc]
-            
-        petsc_solver.boundary_conditions = dirichlet_bcs
+    try:
+        for i in range(1,args['t_total']+1):
+            dirichlet_values[n_LHS:n_vals] = strain_increment * i
+            for bc in range(len(dirichlet_bcs)):
+                dirichlet_bcs[bc].value = dirichlet_values[bc]
 
-        # Solve the boundary value problem
-        u, residual, element_batches = petsc_solver.solve(u_0_g=u_prev)
-        petsc_solver.element_batches = element_batches # Need to persist the updated internal state in the solver
+            (
+                ebc,
+                assembly_map_b,
+                constraint_system,
+                jacobian_nnz,
+                element_residual_func,
+                f_ext,
+            ) = preprocess_bvp(
+                vertices_vd=points,
+                element_batches=element_batches,
+                element_residual_func=linear_elasticity_residual,
+                boundary_conditions=dirichlet_bcs,
+                multipoint_constraints=None,
+            )
+            residual_for_phi, jacobian_for_phi, residual_isv_for_phi = (
+                build_nonlinear_objects(
+                    element_residual_func=element_residual_func,
+                    ebc=ebc,
+                    assembly_map_b=assembly_map_b,
+                    jacobian_nnz=jacobian_nnz,
+                    u_0_g=u_prev,
+                    constraints=constraint_system,
+                    f_ext=f_ext,
+                )
+            )
 
-        u_prev = u
+            # `phi` remains an explicit argument so this follows the public
+            # differentiable-solve path used by applications that differentiate
+            # with respect to material parameters.
+            phi = ebc.material_params
+            u, petsc_solver_options = jetsci.differentiable_solve(
+                petsc_solver_options,
+                residual_for_phi,
+                jacobian_for_phi,
+                u_prev,
+                phi,
+            )
+            residual, new_internal_state_eqi = residual_isv_for_phi(phi, u)
+            element_batches = [
+                batch.replace(internal_state=internal_state)
+                for batch, internal_state in zip(
+                    element_batches, new_internal_state_eqi, strict=True
+                )
+            ]
+            u_prev = u
 
-        print("Time step =", i)
+            print("Time step =", i)
 
-        # # write and save to vtk
-        #vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
-        #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+            # # write and save to vtk
+            #vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+            #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+    finally:
+        solver_key = petsc_solver_options.solver_key
+        if solver_key is not None:
+            jetsci.petsc_snes.solver_lifecycle.destroy_petsc_solver(solver_key)
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
     n_total_dofs = u.shape[0]
 
