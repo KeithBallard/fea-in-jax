@@ -90,6 +90,11 @@ def _jaxhash_contact_batch_kernel(
     query_radius = search2radius_ratio * 2.0 * jnp.max(point_radii)
 
     floored_points = jnp.floor((points - domain_min) / query_radius).astype(jnp.int32)
+    floored_points = jnp.clip(
+        floored_points,
+        0,
+        jnp.asarray([Nx - 1, Ny - 1, Nz - 1], dtype=jnp.int32),
+    )
     hashed = floored_points[:, 0] + Nx * floored_points[:, 1] + (Nx * Ny) * floored_points[:, 2]
 
     sort_idx = jnp.argsort(hashed).astype(jnp.int32)
