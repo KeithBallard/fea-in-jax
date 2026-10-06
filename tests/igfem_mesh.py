@@ -115,7 +115,8 @@ def cell_shape_ratio(coords):
 def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8, verbose=True):
     """
     Splits the TRI3/QUAD4 cells of an IGFEM mesh into material groups, reorders their nodes to
-    the Basix convention, and drops collapsed cells.
+    the Basix convention, and drops collapsed cells. Any other cell type (e.g. IGFEM polygons)
+    raises a ValueError.
 
     IGFEM writes node coordinates with 6 significant digits, so integration sub-cells that are
     only ~1e-7 across can be rounded into collinear (zero-area) cells. Such a cell has an
@@ -146,11 +147,22 @@ def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8, verbose=
     materials = np.asarray(mesh.cell_data['materials'])    # Fiber=0, matrix= largest in the 'material'
     matrix_ID = np.max(materials)
 
+    # Skipping a cell would leave a hole in the domain, so refuse anything but TRI3/QUAD4. IGFEM writes
+    # a VTK_POLYGON (type 7) where a background triangle touches two inclusions; it integrates it as one
+    # isoparametric Wachspress element (20 quadrature points), which a fan triangulation does not reproduce.
+    celltypes = np.asarray(mesh.celltypes)
+    unsupported = ~np.isin(celltypes, (5, 9))
+    if np.any(unsupported):
+        types, counts = np.unique(celltypes[unsupported], return_counts=True)
+        raise ValueError(
+            "Mesh has cells that are not TRI3/QUAD4 (VTK type: count): "
+            + ", ".join(f"{t}: {c}" for t, c in zip(types, counts))
+            + ". Type 7 is an IGFEM polygon, which needs a Wachspress polygon element (not supported yet)."
+        )
+
     groups = {}
     dropped = []    # (cell id, shape ratio, node ids)
-    for id, celltype in enumerate(mesh.celltypes):
-        if celltype not in (5, 9):  # Triangle, Quad
-            continue
+    for id, celltype in enumerate(celltypes):
         vtk_nodes = mesh.get_cell(id).point_ids
         ratio = cell_shape_ratio(points[vtk_nodes])
         if ratio < 0.0:

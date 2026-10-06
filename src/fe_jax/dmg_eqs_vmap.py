@@ -172,7 +172,7 @@ def calc_update_Dmat(material_params_qm, vM0, stress_cd,C_ss):
 
     # Update initial hardening von Mises
     vM0 = jax.lax.cond(vM0 == 0,
-                        lambda x: von_Mises*0.999,
+                        lambda x: von_Mises,
                         lambda x: vM0,
                         operand=None)
 

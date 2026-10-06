@@ -21,9 +21,8 @@ def test_fea_solve_dmg():
     args = {}
     num_fib = 1
     args['t_total']  = 500
-    args['dir_path'] = "debug_update"
-    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_CG"
-    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_dense"
+    # args['dir_path'] = "debug_update"
+    args['dir_path'] = f"update_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -243,7 +242,7 @@ def test_fea_solve_dmg():
         constraint_system = constraint_system.replace(g=all_g[i - 1])
         
         # Solve the boundary value problem
-        u, ebc, ISV_be, residual, relative_error, info = solve_nonlinear_step_jit(
+        u, ISV_be, residual, relative_error, info = solve_nonlinear_step_jit(
             element_residual_func=element_residual_func,
             ebc=ebc,
             assembly_map_b=assembly_map_b,
@@ -261,13 +260,13 @@ def test_fea_solve_dmg():
         u_prev = u
 
         # Update the internal state variables in the element batch collection for the next time step
-        # ebc = ebc.replace(internal_state=jnp.hstack([isv.ravel() for isv in internal_state_beqi]))
-        # ebc = ebc.replace(internal_state=flat_internal_state)
         print("Time step =", i)
         # Update displacements to be 3D for VTK on GPU, then transfer once to host
 
+        ISV_be1 = jax.tree_util.tree_map(lambda x: x[:,i], ISV_be)
+
         # write and save to vtk
-        vtk_mesh = write2VTK_ISV(args,mesh,u,ISV_be,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+        vtk_mesh = write2VTK_ISV(args,mesh,u,ISV_be1,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
         vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
     return n_total_dofs, args['out_dir']

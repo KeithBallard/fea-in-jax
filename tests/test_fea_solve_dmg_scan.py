@@ -18,10 +18,10 @@ from fe_jax.linear_elasticity_dmg import *
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = '1'
+    num_fib = 1    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64
     args['t_total']  = 500
-    args['dir_path'] = "debug"
-    # args['dir_path'] = f"nonlinear_IGFEM_scan_t{args['t_total']}_{num_fib}fib_CG"
+    # args['dir_path'] = "debug"
+    args['dir_path'] = f"scan_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -203,10 +203,11 @@ def test_fea_solve_dmg():
         element_residual_func=linear_elasticity_residual,
         boundary_conditions=dirichlet_bcs,
         solver_options=SolverOptions(
-            linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
-            # linear_precond_type=PreconditionerType.JACOBI,
-            # linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
+            # linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+            linear_precond_type=PreconditionerType.JACOBI,
+            linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
             # linear_solve_type=LinearSolverType.SPSOLVE_CUPY, 
+            linear_max_iter=10000,
         ),
     )
     n_total_dofs = u_history.shape[1]
@@ -233,12 +234,12 @@ def test_fea_solve_dmg():
     return n_total_dofs, args['out_dir']
 
 if __name__ == "__main__":
-    t_start = time.time()
+    t_start = time.perf_counter()
 
     # with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
     n_total_dofs, out_dir = test_fea_solve_dmg()
 
-    t_end = time.time()
+    t_end = time.perf_counter()
     total_time = t_end - t_start
     print("Time used:", total_time)
     

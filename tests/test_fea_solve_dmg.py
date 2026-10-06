@@ -17,10 +17,11 @@ from fe_jax.write_vtk import *
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = 46
+    num_fib = 1    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64, 100
     args['t_total']  = 500
-    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_jax"
-    # args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib"
+    # args['dir_path'] = "debug"
+    args['dir_path'] = f"CG_t{args['t_total']}_{num_fib}fib"
+    # args['dir_path'] = f"SP_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -215,15 +216,15 @@ def test_fea_solve_dmg():
             u_0_g=u_prev,
             boundary_conditions=dirichlet_bcs,
             solver_options=SolverOptions(
-                # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
                 linear_precond_type=PreconditionerType.JACOBI,
-                linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
-                # linear_solve_type=LinearSolverType.DENSE_INVERSE_JNP,
+                linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
+                # linear_solve_type=LinearSolverType.SPSOLVE_CUPY ,
+                linear_max_iter=10000,
+
             ),
         )
 
         u_prev = u
-
         print("Time step =", i)
         # Update displacements to be 3D for VTK on GPU, then transfer once to host
         # u_full = np.array(jnp.zeros((points.shape[0], 3)).at[:, :U].set(u.reshape(-1, U)))
@@ -233,11 +234,21 @@ def test_fea_solve_dmg():
         vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
 
+    n_total_dofs = u.shape[0]
+
+    return n_total_dofs, args['out_dir']
+
+
 if __name__ == "__main__":
-    t_start = time.time()
+    t_start = time.perf_counter()
 
     # with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
-    test_fea_solve_dmg()
+    n_total_dofs, out_dir = test_fea_solve_dmg()
 
-    t_end = time.time()
-    print("Time used:", t_end - t_start)
+    t_end = time.perf_counter()
+    total_time = t_end - t_start
+    print("Time used:", total_time)
+
+    with open(os.path.join(out_dir, "statistics.txt"), "w") as f:
+        f.write(f"Number of dofs: {n_total_dofs}\n")
+        f.write(f"Total Solver time: {total_time} seconds\n")

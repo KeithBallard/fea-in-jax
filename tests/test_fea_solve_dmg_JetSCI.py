@@ -18,9 +18,9 @@ import jetsci
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = '1'
+    num_fib = 60    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64
     args['t_total']  = 500
-    args['dir_path'] = f"nonlinear_IGFEM_vmap_t{args['t_total']}_{num_fib}fib_JetSCI"
+    args['dir_path'] = f"jetsci_t{args['t_total']}_{num_fib}fib1"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -42,8 +42,6 @@ def test_fea_solve_dmg():
     (matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id,
      fiber_tri_cells,  fiber_quad_cells,  fiber_tri_id,  fiber_quad_id) = split_matrix_fiber_cells(mesh)
 
-    # print_cell_ID = 12
-    # print_cell,fib_matrix_shape = find_print_cell_idx(mesh,print_cell_ID, matrix_tri_id,matrix_quad_id,fiber_tri_id,fiber_quad_id)
 
     length = (np.max(mesh.points[:,0]) - np.min(mesh.points[:,0]))
 
@@ -268,8 +266,8 @@ def test_fea_solve_dmg():
             print("Time step =", i)
 
             # # write and save to vtk
-            #vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
-            #vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
+            vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+            vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     finally:
         solver_key = petsc_solver_options.solver_key
         if solver_key is not None:
@@ -280,12 +278,12 @@ def test_fea_solve_dmg():
     return n_total_dofs, args['out_dir']
 
 if __name__ == "__main__":
-    t_start = time.time()
+    t_start = time.perf_counter()
 
     # with jax.profiler.trace("./jax-trace-jetsci", create_perfetto_trace=True):
     n_total_dofs, out_dir = test_fea_solve_dmg()
 
-    t_end = time.time()
+    t_end = time.perf_counter()
     total_time = t_end - t_start
     print("Time used:", total_time)
 

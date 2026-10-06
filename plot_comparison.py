@@ -13,8 +13,8 @@ Any setting can also be overridden on the command line, e.g.
 # =============================================================================
 # --- What to plot ---
 # CASE_JAX = 'CG_t500_49fib'  # run folder under tests/output
-# CASE_JAX = 'jetsci_t500_100fib'  # run folder under tests/output
-CASE_JAX = 'SP_t500_64fib'  # run folder under tests/output
+CASE_JAX = 'jetsci_t500_60fib'  # run folder under tests/output
+# CASE_JAX = 'SP_t500_64fib'  # run folder under tests/output
 CASE_IGFEM = None         # folder under tests/IGFEM_ref; None -> '<N>fib_t500' taken from CASE_JAX
 FEATURE = 'damage'        # contour field: 'damage', 'e11', 'e22', 'e12', 's11', 's22', 's12'
 CELL = 20                 # cell id for the strain/stress history plot
