@@ -3,7 +3,7 @@ import os
 
 
 
-Fibers = [1, 2, 4, 9, 16, 23,36,49]
+Fibers = [1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64, 100]
 
 
 def get_stats(filepath):
@@ -12,21 +12,21 @@ def get_stats(filepath):
     with open(filepath, 'r') as f:
         for line in f:
             if line.startswith("Number of dofs:"):
-                # "Number of dofs: 1138 (1054 free)"
                 dofs = int(line.split(":")[1].split("(")[0].strip())
             elif line.strip().startswith("Total Solver time:"):
-                # "	Total Solver time: 21.866555687 seconds"
                 solver_time = float(line.split(":")[1].replace("seconds", "").strip())
     return dofs, solver_time
 
 IGFEM_DOFS, IGFEM_time = [],[]
 CG_DOFS, CG_time = [],[]
-dense_DOFS, dense_time = [],[]
+jetsci_DOFS, jetsci_time = [],[]
+scan_DOFS, scan_time = [],[]
 
 for num_fiber in Fibers:
     filepath_IGFEM = f"tests/IGFEM_ref/{num_fiber}fib_t500/statistics.txt"
-    filepath_CG = f"tests/output/nonlinear_IGFEM_vmap_t500_{num_fiber}fib_CG/statistics.txt"
-    filepath_dense = f"tests/output/nonlinear_IGFEM_vmap_t500_{num_fiber}fib_JetSCI/statistics.txt"
+    filepath_CG = f"tests/output/CG_t500_{num_fiber}fib/statistics.txt"
+    filepath_jetsci = f"tests/output/jetsci_t500_{num_fiber}fib/statistics.txt"
+    filepath_scan = f"tests/output/SP_t500_{num_fiber}fib/statistics.txt"
 
     try:
         dofs, solver_time = get_stats(filepath_IGFEM)
@@ -44,19 +44,26 @@ for num_fiber in Fibers:
         pass
 
     try:
-        dofs, solver_time = get_stats(filepath_dense)
-        dense_DOFS.append(dofs)
-        dense_time.append(solver_time)
+        dofs, solver_time = get_stats(filepath_jetsci)
+        jetsci_DOFS.append(dofs)
+        jetsci_time.append(solver_time)
     except:
         pass
 
+    try:
+        dofs, solver_time = get_stats(filepath_scan)
+        scan_DOFS.append(dofs)
+        scan_time.append(solver_time)
+    except:
+        pass
 
 plt.rcParams['font.size'] = 14
 
 plt.figure(figsize=(8, 6))
 plt.plot(IGFEM_DOFS, IGFEM_time, 'o-', color='#4DA6FF', linewidth=2.5, markersize=8, label='IGFEM')
-plt.plot(CG_DOFS, CG_time, 's-', color='#2CA02C', linewidth=2.5, markersize=8, label='JAX-FEM (CG)')
-plt.plot(dense_DOFS, dense_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JetSCI')
+plt.plot(CG_DOFS, CG_time, 's-', color='#2CA02C', linewidth=2.5, markersize=8, label='JAX (CG)')
+plt.plot(jetsci_DOFS, jetsci_time, '^-', color='#F08080', linewidth=2.5, markersize=8, label='JetSCI (CG)')
+plt.plot(scan_DOFS, scan_time, '^-', color="#A86AF4", linewidth=2.5, markersize=8, label='JAX (SP)')
 
 plt.xlabel('Degrees of Freedom (DOFs)')
 plt.ylabel('Time (seconds)')
