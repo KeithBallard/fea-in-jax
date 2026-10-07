@@ -5,4 +5,5 @@ from .jztree_contact import *
 from .jax_hash_contact import *
 from .cupyx_contact import *
 from .warp_contact import *
+from .warp_rod_contact import *
 from .pairwise_contact import *

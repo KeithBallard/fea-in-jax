@@ -119,3 +119,15 @@ def jaxhash_contact(domain_min, Nx, Ny, Nz, total_cells, C_max):
     )
     return contact_cells
     return contact_cells[active]
+
+def run_and_time(f,n):
+    t = []
+    F = f()
+    jax.block_until_ready(F)
+    for i in range(n):
+        t_start = time.perf_counter()
+        F = f()
+        jax.block_until_ready(F)
+        t_end = time.perf_counter()
+        t.append(1000*(t_end-t_start))
+    return np.array(t)

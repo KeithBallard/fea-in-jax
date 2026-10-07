@@ -55,14 +55,19 @@ def build_newton_node_cloud_contact(
     rigid_contact_max=None,
 ) -> NewtonContactContext:
     _require_newton_warp()
+    points = np.asarray(points)
+    point_diameters = np.asarray(point_diameters)
+    point_fiber_ids = np.asarray(point_fiber_ids)
     builder = newton.ModelBuilder()
 
     for node_id, x in enumerate(np.asarray(points)):
         r=0.5*point_diameters[node_id]
         gap=(contact_search_alpha-1.0)*r
 
-        cfg=newton.ModelBuilder.ShapeConfig(gap=gap)
-        body=builder.add_body(xform=wp.transform(wp.vec3(*x)))
+        # cfg=newton.ModelBuilder.ShapeConfig(gap=gap)
+        # body=builder.add_body(xform=wp.transform(wp.vec3(*x)))
+        cfg=newton.ModelBuilder.ShapeConfig(gap=gap, density=0.0)
+        body=builder.add_link(xform=wp.transform(wp.vec3(*x)))
         builder.add_shape_sphere(
             body=body,
             radius=r,
@@ -77,7 +82,11 @@ def build_newton_node_cloud_contact(
             if point_fiber_ids[i] == point_fiber_ids[j]:
                 builder.add_shape_collision_filter_pair(i,j)
 
-    model=builder.finalize()
+    # Bypass Newton's default O(N^2) explicit shape contact pair build during finalize,
+    # since we use dynamic Sweep-and-Prune (SAP) broadphase at collide time.
+    builder._find_shape_contact_pairs = lambda model, **kwargs: None
+
+    model=builder.finalize(skip_all_validations=True)
     state=model.state()
 
     # ModelBuilder.finalize() precomputes model.shape_contact_pairs for Newton's
