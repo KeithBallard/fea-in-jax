@@ -144,7 +144,7 @@ def run_singleFiber(
             nonlinear_max_iter=50,
             linear_max_iter=50,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
-            max_backtracks = 20,
+            max_backtracks = 5,
             # damp_Newton_diag=None,
         ),
         plot_convergence=False,
@@ -169,12 +169,13 @@ def run_singleFiber(
     min_d = D_D[D_D.nonzero()].min()
     return u,fabric,bcs
 
-def get_args():
+def get_args(incrementalLoads=10):
     args = {
         'n_elements':[40]*3,
         'X0':[[0, 0, -1]],
         'XN':[[0, 0, 1]],
-        'NeumannForce':[(i+1)*1e4 for i in range(10)],
+        'NeumannForce':np.linspace(1e3,1e4,incrementalLoads),
+        # 'NeumannForce':[(i+1)*1e4 for i in range(10)],
         # 'NeumannForce':[1e5],
         # 'NeumannForce':[i*1e4 for i in range(10,101)],
         # 'filename_base':'ContactStiffnessModel/Linear_NeumannTest',
@@ -188,6 +189,7 @@ def get_args():
             C_to_D_ratio               = 0.75,
             M_stiffness_to_E_ratio     = 0.0000001,
             contact_search_alpha       = 3,
+            contact_backend            = ContactBackend.SCIPY_KDTREE,
         ),
         'pre_strain':0.0,
     }

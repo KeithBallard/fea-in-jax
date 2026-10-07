@@ -566,7 +566,7 @@ def linear_truss_residual(
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
     if STRAIN_MEASURE == "GreenLagrange":
         eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)) + du_dx_qdd.transpose((0, 2, 1))@du_dx_qdd )
-    elif STRAIN_MEASURE == "Linear":
+    elif STRAIN_MEASURE == "Linear" or STRAIN_MEASURE == "Logarithmic":
         eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
     else: 
         raise ValueError(f'Option {STRAIN_MEASURE} is not a valid choice for STRAIN_MEASURE.')

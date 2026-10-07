@@ -288,7 +288,7 @@ def plot_scaling_results(results_or_filename, output_prefix=None):
         ("WARP_ROD", "Warp Rod", "#2ca02c", "^"),
         ("WARP_NODE_CLOUD", "Warp Node Cloud", "#9467bd", "v"),
         ("SCIPY_KDTREE", "SciPy KDTree", "#d62728", "D"),
-        ("CUPYX_KDTREE", "CuPy KDTree", "#8c564b", "x"),
+        ("CUPY_KDTREE", "CuPy KDTree", "#8c564b", "x"),
     ]
 
     for method_key, label, color, marker in search_methods:
@@ -346,6 +346,75 @@ def plot_scaling_results(results_or_filename, output_prefix=None):
         plt.savefig(f"{output_prefix}_prep_scaling.png", dpi=900)
         plt.savefig(f"{output_prefix}_prep_scaling.pdf")
     plt.show()
+
+    # --- Plot 3: number of contacts found ---
+    plt.figure(figsize=(9, 6))
+    contacts_found_methods = [
+        ("JAX_HASH_CONTACTS", "JAX Hash", "#1f77b4", "o"),
+        ("JZTREE_CONTACTS", "JZTree", "#ff7f0e", "s"),
+        ("WARP_ROD_CONTACTS", "Warp Rod", "#2ca02c", "^"),
+        ("WARP_NODE_CLOUD_CONTACTS", "Warp Node Cloud", "#9467bd", "v"),
+        ("SCIPY_KDTREE_CONTACTS", "SciPy KDTree", "#d62728", "D"),
+    ]
+
+    for method_key, label, color, marker in contacts_found_methods:
+        for tow in fibers_in_tow:
+            pts = [r for r in results if r["FIBERS_PER_BUNDLE"] == tow and r.get(method_key) is not None]
+            if not pts:
+                continue
+            x = [p["NODES"] for p in pts]
+            y = [p[method_key] for p in pts]
+            style = tow_styles[tow]
+            leg_label = f"{label} ({tow} f/tow)" if len(fibers_in_tow) > 1 else label
+            plt.plot(x, y, style, marker=marker, color=color, label=leg_label, lw=2, ms=6)
+
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel("Number of Nodes ($N$)", fontsize=12)
+    plt.ylabel("Number of contacts", fontsize=12)
+    plt.title("Model Contacts Identified Comparison (Log-Log)", fontsize=14, fontweight="bold")
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left", fontsize=10)
+    plt.tight_layout()
+    if output_prefix:
+        plt.savefig(f"{output_prefix}_contacts_found.png", dpi=900)
+        plt.savefig(f"{output_prefix}_contacts_found.pdf")
+    plt.show()
+
+    # --- Plot 4: Contact Search Scaling versus Contacts Found---
+    plt.figure(figsize=(9, 6))
+    search_methods_v_contacts = [
+        ("JAX_HASH", "JAX Hash", "#1f77b4", "o"),
+        ("JZTREE", "JZTree", "#ff7f0e", "s"),
+        ("WARP_ROD", "Warp Rod", "#2ca02c", "^"),
+        ("WARP_NODE_CLOUD", "Warp Node Cloud", "#9467bd", "v"),
+        ("SCIPY_KDTREE", "SciPy KDTree", "#d62728", "D"),
+    ]
+
+    for method_key, label, color, marker in search_methods_v_contacts:
+        for tow in fibers_in_tow:
+            pts = [r for r in results if r["FIBERS_PER_BUNDLE"] == tow and r.get(method_key) is not None]
+            if not pts:
+                continue
+            x = [p[method_key + "_CONTACTS"] for p in pts]
+            y = [p[method_key] for p in pts]
+            style = tow_styles[tow]
+            leg_label = f"{label} ({tow} f/tow)" if len(fibers_in_tow) > 1 else label
+            plt.plot(x, y, style, marker=marker, color=color, label=leg_label, lw=2, ms=6)
+
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel("Number of Contacts Found", fontsize=12)
+    plt.ylabel("Execution Time (ms)", fontsize=12)
+    plt.title("Contact Search Scaling Comparison (Log-Log)", fontsize=14, fontweight="bold")
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left", fontsize=10)
+    plt.tight_layout()
+    if output_prefix:
+        plt.savefig(f"{output_prefix}_search_scaling_v_contacts.png", dpi=900)
+        plt.savefig(f"{output_prefix}_search_scaling_v_contacts.pdf")
+    plt.show()
+
 
 def scaling_times(fabric):
     TR = []
