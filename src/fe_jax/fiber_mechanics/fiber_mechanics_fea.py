@@ -37,6 +37,7 @@ def solve_fiber_mechanics_bvp(
     contact_options: ContactParams | None = None,
     debug_info: DebugInfo | None = None,
     profile_memory: bool = False,
+    strain_measure: StrainMeasure | str = StrainMeasure.GREEN_LAGRANGE,
 ):
     if debug_info is None:
         debug_info = NULL_DEBUG_INFO
@@ -97,6 +98,7 @@ def solve_fiber_mechanics_bvp(
             constitutive_model = elastic_truss,
             material_params    = jnp.array(material_params),
             internal_state     = jnp.array(internal_state),
+            strain_measure     = strain_measure,
         )
     ]
 
@@ -159,6 +161,7 @@ def solve_fiber_mechanics_bvp(
                 connectivity_en=rigid_mold.connections + fabric.points.shape[0],
                 constitutive_model=elastic_truss,
                 material_params=jnp.array([materials[0].E,materials[0].A]),
+                strain_measure=strain_measure,
             )
         ]
 

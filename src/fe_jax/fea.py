@@ -2,6 +2,7 @@ from igl import adjacency_list
 from .contact import ContactPreprocessConfig
 from .setup import *
 from .utils import *
+from .element_batch import StrainMeasure
 from .element_batch_collection import *
 from .solve_cg import cg as cg_w_info
 from .sparse_matrix import *
@@ -112,7 +113,7 @@ def _calculate_jacobian_unique_nnz(
     return jnp.sum(uniq_mask)
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def _calculate_jacobian_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -122,6 +123,7 @@ def _calculate_jacobian_batch_element_kernel(
     W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state: jnp.ndarray,
+    strain_measure: StrainMeasure,
 ) -> jnp.ndarray:
     """
     Calculates the element-level jacobian matrices for a batch of elements without any modification
@@ -157,15 +159,27 @@ def _calculate_jacobian_batch_element_kernel(
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state_qi):
         u_nd = u_t.reshape(N, D)
-        R_nu = element_residual_func(
-            u_nd=u_nd,
-            x_nd=x_nd,
-            dphi_dxi_qnp=dphi_dxi_qnp,
-            W_q=W_q,
-            material_params=material_params,
-            internal_state_qi=internal_state_qi,
-            constitutive_model=constitutive_model,
-        )[0]
+        if is_required(element_residual_func, "strain_measure"):
+            R_nu = element_residual_func(
+                u_nd=u_nd,
+                x_nd=x_nd,
+                dphi_dxi_qnp=dphi_dxi_qnp,
+                W_q=W_q,
+                material_params=material_params,
+                internal_state_qi=internal_state_qi,
+                constitutive_model=constitutive_model,
+                strain_measure=strain_measure,
+            )[0]
+        else:
+            R_nu = element_residual_func(
+                u_nd=u_nd,
+                x_nd=x_nd,
+                dphi_dxi_qnp=dphi_dxi_qnp,
+                W_q=W_q,
+                material_params=material_params,
+                internal_state_qi=internal_state_qi,
+                constitutive_model=constitutive_model,
+            )[0]
         return R_nu.reshape(N * U)
 
     J_ett = jax.vmap(
@@ -187,7 +201,7 @@ def _calculate_jacobian_batch_element_kernel(
     return J_ett
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def _calculate_jacobian_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -199,6 +213,7 @@ def _calculate_jacobian_coo_terms_batch(
     dof_map_enu: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
+    strain_measure: StrainMeasure,
 ):
     u_enu = transform_global_unraveled_to_element_node(
         assembly_map, u_f, x_end.shape[0]
@@ -219,6 +234,7 @@ def _calculate_jacobian_coo_terms_batch(
         W_q=W_q,
         material_params=material_params,
         internal_state=internal_state,
+        strain_measure=strain_measure,
     )
     # debug_print(J_ett)
 
@@ -254,6 +270,7 @@ def calculate_jacobian_wo_constraints(
                 dof_map_enu=ebc.get_dof_map(i),
                 assembly_map=assembly_map_b[i],
                 u_f=u_f,
+                strain_measure=ebc.strain_measures[i],
             )
             for i in range(ebc.B)
         ]
@@ -306,7 +323,7 @@ def calculate_jacobian_wo_constraints(
     return J_sparse_ff
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def _calculate_jacobian_diag_batch_element_kernel(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -316,6 +333,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
     W_q: jnp.ndarray,
     material_params: jnp.ndarray,
     internal_state: jnp.ndarray,
+    strain_measure: StrainMeasure,
 ) -> jnp.ndarray:
     """
     Calculates the element-level jacobian diagonal matrices for a batch of elements without
@@ -351,15 +369,27 @@ def _calculate_jacobian_diag_batch_element_kernel(
     @jax.jit
     def residual_kernel(u_t, x_nd, material_params, internal_state):
         u_nd = u_t.reshape(N, D)
-        R_nu = element_residual_func(
-            u_nd=u_nd,
-            x_nd=x_nd,
-            dphi_dxi_qnp=dphi_dxi_qnp,
-            W_q=W_q,
-            material_params=material_params,
-            internal_state_qi=internal_state,
-            constitutive_model=constitutive_model,
-        )[0]
+        if is_required(element_residual_func, "strain_measure"):
+            R_nu = element_residual_func(
+                u_nd=u_nd,
+                x_nd=x_nd,
+                dphi_dxi_qnp=dphi_dxi_qnp,
+                W_q=W_q,
+                material_params=material_params,
+                internal_state_qi=internal_state,
+                constitutive_model=constitutive_model,
+                strain_measure=strain_measure,
+            )[0]
+        else:
+            R_nu = element_residual_func(
+                u_nd=u_nd,
+                x_nd=x_nd,
+                dphi_dxi_qnp=dphi_dxi_qnp,
+                W_q=W_q,
+                material_params=material_params,
+                internal_state_qi=internal_state,
+                constitutive_model=constitutive_model,
+            )[0]
         return R_nu.reshape(N * U)
 
     def diag_J(u_t, x_nd, material_params, internal_state):
@@ -389,7 +419,7 @@ def _calculate_jacobian_diag_batch_element_kernel(
     return diag_J_et
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def _calculate_jacobian_diag_coo_terms_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -401,6 +431,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
     dof_map_enu: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
+    strain_measure: StrainMeasure,
 ):
     u_enu = transform_global_unraveled_to_element_node(
         assembly_map, u_f, x_end.shape[0]
@@ -418,6 +449,7 @@ def _calculate_jacobian_diag_coo_terms_batch(
         W_q=W_q,
         material_params=material_params,
         internal_state=internal_state,
+        strain_measure=strain_measure,
     )
     # debug_print(diag_J_et)
 
@@ -449,6 +481,7 @@ def calculate_jacobian_diag_wo_constraints(
                 dof_map_enu=ebc.get_dof_map(i),
                 assembly_map=assembly_map_b[i],
                 u_f=u_f,
+                strain_measure=ebc.strain_measures[i],
             )
             for i in range(ebc.B)
         ]
@@ -467,7 +500,7 @@ def calculate_jacobian_diag_wo_constraints(
     return diag_J_f
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def _calculate_residual_wo_constraints_batch(
     element_residual_func: jax.tree_util.Partial,
     constitutive_model: jax.tree_util.Partial,
@@ -478,6 +511,7 @@ def _calculate_residual_wo_constraints_batch(
     W_q: jnp.ndarray,
     assembly_map: jsparse.BCSR,
     u_f: jnp.ndarray,
+    strain_measure: StrainMeasure,
 ):
     # Extract shape constants needed for args
     E = x_end.shape[0]
@@ -491,8 +525,14 @@ def _calculate_residual_wo_constraints_batch(
     u_enu = transform_global_unraveled_to_element_node(assembly_map, u_f, E)
 
     # A vmap'ed version of the element residual function that maps over the elements
+    residual_func = (
+        partial(element_residual_func, strain_measure=strain_measure)
+        if is_required(element_residual_func, "strain_measure")
+        else element_residual_func
+    )
+
     R_vmap = jax.vmap(
-        element_residual_func,
+        residual_func,
         in_axes=(
             0,  # u_end -> u_nd
             0,  # x_end -> x_nd
@@ -562,6 +602,7 @@ def calculate_residual_wo_constraints(
             W_q=ebc.get_weights(i),
             assembly_map=assembly_map_b[i],
             u_f=u_f,
+            strain_measure=ebc.strain_measures[i],
         )
         for i in range(ebc.B)
     ]  # for each item, 0: R_end, 1: internal_state
@@ -1401,4 +1442,3 @@ def solve_bvp(
         element_batches[i] = solved_element_batches[i]
 
     return u, residual, element_batches
-

@@ -113,6 +113,7 @@ def run_singleFiber(
     NeumannForce,
     filename_base = None,
     pre_strain = None,
+    strain_measure = StrainMeasure.GREEN_LAGRANGE,
     # debug_info = None,
 ):
     """ """
@@ -141,7 +142,7 @@ def run_singleFiber(
             # linear_solve_type=LinearSolverType.CG_JAX_SCIPY_W_INFO,
             # linear_precond_type=PreconditionerType.JACOBI,
             linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=50,
+            nonlinear_max_iter=300,
             linear_max_iter=50,
             max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
             max_backtracks = 5,
@@ -152,6 +153,7 @@ def run_singleFiber(
         pseudotime_iters=len(dyn_bcs),
         debug_info = None,
         pre_strain=pre_strain,
+        strain_measure=strain_measure,
         # debug_info=make_debug_info(
         #     flags = [
         #         (DebugOutputQuantities.NODE_RESIDUAL,       DebugOutputStage.NONLINEAR_SOLVE),
@@ -169,7 +171,7 @@ def run_singleFiber(
     min_d = D_D[D_D.nonzero()].min()
     return u,fabric,bcs
 
-def get_args(incrementalLoads=10):
+def get_args(incrementalLoads=10, strain_measure=StrainMeasure.GREEN_LAGRANGE):
     args = {
         'n_elements':[40]*3,
         'X0':[[0, 0, -1]],
@@ -192,6 +194,7 @@ def get_args(incrementalLoads=10):
             contact_backend            = ContactBackend.SCIPY_KDTREE,
         ),
         'pre_strain':0.0,
+        'strain_measure':strain_measure,
     }
     return args
 

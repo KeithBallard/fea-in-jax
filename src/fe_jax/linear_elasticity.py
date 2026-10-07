@@ -2,15 +2,13 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from . import contact
+from .element_batch import StrainMeasure
 from .utils import (
     rank2_tensor_to_voigt,
     rank2_voigt_to_tensor,
     is_required,
     debug_print,
 )
-
-# STRAIN_MEASURE = "Linear"
-STRAIN_MEASURE = "GreenLagrange"
 
 @jax.tree_util.Partial
 @jax.jit
@@ -261,13 +259,14 @@ def linear_elasticity_residual(
     return R_nd, new_internal_state_qi
 
 @jax.tree_util.Partial
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def elastic_truss(
         eps_dd: jnp.ndarray,
         material_params_m: jnp.ndarray,
         internal_state_i: jnp.ndarray,
         x_nd: jnp.ndarray,
-        u_nd: jnp.ndarray
+        u_nd: jnp.ndarray,
+        strain_measure: StrainMeasure | str = StrainMeasure.GREEN_LAGRANGE,
 ):
     """
     A constitive relation for a an elastic truss.
@@ -283,8 +282,8 @@ def elastic_truss(
     stress_dd  : stress tensor, ndarray[float, (D, D)]
     """
 
-    eps_pre = internal_state_i[...,0] if internal_state_i.size != 0 else 0
-    eps_accum = internal_state_i[...,1] if internal_state_i.size != 0 else 0
+    eps_pre = internal_state_i[..., 0] if internal_state_i.size >= 1 else 0
+    eps_accum = internal_state_i[..., 1] if internal_state_i.size >= 2 else 0
 
     E = material_params_m[..., 0]
     A = material_params_m[..., 1]
@@ -303,26 +302,29 @@ def elastic_truss(
     #jax.debug.print("eps_dd = \n{eps_dd}", eps_dd=eps_dd)
 
 
-    if STRAIN_MEASURE == "GreenLagrange":
+    strain_measure = StrainMeasure.from_value(strain_measure)
+
+    if strain_measure == StrainMeasure.GREEN_LAGRANGE:
         # eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
         eps_a = (L_cur**2 - L_ref**2)/(2*L_ref**2)
         eps_total_internal = eps_accum + eps_a + 2*eps_accum*eps_a
-    elif STRAIN_MEASURE == "Linear":
+    elif strain_measure == StrainMeasure.LINEAR:
         eps_a = jnp.einsum("i,ij,j->", l_ref, eps_dd, l_ref)
         eps_total_internal = eps_accum + eps_a
-    elif STRAIN_MEASURE == "Engineering":
+    elif strain_measure == StrainMeasure.ENGINEERING:
         eps_a = L_cur / L_ref - 1.0
         eps_total_internal = (1.0 + eps_accum) * (1.0 + eps_a) - 1.0
-    elif STRAIN_MEASURE == "Logarithmic":
+    elif strain_measure == StrainMeasure.LOGARITHMIC:
         eps_a = jnp.log(L_cur/L_ref)
         eps_total_internal = eps_accum + eps_a
     else:
-        raise ValueError(f'Option {STRAIN_MEASURE} is not a valid choice for STRAIN_MEASURE.')
+        raise ValueError(f"Option {strain_measure} is not a valid choice for StrainMeasure.")
 
     stress_dd = E*A*(eps_total_internal + eps_pre)*P_dd
 
 
-    internal_state_i = internal_state_i.at[...,1].set(eps_total_internal)
+    if internal_state_i.size >= 2:
+        internal_state_i = internal_state_i.at[..., 1].set(eps_total_internal)
     return stress_dd, internal_state_i  # no internal state
 
 @jax.tree_util.Partial
@@ -522,7 +524,7 @@ elastic_contact_truss_tanh                = jax.tree_util.Partial(__elastic_cont
 
 
 @jax.tree_util.Partial
-@jax.jit
+@partial(jax.jit, static_argnames=("strain_measure",))
 def linear_truss_residual(
     u_nd: jnp.ndarray,
     x_nd: jnp.ndarray,
@@ -531,6 +533,7 @@ def linear_truss_residual(
     material_params: jnp.ndarray,
     internal_state_qi: jnp.ndarray,
     constitutive_model: jax.tree_util.Partial,
+    strain_measure: StrainMeasure | str = StrainMeasure.GREEN_LAGRANGE,
     contact_stiffness_model: jax.tree_util.Partial | None = None,
 ):
     """
@@ -564,12 +567,18 @@ def linear_truss_residual(
     # dphi_dx_qnd = jax.vmap(lstsq_one, in_axes=(0,0))(J_qpd,dphi_dxi_qnp)
 
     du_dx_qdd = jnp.einsum("qnd,ni->qid", dphi_dx_qnd, u_nd)
-    if STRAIN_MEASURE == "GreenLagrange":
+    strain_measure = StrainMeasure.from_value(strain_measure)
+
+    if strain_measure == StrainMeasure.GREEN_LAGRANGE:
         eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)) + du_dx_qdd.transpose((0, 2, 1))@du_dx_qdd )
-    elif STRAIN_MEASURE == "Linear" or STRAIN_MEASURE == "Logarithmic":
+    elif strain_measure in (
+        StrainMeasure.LINEAR,
+        StrainMeasure.LOGARITHMIC,
+        StrainMeasure.ENGINEERING,
+    ):
         eps_qdd = 0.5 * (du_dx_qdd + du_dx_qdd.transpose((0, 2, 1)))
-    else: 
-        raise ValueError(f'Option {STRAIN_MEASURE} is not a valid choice for STRAIN_MEASURE.')
+    else:
+        raise ValueError(f"Option {strain_measure} is not a valid choice for StrainMeasure.")
 
     constitutive_args = []
     in_axes = []
@@ -595,6 +604,10 @@ def linear_truss_residual(
 
     if is_required(constitutive_model, "u_nd"):
         constitutive_args.append(u_nd)
+        in_axes.append(None)
+
+    if is_required(constitutive_model, "strain_measure"):
+        constitutive_args.append(strain_measure)
         in_axes.append(None)
 
     if is_required(constitutive_model, "contact_stiffness_model"):
@@ -704,4 +717,3 @@ def stiffness_residual(
 
     new_internal_state_qi = internal_state_qi
     return R_nd, new_internal_state_qi
-

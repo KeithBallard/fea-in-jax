@@ -4,7 +4,29 @@ import jax
 import jax.numpy as jnp
 
 from flax import struct
+from enum import Enum
 from typing import Callable, Any
+
+
+class StrainMeasure(Enum):
+    LINEAR = "Linear"
+    GREEN_LAGRANGE = "GreenLagrange"
+    ENGINEERING = "Engineering"
+    LOGARITHMIC = "Logarithmic"
+
+    @classmethod
+    def from_value(cls, value: "StrainMeasure | str") -> "StrainMeasure":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            normalized = value.replace("_", "").replace("-", "").replace(" ", "").lower()
+            for strain_measure in cls:
+                enum_name = strain_measure.name.replace("_", "").lower()
+                enum_value = strain_measure.value.lower()
+                if normalized in (enum_name, enum_value):
+                    return strain_measure
+        raise ValueError(f"Option {value} is not a valid choice for StrainMeasure.")
+
 
 @struct.dataclass
 class ElementBatch:
@@ -32,8 +54,18 @@ class ElementBatch:
     # all quad points but varying across elements [shape should be (E, I)], or 3) varying across
     # each quad point / element in the batch [shape should be (E, Q, I)], respectively.
     internal_state: jnp.ndarray | None = None
+    # Strain measure used by residuals/constitutive models that depend on this choice.
+    strain_measure: StrainMeasure | str = struct.field(
+        default=StrainMeasure.GREEN_LAGRANGE,
+        pytree_node=False,
+    )
 
     def __post_init__(self):
+        object.__setattr__(
+            self,
+            "strain_measure",
+            StrainMeasure.from_value(self.strain_measure),
+        )
         Q = get_quadrature(fe_type=self.fe_type)[0].shape[0]
         if len(self.material_params.shape) == 2:
             # Dimensions should be (E, M)
@@ -62,4 +94,3 @@ class ElementBatch:
                 assert (
                     self.internal_state.shape[1] == Q
                 ), f"`internal_state` had dimension 3, which means the shape should be (E, Q, I). However, `fe_type` results in Q = {Q}, which did not match `internal_state.shape[1]` ({self.internal_state.shape[1]})"
-
