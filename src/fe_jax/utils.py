@@ -1,5 +1,6 @@
 from .profiling import *
 from .np_types import *
+from .basis_quadrature import FiniteElementType, CellType
 
 import jax
 import jax.numpy as jnp
@@ -220,18 +221,13 @@ def tensor_to_voigt_indices(tensor_shape: tuple[int, ...]) -> tuple[int, ...]:
             "The tensor must be 1D, 2D or 3D to convert to Voigt notation."
         )
 
-def get_element_areas(conn, points):
+def get_element_areas(conn, points, fe_type):
+    # Shoelace formula over the perimeter; Basix numbers quadrilateral nodes lexicographically
+    if isinstance(fe_type, FiniteElementType) and fe_type.cell_type == CellType.quadrilateral:
+        conn = conn[:, [0, 1, 3, 2]]
     p = points[conn]
-    if conn.shape[1] == 3:
-        area = 0.5 * jnp.abs(p[:,0,0]*(p[:,1,1]-p[:,2,1]) + 
-                             p[:,1,0]*(p[:,2,1]-p[:,0,1]) + 
-                             p[:,2,0]*(p[:,0,1]-p[:,1,1]))
-    elif conn.shape[1] == 4:
-        area = 0.5 * jnp.abs((p[:,0,0]*p[:,1,1] - p[:,0,1]*p[:,1,0]) + 
-                             (p[:,1,0]*p[:,2,1] - p[:,1,1]*p[:,2,0]) + 
-                             (p[:,2,0]*p[:,3,1] - p[:,2,1]*p[:,3,0]) + 
-                             (p[:,3,0]*p[:,0,1] - p[:,3,1]*p[:,0,0]))
-    return area
+    p_next = jnp.roll(p, -1, axis=1)
+    return 0.5 * jnp.abs(jnp.sum(p[..., 0] * p_next[..., 1] - p_next[..., 0] * p[..., 1], axis=1))
 
 
 def compute_stress_strain_curve(ISV_be_history, element_batches, points):
@@ -247,7 +243,7 @@ def compute_stress_strain_curve(ISV_be_history, element_batches, points):
         s12_cell = ISV[..., 5] # (time, num_cells)
         
         conn = element_batches[idx].connectivity_en
-        area = get_element_areas(conn, points)
+        area = get_element_areas(conn, points, element_batches[idx].fe_type)
         
         w_s11_t = jnp.sum(s11_cell * area[None, :], axis=1)
         w_s22_t = jnp.sum(s22_cell * area[None, :], axis=1)

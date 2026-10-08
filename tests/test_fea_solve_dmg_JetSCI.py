@@ -18,9 +18,9 @@ import jetsci
 
 def test_fea_solve_dmg():
     args = {}
-    num_fib = 60    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64
+    num_fib = 49    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64
     args['t_total']  = 500
-    args['dir_path'] = f"jetsci_t{args['t_total']}_{num_fib}fib1"
+    args['dir_path'] = f"jetsci_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
@@ -39,8 +39,8 @@ def test_fea_solve_dmg():
     cells  = np.array(mesh.cells, dtype=np.uint64)
     print("# DoFs = ", 2 * points.shape[0])
 
-    (matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id,
-     fiber_tri_cells,  fiber_quad_cells,  fiber_tri_id,  fiber_quad_id) = split_matrix_fiber_cells(mesh)
+    # {material: {shape: (cells, cell_ids)}} with only the shapes present in the mesh (tri, quad, polygon5, ...)
+    cell_groups = sort_cells_by_material(mesh)
 
 
     length = (np.max(mesh.points[:,0]) - np.min(mesh.points[:,0]))
@@ -51,27 +51,8 @@ def test_fea_solve_dmg():
     E = cells.shape[0]  # number of elements
     M = 11  # number of material parameters
     F = V * U  # number of DoFs
-    Q_tri = 1 #get_quadrature(fe_type=fe_type_tri)[0].shape[0] # number of quadrature points
-    Q_quad = 4 #get_quadrature(fe_type=fe_type_quad)[0].shape[0] # number of quadrature points
 
     strain_increment = args['strain_max'] * length / args['t_total']
-
-    fe_type_tri = FiniteElementType(
-        cell_type=CellType.triangle,
-        family=ElementFamily.P,
-        basis_degree=1,
-        lagrange_variant=LagrangeVariant.equispaced,
-        quadrature_type=QuadratureType.default,
-        quadrature_degree=1,
-    )
-    fe_type_quad = FiniteElementType(
-        cell_type=CellType.quadrilateral,
-        family=ElementFamily.P,
-        basis_degree=1,
-        lagrange_variant=LagrangeVariant.equispaced,
-        quadrature_type=QuadratureType.default,
-        quadrature_degree=2,
-    )
 
     # Define Dirichlet boundary conditions
     '''
@@ -108,9 +89,9 @@ def test_fea_solve_dmg():
 
     # Set material properties
     @partial(jax.jit, static_argnames=('Q',))
-    def get_properties(matrix_cells,fiber_cells,Q: int):
+    def matrix_properties(cells, Q: int):
         # Neat 5220 Epoxy
-        matrix_mat_params_eqm = jnp.zeros(shape=(matrix_cells.shape[0], Q, 11))
+        matrix_mat_params_eqm = jnp.zeros(shape=(cells.shape[0], Q, 11))
         matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 0].set(3900)     # E   MPa
         matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 1].set(0.39)     # nu
         # Epoxy damage properties
@@ -123,25 +104,24 @@ def test_fea_solve_dmg():
         matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 7].set(79)       # sigmay_c  MPa
         matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 8].set(62)       # sigmay_t  MPa
         matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 9].set(2e4)      # H_ro, a
-        matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 10].set(12)      # n_ro, b 
+        matrix_mat_params_eqm = matrix_mat_params_eqm.at[:, :, 10].set(12)      # n_ro, b
+        return matrix_mat_params_eqm
+
+    @partial(jax.jit, static_argnames=('Q',))
+    def fiber_properties(cells, Q: int):
         # IM7 Fiber
-        fiber_mat_params_eqm = jnp.zeros(shape=(fiber_cells.shape[0], Q, 5))
+        fiber_mat_params_eqm = jnp.zeros(shape=(cells.shape[0], Q, 5))
         fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 0].set(233e3)  # E_xx
         fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 1].set(23.1e3) # E_yy
         fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 2].set(0.2)    # nu_xy
         fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 3].set(8.96e3) # G_xy
         fiber_mat_params_eqm = fiber_mat_params_eqm.at[:, :, 4].set(8.27e3) # G_yz
-
-        return (matrix_mat_params_eqm, fiber_mat_params_eqm)
-
-    matrix_tri_mat_params_eqm, fiber_tri_mat_params_eqm   = get_properties(matrix_tri_cells,fiber_tri_cells,Q_tri)
-    matrix_quad_mat_params_eqm, fiber_quad_mat_params_eqm = get_properties(matrix_quad_cells,fiber_quad_cells,Q_quad)
+        return fiber_mat_params_eqm
 
     # Intialize internal_state_eqi
     @partial(jax.jit, static_argnames=('Q',))
-    def init_ISV(matrix_cells,fiber_cells,Q):
-        # Intialize internal_state_eqi
-        matrix_internal_state_eqi = jnp.zeros(shape=(matrix_cells.shape[0], Q, 11))
+    def matrix_ISV(cells, Q: int):
+        matrix_internal_state_eqi = jnp.zeros(shape=(cells.shape[0], Q, 11))
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,0:3].set(0)    # e11, e22, e12
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,3:6].set(0)    # s11, s22, s12
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,6]  .set(0)    # D
@@ -149,51 +129,40 @@ def test_fea_solve_dmg():
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,8]  .set(0)    # tau0
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,9]  .set(0)    # vM0
         matrix_internal_state_eqi = matrix_internal_state_eqi.at[...,10] .set(dt)   # dt
-        
-        fiber_internal_state_eqi = jnp.zeros(shape=(fiber_cells.shape[0], Q, 7))
+        return matrix_internal_state_eqi
+
+    @partial(jax.jit, static_argnames=('Q',))
+    def fiber_ISV(cells, Q: int):
+        fiber_internal_state_eqi = jnp.zeros(shape=(cells.shape[0], Q, 7))
         fiber_internal_state_eqi = fiber_internal_state_eqi.at[...,0:3].set(0)     # e11
         fiber_internal_state_eqi = fiber_internal_state_eqi.at[...,3:6].set(0)     # e22
         fiber_internal_state_eqi = fiber_internal_state_eqi.at[...,6]  .set(-0.2)  # D
-        
-        return [matrix_internal_state_eqi, fiber_internal_state_eqi]
+        return fiber_internal_state_eqi
 
-    internal_state_tri_eqi  = init_ISV(matrix_tri_cells,fiber_tri_cells,Q_tri)
-    internal_state_quad_eqi = init_ISV(matrix_quad_cells,fiber_quad_cells,Q_quad)
+    # (constitutive model, material parameters, initial ISV) of each material group
+    materials = {
+        "matrix": (damage_elastic_isotropic_vmap, matrix_properties, matrix_ISV),
+        "fiber":  (elastic_orthotropic,           fiber_properties,  fiber_ISV),
+    }
 
-    element_batches = [
-        ElementBatch(
-            fe_type=fe_type_tri,
-            connectivity_en=matrix_tri_cells,
-            constitutive_model=damage_elastic_isotropic_vmap,
-            material_params=matrix_tri_mat_params_eqm,
-            internal_state=internal_state_tri_eqi[0],
-            n_dofs_per_basis=2,
-        ),
-        ElementBatch(
-            fe_type=fe_type_quad,
-            connectivity_en=matrix_quad_cells,
-            constitutive_model=damage_elastic_isotropic_vmap,
-            material_params=matrix_quad_mat_params_eqm,
-            internal_state=internal_state_quad_eqi[0],
-            n_dofs_per_basis=2,
-        ),
-        ElementBatch(
-            fe_type=fe_type_tri,
-            connectivity_en=fiber_tri_cells,
-            constitutive_model=elastic_orthotropic,
-            material_params=fiber_tri_mat_params_eqm,
-            internal_state=internal_state_tri_eqi[1],
-            n_dofs_per_basis=2,
-        ),
-        ElementBatch(
-            fe_type=fe_type_quad,
-            connectivity_en=fiber_quad_cells,
-            constitutive_model=elastic_orthotropic,
-            material_params=fiber_quad_mat_params_eqm,
-            internal_state=internal_state_quad_eqi[1],
-            n_dofs_per_basis=2,
-        )
-    ]
+    # One element batch per (material, cell shape) present in the mesh
+    element_batches = []
+    batch_cell_ids = []     # mesh cell index of each element, per batch
+    for name, shapes in cell_groups.items():
+        constitutive_model, get_properties, init_ISV = materials[name]
+        for shape, (cells_en, cell_ids) in shapes.items():
+            fe_type = igfem_element_type(shape)
+            Q = get_quadrature(fe_type=fe_type)[0].shape[0]    # number of quadrature points
+            element_batches.append(ElementBatch(
+                fe_type=fe_type,
+                connectivity_en=cells_en,
+                constitutive_model=constitutive_model,
+                material_params=get_properties(cells_en, Q),
+                internal_state=init_ISV(cells_en, Q),
+                n_dofs_per_basis=2,
+            ))
+            batch_cell_ids.append(cell_ids)
+            print(f"{name} {shape}: {cells_en.shape[0]} cells, Q = {Q}")
 
     u_prev = jnp.array(jnp.reshape(vtk_mesh['displacement'][:,:2],-1), dtype=jnp.float64)
 
@@ -266,7 +235,7 @@ def test_fea_solve_dmg():
             print("Time step =", i)
 
             # # write and save to vtk
-            vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,fiber_tri_id,matrix_tri_id,fiber_quad_id,matrix_quad_id)
+            vtk_mesh = write2VTK_avg(args,mesh,u,element_batches,batch_cell_ids)
             vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{i}.vtk")
     finally:
         solver_key = petsc_solver_options.solver_key

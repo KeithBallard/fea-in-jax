@@ -2,39 +2,102 @@
 Utilities for meshes produced by the IGFEM code (PIGFEM, run through run_code.sh).
 
 An IGFEM output mesh is the integration (sub-cell) mesh of the cut background triangulation:
-TRI3/QUAD4 cells, a 'materials' cell field in which the matrix has the largest material ID and
-each fiber has its own ID, and enrichment nodes stored as ordinary points. These functions
-sort its cells into matrix/fiber element batches with Basix node ordering, and remove cells
-that the IGFEM VTK writer collapsed to zero area by rounding coordinates to 6 significant digits.
+TRI3/QUAD4 cells, VTK_POLYGON cells where a background triangle touches two inclusions, a
+'materials' cell field in which the matrix has the largest material ID and each fiber has its own
+ID, and enrichment nodes stored as ordinary points. These functions sort its cells into element
+batches by material and cell shape, reorder their nodes to the element conventions, and warn
+about cells that the IGFEM VTK writer collapsed to (nearly) zero area by rounding coordinates to 6
+significant digits.
 """
+
+import warnings
 
 import numpy as np
 
+from fe_jax.basis_quadrature import (
+    CellType,
+    ElementFamily,
+    LagrangeVariant,
+    QuadratureType,
+    FiniteElementType,
+    PolygonElementType,
+    eval_basis_and_derivatives,
+    get_quadrature,
+)
 
-def reorder_cell_basix(mesh, point_ids):
+VTK_TRIANGLE, VTK_POLYGON, VTK_QUAD = 5, 7, 9
+
+
+def cell_shape(celltype, n_nodes):
+    """Element shape of a VTK cell: "tri", "quad" or "polygon<n_nodes>"."""
+    if celltype == VTK_TRIANGLE:
+        return "tri"
+    if celltype == VTK_QUAD:
+        return "quad"
+    if celltype == VTK_POLYGON:
+        return f"polygon{n_nodes}"
+    raise ValueError(f"Unsupported VTK cell type {celltype}")
+
+
+def igfem_element_type(shape):
     """
-    Reorders TRI3 or QUAD4 node indices to match Basix ordering convention.
+    Finite element type for a shape returned by cell_shape. Polygons use PIGFEM's isoparametric
+    Wachspress element and quadrature (4-point triangle rule on n sub-triangles), which is what
+    IGFEM integrates them with; a fan triangulation into TRI3 does not reproduce it.
+    """
+    if shape == "tri":
+        cell_type, quadrature_degree = CellType.triangle, 1
+    elif shape == "quad":
+        cell_type, quadrature_degree = CellType.quadrilateral, 2
+    elif shape.startswith("polygon"):
+        return PolygonElementType(n_vertices=int(shape[len("polygon"):]))
+    else:
+        raise ValueError(f"Unknown cell shape {shape!r}")
+    return FiniteElementType(
+        cell_type=cell_type,
+        family=ElementFamily.P,
+        basis_degree=1,
+        lagrange_variant=LagrangeVariant.equispaced,
+        quadrature_type=QuadratureType.default,
+        quadrature_degree=quadrature_degree,
+    )
 
-    For QUAD4: lexicographic ordering on unit square [0,1]^2
-    For TRI3 : lexicographic ordering based on (x, y)
+
+def reorder_cell_basix(mesh, point_ids, celltype):
+    """
+    Reorders cell node indices to the convention of the element that integrates the cell.
+
+    For QUAD4  : lexicographic ordering on unit square [0,1]^2 (Basix)
+    For TRI3   : left as is
+    For polygon: counter-clockwise perimeter order (PolygonElementType reference n-gon)
 
     Parameters
     ----------
     mesh : pyvista mesh
     point_ids : list or array of node indices in the cell
+    celltype : int
+        VTK cell type: VTK_TRIANGLE, VTK_QUAD or VTK_POLYGON (integrated as a Wachspress element
+        whatever its node count). Any other type raises a ValueError, since skipping the cell
+        would leave a hole in the domain.
 
     Returns
     -------
     np.ndarray
-        Reordered point indices to match Basix convention.
+        Reordered point indices to match the element convention.
     """
     tol = 1e-7
     coords = mesh.points[point_ids][:, :2]  # only x-y needed
 
-    if len(point_ids) == 3:  # triangle
+    if celltype == VTK_POLYGON:
+        # VTK lists polygon nodes around the perimeter; reverse clockwise cells (the reference n-gon
+        # and its quadrature are symmetric, so the start node does not matter)
+        x, y = coords[:, 0], coords[:, 1]
+        signed_area = 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+        order = np.arange(len(point_ids)) if signed_area > 0.0 else np.arange(len(point_ids))[::-1]
+    elif celltype == VTK_TRIANGLE:
         # leave as is.
         order = np.array([0,1,2])
-    elif len(point_ids) == 4:  # quad
+    elif celltype == VTK_QUAD:
         # Sort by (y, x) → Basix lexicographic order: x increases fastest
         x = coords[:, 0]
         y = coords[:, 1]
@@ -60,7 +123,7 @@ def reorder_cell_basix(mesh, point_ids):
         order = ccw_order[[0, 1, 3, 2]]
 
     else:
-        raise ValueError(f"Unsupported element with {len(point_ids)} nodes")
+        raise ValueError(f"Unsupported VTK cell type {celltype} (only TRI3/QUAD4/POLYGON have an element)")
 
     return np.array(point_ids)[order]
 
@@ -71,17 +134,18 @@ _GAUSS_2X2_1D = 0.5 + np.array([-1.0, 1.0]) / (2.0 * np.sqrt(3.0))
 
 def cell_shape_ratio(coords):
     """
-    Measures how close a TRI3 or QUAD4 cell is to collapsing, independently of its size.
+    Measures how close a TRI3, QUAD4 or polygon cell is to collapsing, independently of its size.
 
     Element stiffness scales like (edge length)^2 / det(J), so a cell whose det(J) is tiny
     compared with its squared edge length makes the global system singular or indefinite,
     whereas a cell that is merely small does not. The ratio is evaluated at the quadrature
-    points the solver actually uses (centroid for TRI3, 2x2 Gauss for QUAD4).
+    points the solver actually uses (centroid for TRI3, 2x2 Gauss for QUAD4, the Wachspress
+    element quadrature for polygons with more than 4 nodes).
 
     Parameters
     ----------
     coords : ndarray[float, (N, 2)]
-        Node coordinates in VTK order (perimeter order for quads).
+        Node coordinates in VTK order (perimeter order for quads and polygons).
 
     Returns
     -------
@@ -106,24 +170,27 @@ def cell_shape_ratio(coords):
         dx_deta = (1.0 - xi) * (x3 - x0) + xi * (x2 - x1)
         dets = cross(dx_dxi, dx_deta)
     else:
-        raise ValueError(f"Unsupported element with {len(coords)} nodes")
+        fe_type = PolygonElementType(n_vertices=len(coords))
+        _, dphi_dxi_qnp = eval_basis_and_derivatives(fe_type, get_quadrature(fe_type)[0])
+        dets = np.linalg.det(np.einsum("nd,qnp->qdp", coords, dphi_dxi_qnp))
 
     orientation = 1.0 if np.sum(dets) >= 0.0 else -1.0
     return float(np.min(orientation * dets) / longest_edge_sq)
 
 
-def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8, verbose=True):
+def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8):
     """
-    Splits the TRI3/QUAD4 cells of an IGFEM mesh into material groups, reorders their nodes to
-    the Basix convention, and drops collapsed cells. Any other cell type (e.g. IGFEM polygons)
-    raises a ValueError.
+    Splits the cells of an IGFEM mesh into material groups and, within each group, by cell shape
+    (see cell_shape), reorders their nodes to the element convention (see reorder_cell_basix),
+    and warns about nearly collapsed cells. Only the shapes present in the mesh appear, so the element batches
+    can be built by looping over the result, with igfem_element_type(shape) as the element type.
 
     IGFEM writes node coordinates with 6 significant digits, so integration sub-cells that are
     only ~1e-7 across can be rounded into collinear (zero-area) cells. Such a cell has an
     effectively infinite, randomly signed stiffness instead of the negligible one of the real
-    sub-cell, so it is removed. The mesh points are left untouched (node numbering, boundary
-    node lists and VTK output all index into them); an error is raised if removing a cell would
-    leave one of its nodes attached to no other cell.
+    sub-cell; rounding can also turn such a cell inside out (det J changes sign). Both kinds are
+    listed in a warning; the cells are kept, and the mesh should be fixed at the source if the
+    solve fails.
 
     Parameters
     ----------
@@ -131,14 +198,15 @@ def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8, verbose=
     fiber_group : callable(material_ID) -> str, optional
         Name of the group a fiber cell belongs to. Defaults to a single group "fiber".
     degenerate_tol : float
-        Cells with cell_shape_ratio below this are dropped.
-    verbose : bool
-        Print the cells that were dropped.
+        Cells with 0 <= cell_shape_ratio < degenerate_tol are reported as nearly collapsed;
+        cells with a negative ratio are reported as inverted.
 
     Returns
     -------
-    dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
-        For "matrix" and each fiber group: (tri_cells, quad_cells, tri_id, quad_id).
+    dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]
+        {group: {shape: (cells, cell_ids)}}, "matrix" first, then the fiber groups by name; shapes
+        ordered by node count, e.g. {"matrix": {"tri": ..., "quad": ..., "polygon5": ...}, ...}.
+        cells has shape (E, N) and cell_ids holds the mesh cell index of each row.
     """
     if fiber_group is None:
         fiber_group = lambda material_ID: "fiber"
@@ -147,102 +215,90 @@ def sort_cells_by_material(mesh, fiber_group=None, degenerate_tol=1e-8, verbose=
     materials = np.asarray(mesh.cell_data['materials'])    # Fiber=0, matrix= largest in the 'material'
     matrix_ID = np.max(materials)
 
-    # Skipping a cell would leave a hole in the domain, so refuse anything but TRI3/QUAD4. IGFEM writes
-    # a VTK_POLYGON (type 7) where a background triangle touches two inclusions; it integrates it as one
-    # isoparametric Wachspress element (20 quadrature points), which a fan triangulation does not reproduce.
-    celltypes = np.asarray(mesh.celltypes)
-    unsupported = ~np.isin(celltypes, (5, 9))
-    if np.any(unsupported):
-        types, counts = np.unique(celltypes[unsupported], return_counts=True)
-        raise ValueError(
-            "Mesh has cells that are not TRI3/QUAD4 (VTK type: count): "
-            + ", ".join(f"{t}: {c}" for t, c in zip(types, counts))
-            + ". Type 7 is an IGFEM polygon, which needs a Wachspress polygon element (not supported yet)."
-        )
-
     groups = {}
-    dropped = []    # (cell id, shape ratio, node ids)
-    for id, celltype in enumerate(celltypes):
+    degenerate = []    # (cell id, shape ratio)
+    inverted = []      # (cell id, shape ratio)
+    for id, celltype in enumerate(np.asarray(mesh.celltypes)):
         vtk_nodes = mesh.get_cell(id).point_ids
+        cell_nodes = reorder_cell_basix(mesh, vtk_nodes, celltype)
         ratio = cell_shape_ratio(points[vtk_nodes])
         if ratio < 0.0:
-            raise ValueError(f"Cell {id} is inverted (det J changes sign, shape ratio {ratio:.2e}).")
-        if ratio < degenerate_tol:
-            dropped.append((id, ratio, vtk_nodes))
-            continue
+            inverted.append((id, ratio))
+        elif ratio < degenerate_tol:
+            degenerate.append((id, ratio))
 
         name = "matrix" if materials[id] == matrix_ID else fiber_group(materials[id])
-        tri_cells, quad_cells, tri_id, quad_id = groups.setdefault(name, ([], [], [], []))
-        cell_nodes = reorder_cell_basix(mesh, vtk_nodes)
-        if celltype == 5:
-            tri_cells.append(cell_nodes)
-            tri_id.append(id)
-        else:
-            quad_cells.append(cell_nodes)
-            quad_id.append(id)
+        shape = cell_shape(celltype, len(vtk_nodes))
+        cells, cell_ids = groups.setdefault(name, {}).setdefault(shape, ([], []))
+        cells.append(cell_nodes)
+        cell_ids.append(id)
 
-    if dropped:
-        used = np.zeros(points.shape[0], dtype=bool)
-        for tri_cells, quad_cells, _, _ in groups.values():
-            for cell_nodes in tri_cells + quad_cells:
-                used[cell_nodes] = True
-        orphans = sorted({n for _, _, nodes in dropped for n in nodes if not used[n]})
-        if orphans:
-            raise ValueError(
-                f"Dropping degenerate cells {[d[0] for d in dropped]} would leave nodes {orphans} "
-                "attached to no element; the mesh needs to be fixed at the source."
-            )
-        if verbose:
-            print(f"Dropped {len(dropped)} degenerate cell(s) (shape ratio < {degenerate_tol:g}): "
-                  + ", ".join(f"{id} ({ratio:.1e})" for id, ratio, _ in dropped))
+    if degenerate:
+        warnings.warn(
+            f"{len(degenerate)} nearly collapsed cell(s) (shape ratio < {degenerate_tol:g}), kept in the model: "
+            + ", ".join(f"{id} ({ratio:.1e})" for id, ratio in degenerate),
+            stacklevel=2,
+        )
+    if inverted:
+        warnings.warn(
+            f"{len(inverted)} inverted cell(s) (det J changes sign inside the cell), kept in the model: "
+            + ", ".join(f"{id} ({ratio:.1e})" for id, ratio in inverted),
+            stacklevel=2,
+        )
 
     return {
-        name: tuple(np.array(x) for x in group)
-        for name, group in groups.items()
+        name: {
+            shape: (np.array(cells), np.array(cell_ids))
+            for shape, (cells, cell_ids) in sorted(groups[name].items(), key=lambda s: (len(s[1][0][0]), s[0]))
+        }
+        for name in sorted(groups, key=lambda name: (name != "matrix", name))
     }
 
 
-def split_matrix_fiber_cells(mesh, degenerate_tol=1e-8, verbose=True):
+def tri_quad_arrays(shapes):
     """
-    Matrix/fiber version of sort_cells_by_material.
+    (tri_cells, quad_cells, tri_id, quad_id) of one group returned by sort_cells_by_material, for
+    the tests that hard-code one tri and one quad batch per material. Raises if the group has
+    other shapes, since those cells would otherwise be left out of the model.
+    """
+    other = sorted(set(shapes) - {"tri", "quad"})
+    if other:
+        raise ValueError(
+            f"Mesh has {other} cells, which a tri/quad-only element setup would leave out; build the "
+            "element batches by looping over sort_cells_by_material (see test_fea_solve_dmg_scan_JetSCI.py)."
+        )
+    empty = (np.array([]), np.array([]))
+    tri_cells, tri_id = shapes.get("tri", empty)
+    quad_cells, quad_id = shapes.get("quad", empty)
+    return tri_cells, quad_cells, tri_id, quad_id
+
+
+def split_matrix_fiber_cells(mesh, degenerate_tol=1e-8):
+    """
+    Matrix/fiber, tri/quad-only version of sort_cells_by_material.
 
     Returns
     -------
     (matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id,
      fiber_tri_cells,  fiber_quad_cells,  fiber_tri_id,  fiber_quad_id)
     """
-    groups = sort_cells_by_material(mesh, degenerate_tol=degenerate_tol, verbose=verbose)
-    empty = tuple(np.array([]) for _ in range(4))
-    return (*groups.get("matrix", empty), *groups.get("fiber", empty))
+    groups = sort_cells_by_material(mesh, degenerate_tol=degenerate_tol)
+    return (*tri_quad_arrays(groups.get("matrix", {})), *tri_quad_arrays(groups.get("fiber", {})))
 
 
-def find_print_cell_idx(mesh,print_cell_ID,matrix_tri_id,matrix_quad_id,fiber_tri_id,fiber_quad_id):
+def find_print_cell_idx(print_cell_ID, batch_cell_ids):
     '''
     Parameters
     ----------
-    mesh : pyvista mesh
-    point_ids : Pyvista cell ID 
+    print_cell_ID : Pyvista cell ID
+    batch_cell_ids : list of the mesh cell IDs of each element batch, in batch order
 
     Returns
     -------
-    the index of the cell ID
+    (index of the cell within its batch, index of the batch)
     '''
-    tri_quad = mesh.celltypes[print_cell_ID]
-    materials_ID = mesh.cell_data['materials'][print_cell_ID]
-    matrix_ID = np.max(mesh.cell_data['materials'])
-
-    if tri_quad == 5:
-        if materials_ID == matrix_ID:
-            fib_matrix_shape = 0
-            print_cell = np.where(matrix_tri_id==print_cell_ID)[0][0]
-        else:
-            fib_matrix_shape = 2
-            print_cell = np.where(fiber_tri_id==print_cell_ID)[0][0]
-    elif tri_quad == 9:
-        if materials_ID == matrix_ID:
-            fib_matrix_shape = 1
-            print_cell = np.where(matrix_quad_id==print_cell_ID)[0][0]
-        else:
-            fib_matrix_shape = 3
-            print_cell = np.where(fiber_quad_id==print_cell_ID)[0][0]
-    return print_cell,fib_matrix_shape
+    for fib_matrix_shape, cell_ids in enumerate(batch_cell_ids):
+        hits = np.flatnonzero(cell_ids == print_cell_ID)
+        if hits.size:
+            return int(hits[0]), fib_matrix_shape
+    raise ValueError(f"Cell {print_cell_ID} is in no element batch")

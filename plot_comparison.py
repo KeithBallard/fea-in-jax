@@ -12,9 +12,9 @@ Any setting can also be overridden on the command line, e.g.
 # SETTINGS
 # =============================================================================
 # --- What to plot ---
-# CASE_JAX = 'CG_t500_49fib'  # run folder under tests/output
-CASE_JAX = 'jetsci_t500_60fib'  # run folder under tests/output
-# CASE_JAX = 'SP_t500_64fib'  # run folder under tests/output
+# CASE_JAX = 'update_CG_t500_60fib'  # run folder under tests/output
+# CASE_JAX = 'jetsci_t500_64fib'  # run folder under tests/output
+CASE_JAX = 'SP_t500_100fib'  # run folder under tests/output
 CASE_IGFEM = None         # folder under tests/IGFEM_ref; None -> '<N>fib_t500' taken from CASE_JAX
 FEATURE = 'damage'        # contour field: 'damage', 'e11', 'e22', 'e12', 's11', 's22', 's12'
 CELL = 20                 # cell id for the strain/stress history plot
@@ -27,8 +27,7 @@ BLACK_FIBERS = False      # damage only: draw fibers black and use a 0-1 damage 
 SHOW_CELL_EDGES = False   # draw mesh lines
 CMAP = 'coolwarm'
 DAMAGE_RANGE = (-0.2, 1.0)  # colorbar range for damage (other features use IGFEM min/max)
-ERROR_SCALE_DAMAGE = 1e-3   # error colorbar max = max(|error|) * this
-ERROR_SCALE_OTHER = 1e-2
+CMAP_ERROR = 'viridis'      # sequential colormap for |JAX - IGFEM|, scaled 0 to max
 
 # --- General style ---
 COLOR_IGFEM = '#4DA6FF'
@@ -116,16 +115,16 @@ def plot_contours(polygons, feature, snap_IGFEM, snap_JAX, strain_labels, save_p
         fiber_mask = np.isclose(snap_IGFEM, fiber_value) | np.isclose(snap_JAX, fiber_value)
         cmap.set_under('black')
         vmin, vmax = 0.0, DAMAGE_RANGE[1]
-        vmin_e, vmax_e = 0.0, np.max(error[~fiber_mask]) * ERROR_SCALE_DAMAGE
+        vmax_e = np.max(error[~fiber_mask])
     elif feature == 'damage':
         vmin, vmax = DAMAGE_RANGE
-        vmin_e, vmax_e = np.min(error), np.max(error) * ERROR_SCALE_DAMAGE
+        vmax_e = np.max(error)
     else:
         vmin, vmax = np.min(snap_IGFEM), np.max(snap_IGFEM)
-        vmin_e, vmax_e = np.min(error), np.max(error) * ERROR_SCALE_OTHER
+        vmax_e = np.max(error)
 
     norm = Normalize(vmin=vmin, vmax=vmax, clip=False)
-    norm_e = Normalize(vmin=vmin_e, vmax=vmax_e, clip=False)
+    norm_e = Normalize(vmin=0.0, vmax=vmax_e)
     cell_edges = ({'edgecolors': 'k'} if show_cell_edges
                   else {'edgecolors': 'none', 'linewidths': 0, 'antialiaseds': False})
 
@@ -138,7 +137,7 @@ def plot_contours(polygons, feature, snap_IGFEM, snap_JAX, strain_labels, save_p
         ax[i, 1].add_collection(
             PolyCollection(polygons, array=snap_JAX[i], cmap=cmap, norm=norm, **cell_edges))
         im_error = ax[i, 2].add_collection(
-            PolyCollection(polygons, array=snap_JAX[i] - snap_IGFEM[i], cmap=CMAP, norm=norm_e, **cell_edges))
+            PolyCollection(polygons, array=error[i], cmap=CMAP_ERROR, norm=norm_e, **cell_edges))
         ax[i, 0].set_ylabel(r'$\epsilon$ = ' + str(strain_labels[i]) + '%', fontsize=25, rotation=0, labelpad=70)
 
     cbar = fig.colorbar(im_feature, cax=fig.add_axes([0.85, 0.56, 0.01, 0.3]))
@@ -146,7 +145,7 @@ def plot_contours(polygons, feature, snap_IGFEM, snap_JAX, strain_labels, save_p
     cbar.set_label(feature, size=25)
     cbar_e = fig.colorbar(im_error, cax=fig.add_axes([0.85, 0.16, 0.01, 0.3]))
     cbar_e.ax.tick_params(labelsize=20)
-    cbar_e.set_label('Error', size=25)
+    cbar_e.set_label('|Error|', size=25)
 
     for a, title in zip(ax[0], ['IGFEM', 'JAX-FEM', 'Error']):
         a.set_title(title, fontsize=22)
