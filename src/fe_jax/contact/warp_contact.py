@@ -75,12 +75,16 @@ def build_newton_node_cloud_contact(
             label=f"node_{node_id}",
         )
 
-    # Match current self-contact exclusion.
-    for i in range(len(points)):
-        max_j = min(len(points), i + self_adjacency_block + 1)
-        for j in range(i+1, max_j):
-            if point_fiber_ids[i] == point_fiber_ids[j]:
-                builder.add_shape_collision_filter_pair(i,j)
+    # Fast self-contact collision exclusion: restrict search window to contiguous fiber bounds
+    fiber_change = np.where(np.diff(point_fiber_ids) != 0)[0] + 1
+    fiber_starts = np.concatenate(([0], fiber_change))
+    fiber_ends = np.concatenate((fiber_change, [len(points)]))
+
+    for f_start, f_end in zip(fiber_starts, fiber_ends):
+        for i in range(f_start, f_end):
+            max_j = min(f_end, i + self_adjacency_block + 1)
+            for j in range(i + 1, max_j):
+                builder.add_shape_collision_filter_pair(i, j)
 
     # Bypass Newton's default O(N^2) explicit shape contact pair build during finalize,
     # since we use dynamic Sweep-and-Prune (SAP) broadphase at collide time.

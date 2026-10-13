@@ -33,6 +33,31 @@ def raise_if_jztree_contact_capacity_exhausted(
         )
 
 
+def compute_min_k(
+    points_f32: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    point_diameters: jnp.ndarray,
+    search2radius_ratio: float,
+    k0: int = 20,
+):
+    points_f32 = jnp.asarray(points_f32, dtype = jnp.float32)
+    N = points_f32.shape[0]
+    point_radii = 0.5 * jnp.asarray(point_diameters, dtype=jnp.float32)
+    fiber_ids = jnp.asarray(point_fiber_ids, dtype=jnp.int32)
+    thresh = search2radius_ratio*point_diameters.max()
+    k = k0
+
+    # 1. kNN search using jztree on GPU
+    rnn, _ = jz.knn.knn(points_f32, k=k)
+    print(k, thresh, rnn[:,-1].min())
+    while rnn[:,-1].min()<thresh:
+        k = 2*k
+        rnn, _ = jz.knn.knn(points_f32, k=k)
+        print(k, thresh, rnn[:,-1].min())
+    return k
+
+
+
 @partial(jax.jit, static_argnames=("adjacency_block", "rigid_contact_max", "k"))
 def _jztree_contact_batch_kernel(
     points_f32: jnp.ndarray,
@@ -108,7 +133,7 @@ def jztree_contact_batch(
     search2radius_ratio: float,
     rigid_contact_max: int,
     dummy_pair: jnp.ndarray | np.ndarray | None = None,
-    k: int = 128,
+    k: int | None = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Perform fixed-capacity contact search using GPU-accelerated jztree kNN.
 
@@ -139,6 +164,14 @@ def jztree_contact_batch(
     point_fiber_ids = jnp.asarray(point_fiber_ids, dtype=jnp.int32)
     point_diameters = jnp.asarray(point_diameters, dtype=jnp.float32)
     dummy_pair = jnp.asarray(dummy_pair, dtype=jnp.int32)
+
+    if k is None:
+        k = compute_min_k(
+            points_f32=points_f32,
+            point_fiber_ids=point_fiber_ids,
+            point_diameters=point_diameters,
+            search2radius_ratio=float(search2radius_ratio),
+        )
 
     return _jztree_contact_batch_kernel(
         points_f32=points_f32,

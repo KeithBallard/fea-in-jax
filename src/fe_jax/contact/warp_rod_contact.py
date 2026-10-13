@@ -26,8 +26,7 @@ def _require_newton_warp():
     ) from _NEWTON_WARP_IMPORT_ERROR
 
 
-class ContactCapacityError(OverflowError):
-    pass
+from .contact_types import ContactCapacityError
 
 
 class RodContactResult(NamedTuple):

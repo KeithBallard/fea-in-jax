@@ -319,6 +319,7 @@ def plot_scaling_results(results_or_filename, output_prefix=None):
     plt.figure(figsize=(9, 6))
     prep_methods = [
         ("JAX_HASH_PREP", "JAX Hash Prep", "#1f77b4", "o"),
+        ("JZTREE_PREP", "JZTree", "#ff7f0e", "s"),
         ("WARP_NODE_CLOUD_BUILD", "Warp Node Cloud Build", "#9467bd", "v"),
         ("WARP_ROD_BUILD", "Warp Rod Build", "#2ca02c", "^"),
     ]
