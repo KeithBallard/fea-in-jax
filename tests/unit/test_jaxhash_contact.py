@@ -11,6 +11,8 @@ from fe_jax.contact import (
     resolve_contact_backend,
     normalize_contact_backend,
     scipy_contact_batch,
+    get_cuda_hardware_info,
+    compute_dynamic_batch_params,
 )
 
 
@@ -174,4 +176,65 @@ def test_jaxhash_contact_batch_optional_rigid_contact_max():
     auto_active_pairs = np.asarray(cells_auto[active_auto])
     exp_active_pairs = np.asarray(cells_exp[active_exp])
     np.testing.assert_array_equal(auto_active_pairs, exp_active_pairs)
+
+
+def test_cuda_hardware_info_query():
+    info = get_cuda_hardware_info()
+    assert "sm_count" in info
+    assert "max_threads_per_sm" in info
+    assert "hardware_concurrency" in info
+    assert "cuda_cores" in info
+    assert info["sm_count"] > 0
+    assert info["hardware_concurrency"] > 0
+
+
+def test_compute_dynamic_batch_params():
+    N = 500_000
+    C_max = 64
+    n_batch, num_batches, hw_info = compute_dynamic_batch_params(N, C_max)
+
+    assert n_batch > 0
+    assert num_batches >= 1
+    assert n_batch * num_batches >= N
+    assert n_batch % hw_info["hardware_concurrency"] == 0 or n_batch == N
+
+
+def test_jaxhash_explicit_node_batching_matches_unbatched():
+    np.random.seed(123)
+    N = 2000
+    points = np.random.uniform(0, 5, size=(N, 3))
+    fiber_ids = np.repeat(np.arange(20), 100)
+    diameters = np.full(N, 0.4)
+    dummy_pair = np.array([0, 1], dtype=np.int32)
+    capacity = 10000
+
+    # Run with default dynamic batching
+    cells_auto, active_auto, count_auto, _ = jaxhash_contact_batch(
+        points=points,
+        point_fiber_ids=fiber_ids,
+        adjacency_block=2,
+        point_diameters=diameters,
+        search2radius_ratio=1.1,
+        rigid_contact_max=capacity,
+        dummy_pair=dummy_pair,
+        n_batch=None,
+    )
+
+    # Run with small forced batch size (e.g., 250 nodes per batch -> 8 batches)
+    cells_batched, active_batched, count_batched, _ = jaxhash_contact_batch(
+        points=points,
+        point_fiber_ids=fiber_ids,
+        adjacency_block=2,
+        point_diameters=diameters,
+        search2radius_ratio=1.1,
+        rigid_contact_max=capacity,
+        dummy_pair=dummy_pair,
+        n_batch=250,
+    )
+
+    assert int(count_auto) == int(count_batched)
+    pairs_auto = np.asarray(cells_auto[active_auto])
+    pairs_batched = np.asarray(cells_batched[active_batched])
+    np.testing.assert_array_equal(pairs_auto, pairs_batched)
+
 

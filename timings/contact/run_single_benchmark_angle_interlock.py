@@ -19,7 +19,7 @@ parser.add_argument(
     help="Contact search method to benchmark",
 )
 parser.add_argument("--n_dx", type=int, default=0, help="Refinement level exponent n (dX = diameter / 2^n)")
-parser.add_argument("--tow", type=str, default="1", choices=["1", "1_2", "2_3_2"], help="Tow refinement pattern")
+parser.add_argument("--tow", type=str, default="1", choices=["1", "1_2", "2_3_2", "3_4_5_4_3"], help="Tow refinement pattern")
 parser.add_argument("--self_adj", type=int, default=50000, help="Self-adjacency block size")
 parser.add_argument(
     "--json_out",
@@ -107,15 +107,16 @@ class SingleContactSearch:
         self.contact_search_alpha = contact_search_alpha
 
     def prep_jax_hash(self, pad_size=3):
-        point_radii = jnp.asarray(0.5 * self.point_diameters, dtype=jnp.float32)
-        query_radius = self.contact_search_alpha * 2.0 * np.max(point_radii)
+        point_radii = jnp.asarray(0.5 * self.point_diameters, dtype=jnp.float64)
+        query_radius = float(self.contact_search_alpha * 2.0 * jnp.max(point_radii))
         self.domain_min, self.Nx, self.Ny, self.Nz, self.total_cells, self.C_max = pad_hash_cells(
             points=self.points,
             query_radius=query_radius,
             pad_size=pad_size,
         )
+        self.n_batch, self.num_batches, _ = jhc.compute_dynamic_batch_params(self.points.shape[0], int(self.C_max))
         prelim_count = int(
-            jhc._jaxhash_contact_count_kernel(
+            jhc._jaxhash_contact_count_scanned_kernel(
                 points=self.points,
                 point_fiber_ids=self.point_fiber_ids,
                 point_radii=point_radii,
@@ -127,6 +128,8 @@ class SingleContactSearch:
                 total_cells=int(self.total_cells),
                 C_max=int(self.C_max),
                 adjacency_block=int(self.self_adjacency_block),
+                n_batch=int(self.n_batch),
+                num_batches=int(self.num_batches),
             )
         )
         self.rigid_contact_max_jax_hash = max(16, int(np.ceil(prelim_count * self.rigid_contact_factor_contacts)))
@@ -307,6 +310,9 @@ def main():
         fibers_in_bundle = f_tow.get_n_fibers_in_bundle(0)
     elif args.tow == "2_3_2":
         f_tow = refine_tow(base_fab, [2, 3, 2])
+        fibers_in_bundle = f_tow.get_n_fibers_in_bundle(0)
+    elif args.tow == "3_4_5_4_3":
+        f_tow = refine_tow(base_fab, [3, 4, 5, 4, 3])
         fibers_in_bundle = f_tow.get_n_fibers_in_bundle(0)
     else:
         raise ValueError(f"Unknown tow pattern: {args.tow}")
