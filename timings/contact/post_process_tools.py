@@ -168,6 +168,70 @@ def plot_scaling_results(results_or_filename, output_prefix=None):
         plt.savefig(f"{output_prefix}_search_scaling_v_contacts.pdf")
     plt.show()
 
+    # --- Plot 5: Peak Memory Scaling vs Nodes ---
+    plt.figure(figsize=(9, 6))
+    memory_methods = [
+        ("JAX_HASH", "JAX Hash", "#1f77b4", "o"),
+        ("JZTREE", "JZTree", "#ff7f0e", "s"),
+        ("WARP_ROD", "Warp Rod", "#2ca02c", "^"),
+        ("WARP_NODE_CLOUD", "Warp Node Cloud", "#9467bd", "v"),
+        ("SCIPY_KDTREE", "SciPy KDTree", "#d62728", "D"),
+        ("CUPY_KDTREE", "CuPy KDTree", "#8c564b", "x"),
+    ]
+
+    for method_key, label, color, marker in memory_methods:
+        mem_key = f"{method_key}_PEAK_MEM_GIB"
+        for tow in fibers_in_tow:
+            pts = [r for r in results if r["FIBERS_PER_BUNDLE"] == tow and r.get(mem_key) is not None]
+            if not pts:
+                continue
+            x = [p["NODES"] for p in pts]
+            y = [p[mem_key] for p in pts]
+            style = tow_styles[tow]
+            leg_label = f"{label} ({tow} f/tow)" if len(fibers_in_tow) > 1 else label
+            plt.plot(x, y, style, marker=marker, color=color, label=leg_label, lw=2, ms=6)
+
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel("Number of Nodes ($N$)", fontsize=12)
+    plt.ylabel("Peak Memory (GiB)", fontsize=12)
+    plt.title("Contact Search Peak Memory Scaling (Log-Log)", fontsize=14, fontweight="bold")
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left", fontsize=10)
+    plt.tight_layout()
+    if output_prefix:
+        plt.savefig(f"{output_prefix}_memory_scaling.png", dpi=900)
+        plt.savefig(f"{output_prefix}_memory_scaling.pdf")
+    plt.show()
+
+    # --- Plot 6: Peak Memory Scaling vs Contacts Found ---
+    plt.figure(figsize=(9, 6))
+    for method_key, label, color, marker in memory_methods:
+        mem_key = f"{method_key}_PEAK_MEM_GIB"
+        contacts_key = f"{method_key}_CONTACTS"
+        for tow in fibers_in_tow:
+            pts = [r for r in results if r["FIBERS_PER_BUNDLE"] == tow and r.get(mem_key) is not None and r.get(contacts_key) is not None]
+            if not pts:
+                continue
+            x = [p[contacts_key] for p in pts]
+            y = [p[mem_key] for p in pts]
+            style = tow_styles[tow]
+            leg_label = f"{label} ({tow} f/tow)" if len(fibers_in_tow) > 1 else label
+            plt.plot(x, y, style, marker=marker, color=color, label=leg_label, lw=2, ms=6)
+
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.xlabel("Number of Contacts Found", fontsize=12)
+    plt.ylabel("Peak Memory (GiB)", fontsize=12)
+    plt.title("Contact Search Peak Memory vs Contacts Found (Log-Log)", fontsize=14, fontweight="bold")
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left", fontsize=10)
+    plt.tight_layout()
+    if output_prefix:
+        plt.savefig(f"{output_prefix}_memory_scaling_v_contacts.png", dpi=900)
+        plt.savefig(f"{output_prefix}_memory_scaling_v_contacts.pdf")
+    plt.show()
+
 
 def export_scaling_tables(results_or_filename, output_prefix=None):
     if isinstance(results_or_filename, str):

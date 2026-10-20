@@ -337,6 +337,9 @@ def main():
             else:
                 entry["JAX_HASH_CONTACTS"] = None
 
+            stats = jax.devices()[0].memory_stats()
+            entry["JAX_HASH_PEAK_MEM_GIB"] = stats["peak_bytes_in_use"] / (1024**3)
+
         elif args.method == "JZTREE":
             t0 = time.perf_counter()
             cs.prep_jztree()
@@ -350,6 +353,9 @@ def main():
                     print(f"  [WARNING] JZTREE capacity exhausted! count={int(JZ[2])}, capacity={cs.rigid_contact_max}")
             else:
                 entry["JZTREE_CONTACTS"] = None
+
+            stats = jax.devices()[0].memory_stats()
+            entry["JZTREE_PEAK_MEM_GIB"] = stats["peak_bytes_in_use"] / (1024**3)
 
         elif args.method == "WARP_NODE_CLOUD":
             t0 = time.perf_counter()
@@ -365,6 +371,10 @@ def main():
             else:
                 entry["WARP_NODE_CLOUD_CONTACTS"] = None
 
+            if HAS_WARP:
+                dev = wp.get_device("cuda:0")
+                entry["WARP_NODE_CLOUD_PEAK_MEM_GIB"] = wp.get_mempool_used_mem_high(dev) / (1024**3)
+
         elif args.method == "WARP_ROD":
             t0 = time.perf_counter()
             cs.build_warp_rod()
@@ -374,10 +384,17 @@ def main():
             entry["WARP_ROD"] = t_search
             entry["WARP_ROD_CONTACTS"] = int(np.asarray(WR.count).squeeze()) if WR is not None else None
 
+            if HAS_WARP:
+                dev = wp.get_device("cuda:0")
+                entry["WARP_ROD_PEAK_MEM_GIB"] = wp.get_mempool_used_mem_high(dev) / (1024**3)
+
         elif args.method == "SCIPY_KDTREE":
             t_search, SC = run_and_time(cs.scipy_contact, n=5, timeout_sec=10.0)
             entry["SCIPY_KDTREE"] = t_search
             entry["SCIPY_KDTREE_CONTACTS"] = int(len(SC)) if SC is not None else None
+
+            import resource
+            entry["SCIPY_KDTREE_PEAK_MEM_GIB"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
 
         elif args.method == "CUPY_KDTREE":
             if n_nodes < 25000:
@@ -386,10 +403,17 @@ def main():
             else:
                 entry["CUPY_KDTREE"] = None
 
+            if HAS_CUPY and n_nodes < 25000:
+                mempool = cp.get_default_memory_pool()
+                entry["CUPY_KDTREE_PEAK_MEM_GIB"] = mempool.total_bytes() / (1024**3)
+            else:
+                entry["CUPY_KDTREE_PEAK_MEM_GIB"] = None
+
     except Exception as e:
         print(f"  [SKIPPED / OOM] Method {args.method} failed on {n_nodes} nodes: {e}")
         entry[args.method] = None
         entry[f"{args.method}_CONTACTS"] = None
+        entry[f"{args.method}_PEAK_MEM_GIB"] = None
 
     out_path = get_output(args.json_out)
     update_results_file(out_path, entry)
