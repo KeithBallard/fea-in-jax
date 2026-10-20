@@ -115,6 +115,8 @@ class SingleContactSearch:
             pad_size=pad_size,
         )
         self.n_batch, self.num_batches, _ = jhc.compute_dynamic_batch_params(self.points.shape[0], int(self.C_max))
+        print(f"n_batch = {self.n_batch}")
+        print(f"num_batches = {self.num_batches}")
         prelim_count = int(
             jhc._jaxhash_contact_count_scanned_kernel(
                 points=self.points,

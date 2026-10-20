@@ -407,6 +407,46 @@ def _jaxhash_contact_scanned_kernel(
 
     return contact_cells, active, total_count, capacity_exhausted
 
+def estimate_jaxhash_rigid_contact_max(
+    points: jnp.ndarray | np.ndarray,
+    point_fiber_ids: jnp.ndarray | np.ndarray,
+    point_diameters: jnp.ndarray | np.ndarray,
+    search2radius_ratio: float,
+    adjacency_block: int,
+    grid_params: Tuple[jnp.ndarray, int, int, int, int, int],
+    rigid_contact_factor: float = 1.5,
+    n_batch: int | None = None,
+) -> int:
+    """Precompute rigid_contact_max once from the reference configuration."""
+    domain_min, Nx, Ny, Nz, total_cells, C_max = grid_params
+    points_f32 = jnp.asarray(points, dtype=jnp.float64)
+    point_fiber_ids = jnp.asarray(point_fiber_ids, dtype=jnp.int32)
+    point_radii = jnp.asarray(0.5 * point_diameters, dtype=jnp.float64)
+    N = points_f32.shape[0]
+
+    if n_batch is None:
+        n_batch, num_batches, _ = compute_dynamic_batch_params(N, int(C_max))
+    else:
+        num_batches = int((N + n_batch - 1) // n_batch)
+
+    prelim_count = int(
+        _jaxhash_contact_count_scanned_kernel(
+            points=points_f32,
+            point_fiber_ids=point_fiber_ids,
+            point_radii=point_radii,
+            domain_min=jnp.asarray(domain_min, dtype=jnp.float64),
+            search2radius_ratio=float(search2radius_ratio),
+            Nx=int(Nx),
+            Ny=int(Ny),
+            Nz=int(Nz),
+            total_cells=int(total_cells),
+            C_max=int(C_max),
+            adjacency_block=int(adjacency_block),
+            n_batch=int(n_batch),
+            num_batches=int(num_batches),
+        )
+    )
+    return max(16, int(np.ceil(prelim_count * rigid_contact_factor)))
 
 def jaxhash_contact_batch(
     points: jnp.ndarray | np.ndarray,
@@ -415,7 +455,7 @@ def jaxhash_contact_batch(
     point_diameters: jnp.ndarray | np.ndarray,
     search2radius_ratio: float,
     rigid_contact_max: int | None = None,
-    rigid_contact_factor: float = 1.2,
+    rigid_contact_factor: float = 1.5,
     domain_min: jnp.ndarray | np.ndarray | None = None,
     Nx: int | None = None,
     Ny: int | None = None,
@@ -489,6 +529,7 @@ def jaxhash_contact_batch(
     else:
         num_batches = int((N + n_batch - 1) // n_batch)
 
+    jax.debug.print("n_batch = {nb}\n num_batches = {num_b}",nb=n_batch,num_b=num_batches)
     if rigid_contact_max is None:
         prelim_count = int(
             _jaxhash_contact_count_scanned_kernel(
@@ -508,6 +549,7 @@ def jaxhash_contact_batch(
             )
         )
         rigid_contact_max = max(16, int(np.ceil(prelim_count * rigid_contact_factor)))
+        jax.debug.print("rigid_contact_max = {rgm}",rgm=rigid_contact_max)
 
     return _jaxhash_contact_scanned_kernel(
         points=points_f32,

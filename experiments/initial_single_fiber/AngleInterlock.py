@@ -1,3 +1,5 @@
+import os
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 from fe_jax.helper import *
 import matplotlib.pyplot as plt
 import numpy as np
@@ -253,7 +255,10 @@ def run_tension(
     """ """
 
     fabric = refine_fabric(fabric,dX=0.25)
-    # fabric = refine_tow(fabric, [2,3,2])
+    fabric = refine_tow(fabric, [2,3,2])
+    dx = fabric.diameters.min()/2
+    fabric = refine_fabric(fabric,dX=dx)
+    print(f"num points: {len(fabric.points)}")
     if not isinstance(debug_info, NullDebugInfo):
         debug_info.file.attrs['contact_stiffness_model']        = contact_params.contact_constitutive_model.args[0].func.__name__.lstrip('_')
         debug_info.file.attrs['contact_D_stiffness_to_E_ratio'] = contact_params.D_stiffness_to_E_ratio
@@ -287,6 +292,7 @@ def run_tension(
     print('dynamic boundary conditions generated!')
 
     E = 0.5
+    # TODO Every bundle should have it's own area. 
     tow_A = (fabric.get_diameter(0)/2)**2*np.pi
     u, _, _ = solve_fiber_mechanics_bvp(
         fabric=fabric,
@@ -305,14 +311,14 @@ def run_tension(
             # linear_precond_type=PreconditionerType.JACOBI,
             # linear_solve_type=LinearSolverType.BICGSTAB_JAX_SCIPY,
             # linear_solve_type=LinearSolverType.SPSOLVE_PYPARDISO,
-            nonlinear_max_iter=10,
-            linear_max_iter=50,
-            damp_Newton_diag=1.0,
+            nonlinear_max_iter=50,
+            linear_max_iter=1000,
+            # damp_Newton_diag=1.0,
             # nonlinear_relative_tol=.0001,
             # max_linear_displacement=0.5,
-            max_backtracks=20,
+            max_backtracks=6,
             # linear_absolute_tol=3.16e-3,
-            # max_linear_displacement=min(min_dist,fabric.diameters[0])/2,
+            max_linear_displacement=min(dx,fabric.diameters.min())/2,
         ),
         plot_convergence=False,
         filename_base=filename_base,
@@ -331,11 +337,12 @@ def run_tension(
 
 args = {
     'fabric':read_fabric("experiments/initial_single_fiber/initial_single_fiber.fab"),
-    # 'filename_base': 'FabricExample/Sep10_JacSymmetryTest/quadratic_pardiso_damp1p0_updated',
+    'filename_base': 'FabricExample/Oct20/quadratic_CG_take2',
     # 'filename_base': 'Sep10_JacSymmetryTest/AngleInterlock_quadratic_CG_NoForcedSymmetry',
-    'filename_base': None,
+    # 'filename_base': None,
     'pseudoT': 5,
-    'pre_strain':0.141373887*20,
+    # 'pre_strain':0.141373887*20,
+    'pre_strain':[0.141373887*i for i in range(6,36,6)],
     'contact_params': ContactParams(
         self_adjacency_block    = 10000,
         contact_constitutive_model = elastic_contact_truss_piecewise_quadratic,
@@ -346,8 +353,8 @@ args = {
         C_to_D_ratio            = 0.8,
         contact_search_alpha    = 2.0,
         # contact_backend         = ContactBackend.SCIPY_KDTREE,
-        contact_backend         = ContactBackend.NEWTON_WARP,
-        rigid_contact_max       = 2200000
+        # contact_backend         = ContactBackend.NEWTON_WARP,
+        # rigid_contact_max       = 2200000
     ),
 }
 

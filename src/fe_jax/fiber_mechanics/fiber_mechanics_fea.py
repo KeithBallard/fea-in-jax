@@ -33,7 +33,7 @@ def solve_fiber_mechanics_bvp(
     blow_up_threshold: float = jnp.inf,
     filename_base: str | None = None,
     rigid_mold: RigidMold | None = None,
-    pre_strain: float | None = None,
+    pre_strain: float | list | None = None,
     contact_options: ContactParams | None = None,
     debug_info: DebugInfo | None = None,
     profile_memory: bool = False,
@@ -83,7 +83,24 @@ def solve_fiber_mechanics_bvp(
         2
     ))
     if pre_strain is not None:
-        internal_state = internal_state.at[...,0].set(pre_strain)
+        if isinstance(pre_strain, (int, float, np.number)):
+            pre_strain = [float(pre_strain)] * pseudotime_iters
+        elif isinstance(pre_strain, (list, tuple, np.ndarray, jnp.ndarray)):
+            # Handle 0D scalar arrays (e.g., jnp.array(0.05) or np.array(0.02))
+            if hasattr(pre_strain, "ndim") and pre_strain.ndim == 0:
+                pre_strain = [float(pre_strain)] * pseudotime_iters
+            elif len(pre_strain) != pseudotime_iters:
+                raise ValueError(
+                    f"Length of pre_strain ({len(pre_strain)}) must match "
+                    f"pseudotime_iters ({pseudotime_iters})."
+                )
+            else:
+                pre_strain = list(pre_strain)
+        else:
+            raise TypeError(
+                f"pre_strain must be a scalar (int/float) or a sequence of length {pseudotime_iters}, "
+                f"got unexpected type '{type(pre_strain).__name__}'."
+            )
     # if pre_strain is not None:
     #     internal_state = jnp.full((
     #         connectivity_en.shape[0],
@@ -130,9 +147,7 @@ def solve_fiber_mechanics_bvp(
         auto_uses_newton_warp=False,
     )
     fixed_capacity_backend = contact_backend in (
-        ContactBackend.JAX_HASH,
         ContactBackend.NEWTON_WARP,
-        ContactBackend.JZTREE,
         ContactBackend.CUPYX_KDTREE,
     )
     if fixed_capacity_backend and contact_options.rigid_contact_max is None:
@@ -302,6 +317,16 @@ def solve_fiber_mechanics_bvp(
             pad_size=contact_options.hash_pad_size,
             cell_capacity_buffer=contact_options.cell_capacity_buffer,
         )
+        if contact_options.rigid_contact_max is None:
+            contact_options.rigid_contact_max = estimate_jaxhash_rigid_contact_max(
+                points=vertices_vd,
+                point_fiber_ids=point_fiber_ids,
+                point_diameters=point_diameters,
+                search2radius_ratio=contact_options.contact_search_alpha,
+                adjacency_block=self_adjacency_block,
+                grid_params=jaxhash_grid,
+                rigid_contact_factor=1.5,
+            )
 
     def jaxhash_contact_pair_generator(u_ref) -> list[ElementBatch]:
         if u_ref is None:
@@ -502,6 +527,11 @@ def solve_fiber_mechanics_bvp(
             linear_solve=0,
             current_stage=DebugOutputStage.TIME_STEP,
         )
+
+        if pre_strain is not None:
+            fiber_batch = element_batches[0]
+            updated_is = fiber_batch.internal_state.at[..., 0].set(pre_strain[i])
+            element_batches[0] = fiber_batch.replace(internal_state=updated_is)
 
         if fixed_capacity_backend:
             if preprocessed_bvp is None:
