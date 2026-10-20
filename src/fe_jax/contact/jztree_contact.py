@@ -125,13 +125,56 @@ def _jztree_contact_batch_kernel(
     return contact_cells, active, count, capacity_exhausted
 
 
+@partial(jax.jit, static_argnames=("adjacency_block", "k"))
+def _jztree_contact_count_kernel(
+    points_f32: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    point_diameters: jnp.ndarray,
+    search2radius_ratio: float,
+    adjacency_block: int,
+    k: int,
+) -> jnp.ndarray:
+    N = points_f32.shape[0]
+    point_radii = 0.5 * jnp.asarray(point_diameters, dtype=jnp.float32)
+    fiber_ids = jnp.asarray(point_fiber_ids, dtype=jnp.int32)
+
+    # 1. kNN search using jztree on GPU
+    rnn, inn = jz.knn.knn(points_f32, k=k)
+
+    # 2. Flatten directed candidates (u -> v) and symmetrize to undirected (min, max)
+    u = jnp.broadcast_to(jnp.arange(N, dtype=jnp.int32)[:, None], (N, k)).reshape(-1)
+    v = inn.reshape(-1)
+    r = rnn.reshape(-1)
+
+    node_min = jnp.minimum(u, v)
+    node_max = jnp.maximum(u, v)
+
+    dist_thresh = search2radius_ratio * (point_radii[u] + point_radii[v])
+    dist_ok = r <= dist_thresh
+    topo_ok = (fiber_ids[u] != fiber_ids[v]) | (jnp.abs(u - v) > adjacency_block)
+    valid = (u != v) & dist_ok & topo_ok
+
+    # 3. Encode pairs into 64-bit keys and sort on GPU to deduplicate
+    SENTINEL = jnp.int64(0x7FFFFFFFFFFFFFFF)
+    keys = (node_min.astype(jnp.int64) << 32) | node_max.astype(jnp.int64)
+    keys = jnp.where(valid, keys, SENTINEL)
+
+    sorted_keys = jnp.sort(keys)
+
+    is_dup = jnp.concatenate([jnp.array([False]), sorted_keys[1:] == sorted_keys[:-1]])
+    is_valid = (sorted_keys != SENTINEL) & (~is_dup)
+
+    return jnp.sum(is_valid, dtype=jnp.int32)
+
+
 def jztree_contact_batch(
     points: jnp.ndarray | np.ndarray,
     point_fiber_ids: jnp.ndarray | np.ndarray,
     adjacency_block: int,
     point_diameters: jnp.ndarray | np.ndarray,
     search2radius_ratio: float,
-    rigid_contact_max: int,
+    rigid_contact_max: int | None = None,
+    rigid_contact_factor: float = 1.2,
     dummy_pair: jnp.ndarray | np.ndarray | None = None,
     k: int | None = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -144,7 +187,9 @@ def jztree_contact_batch(
             to exclude from self-contact.
         point_diameters: (N,) fiber diameter at each node.
         search2radius_ratio: dimensionless multiplier (search_alpha) for contact distance.
-        rigid_contact_max: int, maximum number of contact pairs allocated (capacity).
+        rigid_contact_max: int | None, maximum number of contact pairs allocated (capacity).
+            If None, computed dynamically from a preliminary count pass scaled by rigid_contact_factor.
+        rigid_contact_factor: float, safety multiplier used when rigid_contact_max is None (default 1.2).
         dummy_pair: (2,) int array of dummy contact node indices for padding.
             Auto-detected if None.
         k: int, number of nearest neighbors per node to search (default: 128).
@@ -172,6 +217,19 @@ def jztree_contact_batch(
             point_diameters=point_diameters,
             search2radius_ratio=float(search2radius_ratio),
         )
+
+    if rigid_contact_max is None:
+        prelim_count = int(
+            _jztree_contact_count_kernel(
+                points_f32=points_f32,
+                point_fiber_ids=point_fiber_ids,
+                point_diameters=point_diameters,
+                search2radius_ratio=float(search2radius_ratio),
+                adjacency_block=int(adjacency_block),
+                k=int(k),
+            )
+        )
+        rigid_contact_max = max(16, int(np.ceil(prelim_count * rigid_contact_factor)))
 
     return _jztree_contact_batch_kernel(
         points_f32=points_f32,

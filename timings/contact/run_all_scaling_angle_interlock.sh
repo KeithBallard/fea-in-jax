@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-METHODS=("SCIPY_KDTREE")
+METHODS=("JAX_HASH" "JZTREE")
 # METHODS=("JAX_HASH" "JZTREE" "WARP_NODE_CLOUD" "WARP_ROD" "SCIPY_KDTREE" "CUPY_KDTREE")
 TOWS=("1" "1_2" "2_3_2")
 DX_LEVELS=(0 1 2 3)
@@ -43,6 +43,8 @@ for tow in "${TOWS[@]}"; do
         echo "--> [FAILED] Run $RUN_COUNT of $TOTAL_RUNS ($method) FAILED with exit code $EXIT_CODE."
         FAILED_RUNS=$((FAILED_RUNS + 1))
       fi
+
+
       
       # 3-second GPU memory cleanup & thermal cooldown pause
       sleep 3

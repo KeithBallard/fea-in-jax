@@ -169,13 +169,85 @@ def _jaxhash_contact_batch_kernel(
     return contact_cells, active, count, capacity_exhausted
 
 
+@partial(jax.jit, static_argnames=("Nx", "Ny", "Nz", "total_cells", "C_max", "adjacency_block"))
+def _jaxhash_contact_count_kernel(
+    points: jnp.ndarray,
+    point_fiber_ids: jnp.ndarray,
+    point_radii: jnp.ndarray,
+    domain_min: jnp.ndarray,
+    search2radius_ratio: float,
+    Nx: int,
+    Ny: int,
+    Nz: int,
+    total_cells: int,
+    C_max: int,
+    adjacency_block: int,
+) -> jnp.ndarray:
+    N = points.shape[0]
+    FORWARD_CELL_OFFSETS = jnp.asarray(
+        [fc[0] + fc[1] * Nx + fc[2] * Ny * Nx for fc in FORWARD_CELLS],
+        dtype=jnp.int32
+    )
+
+    query_radius = search2radius_ratio * 2.0 * jnp.max(point_radii)
+
+    floored_points = jnp.floor((points - domain_min) / query_radius).astype(jnp.int32)
+    floored_points = jnp.clip(
+        floored_points,
+        0,
+        jnp.asarray([Nx - 1, Ny - 1, Nz - 1], dtype=jnp.int32),
+    )
+    hashed = floored_points[:, 0] + Nx * floored_points[:, 1] + (Nx * Ny) * floored_points[:, 2]
+
+    sort_idx = jnp.argsort(hashed).astype(jnp.int32)
+    sorted_hashed = hashed[sort_idx]
+
+    all_cells = jnp.arange(total_cells, dtype=jnp.int32)
+    cell_starts = jnp.searchsorted(sorted_hashed, all_cells, side="left")
+    cell_ends = jnp.searchsorted(sorted_hashed, all_cells, side="right")
+
+    sort_idx_padded = jnp.pad(sort_idx, (0, C_max), constant_values=-1)
+
+    def get_particles_for_cell(c):
+        start = cell_starts[c]
+        count = cell_ends[c] - start
+        slice_particles = jax.lax.dynamic_slice(sort_idx_padded, (start,), (C_max,))
+        return jnp.where(jnp.arange(C_max, dtype=jnp.int32) < count, slice_particles, -1)
+
+    cell_particles = jax.vmap(get_particles_for_cell)(all_cells)
+    is_own_cell = jnp.repeat(FORWARD_CELL_OFFSETS == 0, C_max)
+
+    def check_contacts_for_node(i):
+        my_cell = hashed[i]
+        target_cells = jnp.clip(my_cell + FORWARD_CELL_OFFSETS, 0, total_cells - 1)
+        candidates = cell_particles[target_cells].reshape(-1)
+
+        symmetry_ok = jnp.where(is_own_cell, candidates > i, candidates != i)
+
+        diff = points[i] - points[candidates]
+        dist_sq = jnp.sum(diff * diff, axis=-1)
+        thresholds = search2radius_ratio * (point_radii[i] + point_radii[candidates])
+
+        is_valid = (
+            (candidates >= 0)
+            & symmetry_ok
+            & (dist_sq <= thresholds * thresholds)
+            & ((point_fiber_ids[i] != point_fiber_ids[candidates]) | (jnp.abs(candidates - i) > adjacency_block))
+        )
+        return is_valid
+
+    all_is_valid = jax.vmap(check_contacts_for_node)(jnp.arange(N, dtype=jnp.int32))
+    return jnp.sum(all_is_valid, dtype=jnp.int32)
+
+
 def jaxhash_contact_batch(
     points: jnp.ndarray | np.ndarray,
     point_fiber_ids: jnp.ndarray | np.ndarray,
     adjacency_block: int,
     point_diameters: jnp.ndarray | np.ndarray,
     search2radius_ratio: float,
-    rigid_contact_max: int,
+    rigid_contact_max: int | None = None,
+    rigid_contact_factor: float = 1.2,
     domain_min: jnp.ndarray | np.ndarray | None = None,
     Nx: int | None = None,
     Ny: int | None = None,
@@ -195,7 +267,9 @@ def jaxhash_contact_batch(
             to exclude from self-contact.
         point_diameters: (N,) fiber diameter at each node.
         search2radius_ratio: multiplier for contact distance.
-        rigid_contact_max: int, maximum contact pair capacity.
+        rigid_contact_max: int | None, maximum contact pair capacity. If None,
+            computed dynamically from a preliminary count pass scaled by rigid_contact_factor.
+        rigid_contact_factor: float, safety multiplier used when rigid_contact_max is None (default 1.2).
         domain_min: (3,) minimum corner of spatial grid. Auto-computed if None.
         Nx, Ny, Nz: Grid cell counts. Auto-computed if None.
         total_cells: Total cell count (Nx * Ny * Nz). Auto-computed if None.
@@ -213,9 +287,9 @@ def jaxhash_contact_batch(
     if dummy_pair is None:
         dummy_pair = find_nonzero_length_dummy_contact_pair(points)
 
-    points_f32 = jnp.asarray(points, dtype=jnp.float32)
+    points_f32 = jnp.asarray(points, dtype=jnp.float64)
     point_fiber_ids = jnp.asarray(point_fiber_ids, dtype=jnp.int32)
-    point_radii = jnp.asarray(0.5 * point_diameters, dtype=jnp.float32)
+    point_radii = jnp.asarray(0.5 * point_diameters, dtype=jnp.float64)
     dummy_pair = jnp.asarray(dummy_pair, dtype=jnp.int32)
 
     # Auto-compute grid geometry if not supplied
@@ -235,7 +309,25 @@ def jaxhash_contact_batch(
             cell_capacity_buffer=cell_capacity_buffer,
         )
 
-    domain_min = jnp.asarray(domain_min, dtype=jnp.float32)
+    domain_min = jnp.asarray(domain_min, dtype=jnp.float64)
+
+    if rigid_contact_max is None:
+        prelim_count = int(
+            _jaxhash_contact_count_kernel(
+                points=points_f32,
+                point_fiber_ids=point_fiber_ids,
+                point_radii=point_radii,
+                domain_min=domain_min,
+                search2radius_ratio=float(search2radius_ratio),
+                Nx=int(Nx),
+                Ny=int(Ny),
+                Nz=int(Nz),
+                total_cells=int(total_cells),
+                C_max=int(C_max),
+                adjacency_block=int(adjacency_block),
+            )
+        )
+        rigid_contact_max = max(16, int(np.ceil(prelim_count * rigid_contact_factor)))
 
     return _jaxhash_contact_batch_kernel(
         points=points_f32,

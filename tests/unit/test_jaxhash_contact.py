@@ -138,3 +138,40 @@ def test_jaxhash_runs_on_cpu():
         assert cells.devices() == {cpu_device}
         assert int(count) > 0
         assert not bool(exhausted)
+
+
+def test_jaxhash_contact_batch_optional_rigid_contact_max():
+    p_fiber0 = np.array([[0.0, 0.0, z] for z in np.linspace(0, 10, 100)])
+    p_fiber1 = np.array([[0.1, 0.0, z] for z in np.linspace(0, 10, 100)])
+    points = np.vstack([p_fiber0, p_fiber1])
+    fiber_ids = np.repeat(np.array([0, 1]), 100)
+    diameters = np.full(200, 0.2)
+
+    # Call with rigid_contact_max=None (default)
+    cells_auto, active_auto, count_auto, exhausted_auto = jaxhash_contact_batch(
+        points=points,
+        point_fiber_ids=fiber_ids,
+        adjacency_block=2,
+        point_diameters=diameters,
+        search2radius_ratio=1.5,
+        rigid_contact_max=None,
+    )
+
+    # Call with explicit rigid_contact_max
+    cells_exp, active_exp, count_exp, exhausted_exp = jaxhash_contact_batch(
+        points=points,
+        point_fiber_ids=fiber_ids,
+        adjacency_block=2,
+        point_diameters=diameters,
+        search2radius_ratio=1.5,
+        rigid_contact_max=500,
+    )
+
+    assert int(count_auto) == int(count_exp)
+    assert not bool(exhausted_auto)
+    assert cells_auto.shape[0] >= int(np.ceil(int(count_auto) * 1.2))
+
+    auto_active_pairs = np.asarray(cells_auto[active_auto])
+    exp_active_pairs = np.asarray(cells_exp[active_exp])
+    np.testing.assert_array_equal(auto_active_pairs, exp_active_pairs)
+
