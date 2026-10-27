@@ -11,6 +11,7 @@ import time
 # jax.config.update("jax_enable_x64", True)   #   True or comment out both works. False cause incorrect result
 from fe_jax.post_pred import *
 from fe_jax.write_vtk import *
+from fe_jax.plot_results import plot_comparison
 # jax.config.update("jax_disable_jit", True)
 # jax.config.update("jax_log_compiles", True)
  
@@ -20,14 +21,15 @@ def test_fea_solve_dmg():
     num_fib = 100    # 1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64, 100
     args['t_total']  = 500
     # args['dir_path'] = "debug"
-    # args['dir_path'] = f"CG_t{args['t_total']}_{num_fib}fib"
-    args['dir_path'] = f"SP_t{args['t_total']}_{num_fib}fib"
+    args['dir_path'] = f"CG_t{args['t_total']}_{num_fib}fib"
+    # args['dir_path'] = f"SP_t{args['t_total']}_{num_fib}fib"
     args['strain_max'] = 0.012
     dt = 10/args['t_total']
 
     # Create the directory (and any necessary parent directories)
     args['out_dir'] = os.path.join("tests/output",args['dir_path'])
     args['vtk_dir'] = os.path.join(args['out_dir'],"vtks")
+    args['ref_dir'] = os.path.join("tests/IGFEM_ref",f"{num_fib}fib_t{args['t_total']}")
     os.makedirs(args['out_dir'], exist_ok=True)
     os.makedirs(args['vtk_dir'], exist_ok=True)
 
@@ -186,8 +188,8 @@ def test_fea_solve_dmg():
             boundary_conditions=dirichlet_bcs,
             solver_options=SolverOptions(
                 linear_precond_type=PreconditionerType.JACOBI,
-                # linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
-                linear_solve_type=LinearSolverType.SPSOLVE_CUPY ,
+                linear_solve_type=LinearSolverType.CG_JAX_SCIPY,#_W_INFO,
+                # linear_solve_type=LinearSolverType.SPSOLVE_CUPY ,
                 linear_max_iter=10000,
 
             ),
@@ -205,19 +207,22 @@ def test_fea_solve_dmg():
 
     n_total_dofs = u.shape[0]
 
-    return n_total_dofs, args['out_dir']
+    return n_total_dofs, args, vtk_mesh
 
 
 if __name__ == "__main__":
     t_start = time.perf_counter()
 
     # with jax.profiler.trace("./jax-trace", create_perfetto_trace=True):
-    n_total_dofs, out_dir = test_fea_solve_dmg()
+    n_total_dofs, args, vtk_mesh = test_fea_solve_dmg()
 
     t_end = time.perf_counter()
     total_time = t_end - t_start
     print("Time used:", total_time)
 
-    with open(os.path.join(out_dir, "statistics.txt"), "w") as f:
+    with open(os.path.join(args['out_dir'], "statistics.txt"), "w") as f:
         f.write(f"Number of dofs: {n_total_dofs}\n")
         f.write(f"Total Solver time: {total_time} seconds\n")
+
+    # Plot against the IGFEM reference, outside the timed region
+    plot_comparison(args, vtk_mesh)

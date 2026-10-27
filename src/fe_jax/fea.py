@@ -1289,16 +1289,14 @@ def compute_ISV_be(internal_state_beqi):
         strain_q = state_q[:, :, 0:3]
         stress_eff_q = state_q[:, :, 3:6]
         damage_q = state_q[:, :, 6]
-        stress_dmg_q = stress_eff_q * (1 - damage_q[:, :, jnp.newaxis])
-        # Apply damage to stress at each quadrature point (idx < 2 is matrix)
-        # Using lax.cond or jnp.where is not strictly necessary if idx is known at compile time
-        # since this loop is unrolled during JIT tracing.
-        damage_q = jax.lax.cond(
-            state_q.shape[-1] < 8,  # Apply only to fibers
-            lambda _: damage_q*0 - 0.2,
-            lambda _: damage_q,
-            operand=None
-        )
+        # Apply damage to stress only for the matrix (11 ISVs). Fibers (7 ISVs) store D = -0.2
+        # as a plotting marker, which must not scale their stress. The shape is static, so a
+        # Python if is used: an eager lax.cond with fresh lambdas recompiles on every call.
+        if state_q.shape[-1] < 8:
+            stress_dmg_q = stress_eff_q
+            damage_q = damage_q*0 - 0.2
+        else:
+            stress_dmg_q = stress_eff_q * (1 - damage_q[:, :, jnp.newaxis])
         
         avg_strain = jnp.mean(strain_q, axis=1)
         avg_stress_dmg = jnp.mean(stress_dmg_q, axis=1)

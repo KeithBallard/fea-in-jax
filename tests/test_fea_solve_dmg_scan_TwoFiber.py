@@ -11,6 +11,7 @@ import time
 jax.config.update("jax_enable_x64", True)   #   True or comment out both works. False cause incorrect result
 from fe_jax.post_pred import *
 from fe_jax.write_vtk import *
+from fe_jax.plot_results import plot_comparison
 from fe_jax.linear_elasticity_dmg import *
 
 # jax.config.update("jax_disable_jit", True)
@@ -29,6 +30,7 @@ def test_fea_solve_dmg():
     # Create the directory (and any necessary parent directories)
     args['out_dir'] = os.path.join("tests/output",args['dir_path'])
     args['vtk_dir'] = os.path.join(args['out_dir'],"vtks")
+    args['ref_dir'] = os.path.join("tests/IGFEM_ref",f"{num_fib}fib_t{args['t_total']}")
     os.makedirs(args['out_dir'], exist_ok=True)
     os.makedirs(args['vtk_dir'], exist_ok=True)
 
@@ -45,9 +47,9 @@ def test_fea_solve_dmg():
     num_cells = len(mesh.celltypes)
     # Odd material IDs are fiber A, even are fiber B
     cell_groups = sort_cells_by_material(mesh, fiber_group=lambda materials_ID: "fiberA" if materials_ID % 2 == 1 else "fiberB")
-    matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id = cell_groups["matrix"]
-    fiberA_tri_cells, fiberA_quad_cells, fiberA_tri_id, fiberA_quad_id = cell_groups["fiberA"]
-    fiberB_tri_cells, fiberB_quad_cells, fiberB_tri_id, fiberB_quad_id = cell_groups["fiberB"]
+    matrix_tri_cells, matrix_quad_cells, matrix_tri_id, matrix_quad_id = tri_quad_arrays(cell_groups["matrix"])
+    fiberA_tri_cells, fiberA_quad_cells, fiberA_tri_id, fiberA_quad_id = tri_quad_arrays(cell_groups["fiberA"])
+    fiberB_tri_cells, fiberB_quad_cells, fiberB_tri_id, fiberB_quad_id = tri_quad_arrays(cell_groups["fiberB"])
 
     length = (np.max(mesh.points[:,0]) - np.min(mesh.points[:,0]))
 
@@ -268,7 +270,7 @@ def test_fea_solve_dmg():
         ISV_be_i = jax.tree_util.tree_map(lambda x: x[i], ISV_be_history)
 
         # write and save to vtk
-        vtk_mesh = write2VTK_ISV(args,mesh,u_i,ISV_be_i,fiberA_tri_id,matrix_tri_id,fiberA_quad_id,matrix_quad_id,fiberB_tri_id,fiberB_quad_id)
+        vtk_mesh = write2VTK_ISV(args,mesh,u_i,ISV_be_i,[matrix_tri_id,matrix_quad_id,fiberA_tri_id,fiberA_quad_id,fiberB_tri_id,fiberB_quad_id])
         vtk_mesh.save(args['vtk_dir'] + f"/fea_solve_out_{time_step}.vtk")
     # zip_folder(args['vtk_dir'], args['vtk_dir']+'.zip')
 
@@ -276,18 +278,21 @@ def test_fea_solve_dmg():
     # Save param_hist and loss_hist
     np.save(os.path.join(args['out_dir'], "stress_strain_curve.npy"), np.array([dxs/length*100,s11_global]))
     np.save(os.path.join(args['out_dir'], "s_history.npy"), np.array([s11_global,s22_global,s12_global]))
-    return n_total_dofs, args['out_dir']
+    return n_total_dofs, args, vtk_mesh
 
 if __name__ == "__main__":
     t_start = time.time()
 
     # with jax.profiler.trace("./jax-trace_new", create_perfetto_trace=True):
-    n_total_dofs, out_dir = test_fea_solve_dmg()
+    n_total_dofs, args, vtk_mesh = test_fea_solve_dmg()
 
     t_end = time.time()
     total_time = t_end - t_start
     print("Time used:", total_time)
     
-    with open(os.path.join(out_dir, "statistics.txt"), "w") as f:
+    with open(os.path.join(args['out_dir'], "statistics.txt"), "w") as f:
         f.write(f"Number of dofs: {n_total_dofs}\n")
         f.write(f"Total Solver time: {total_time} seconds\n")
+
+    # Plot against the IGFEM reference, outside the timed region
+    plot_comparison(args, vtk_mesh)
