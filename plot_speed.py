@@ -4,16 +4,17 @@ import os
 import matplotlib.pyplot as plt
 
 
-FIBERS = [1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64, 100]
+FIBERS = [1, 2, 4, 9, 16, 23, 33, 36, 46, 49, 60, 64, 100, 200, 400, 800, 1600, 3200]
 
 # One entry per curve. `path` is a template where {n} is replaced by the fiber count.
 # `fibers` is optional and defaults to FIBERS.
 SERIES = [
-    dict(label='IGFEM',       path='tests/IGFEM_ref/{n}fib_t500/statistics.txt'),
-    dict(label='JAX (CG)',    path='tests/output/CG_t500_{n}fib/statistics.txt'),
-    dict(label='JAX (SP)',    path='tests/output/SP_t500_{n}fib/statistics.txt'),
-    dict(label='JAX (update)',    path='tests/output/update_CG_t500_{n}fib/statistics.txt'),
-    dict(label='JetSCI (CG)', path='tests/output/jetsci_t500_{n}fib/statistics.txt'),
+    dict(label='IGFEM',        path='tests/IGFEM_ref/{n}fib_t500/statistics.txt'),
+    dict(label='JAX (CG)',     path='tests/output/CG_t500_{n}fib/statistics.txt'),
+    dict(label='JAX (SP)',     path='tests/output/SP_t500_{n}fib/statistics.txt'),
+    dict(label='JetSCI (CG)',  path='tests/output/jetsci_t500_{n}fib/statistics.txt'),
+    dict(label='JetSCI (ILU)', path='tests/output/jetsci_ILU_t500_{n}fib/statistics.txt'),
+    # dict(label='update (CG)',  path='tests/output/update_CG_t500_{n}fib/statistics.txt'),
 ]
 
 COLORS = ['#4DA6FF', '#2CA02C', '#F08080', '#A86AF4', '#FF7F0E', '#8C564B', '#E377C2', '#7F7F7F', '#BCBD22', '#17BECF']
@@ -57,6 +58,8 @@ for series, color, marker in zip(SERIES, itertools.cycle(COLORS), itertools.cycl
         continue
     plt.plot(dofs, times, marker + '-', color=color, linewidth=2.5, markersize=8, label=series['label'])
 
+plt.xscale('log')
+plt.yscale('log')
 plt.xlabel('Degrees of Freedom (DOFs)')
 plt.ylabel('Time (seconds)')
 plt.title('Computation Time vs. Degrees of Freedom (DOFs)')
